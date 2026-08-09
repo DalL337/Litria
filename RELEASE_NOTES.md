@@ -13,9 +13,17 @@ Two long arcs land together here and define how the canvas now behaves —
 **wire routing** that treats the space between nodes as real, and **group
 physicality** that makes folders exist on the canvas instead of implying them.
 
-> **Windows only for this release.** macOS and Linux builds follow. Linux parity
-> has been verified on Fedora 44; the macOS build is pending hardware access.
-> Artifacts are unsigned, so SmartScreen will warn on first run.
+> **Platforms.** Windows x64 (NSIS + MSI), macOS Apple Silicon (DMG), and Linux
+> x86_64 (AppImage, deb, rpm). Intel Mac follows.
+>
+> Every artifact is **unsigned** — SmartScreen and Gatekeeper will both object.
+> On macOS, strip the download quarantine with
+> `xattr -dr com.apple.quarantine /Applications/litria.app`.
+>
+> The Windows build is the one that has been used in anger. **macOS and Linux
+> compile cleanly and pass the full suite in CI, but no human has launched them
+> yet** — this release is the first time those artifacts have existed. Treat
+> them as working-but-unproven.
 
 ---
 
