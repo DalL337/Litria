@@ -13,8 +13,8 @@ Two long arcs land together here and define how the canvas now behaves —
 **wire routing** that treats the space between nodes as real, and **group
 physicality** that makes folders exist on the canvas instead of implying them.
 
-> **Platforms.** Windows x64 (NSIS + MSI), macOS Apple Silicon (DMG), and Linux
-> x86_64 (AppImage, deb, rpm). Intel Mac follows.
+> **Platforms.** Windows x64 (NSIS + MSI), macOS Apple Silicon and Intel (DMG),
+> and Linux x86_64 (AppImage, deb, rpm).
 >
 > Every artifact is **unsigned** — SmartScreen and Gatekeeper will both object.
 > On macOS, strip the download quarantine with

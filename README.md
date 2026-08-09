@@ -28,6 +28,7 @@ big picture inside a file tree.
 |---|---|
 | **Windows** x64 | `litria_<version>_x64-setup.exe` — recommended. `.msi` also available for managed installs. |
 | **macOS** Apple Silicon | `litria_<version>_aarch64.dmg` |
+| **macOS** Intel | `litria_<version>_x64.dmg` |
 | **Linux** x86_64 | `litria_<version>_amd64.AppImage` (portable, no root), or `.deb` / `.rpm` |
 
 Builds are **unsigned**, so your OS will object the first time:
