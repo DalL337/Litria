@@ -6,6 +6,8 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
+> Litria is developed by a sole dev, with all application code written by Claude. The ideas, patterns, architecture, and scope are the dev's. Contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 Litria gives your project structure a shape. Pieces represent real files. 
 Connections represent real relationships. The canvas is your architecture, and 
 the code inside each piece is exactly what it looks like: genuine, exportable, 
