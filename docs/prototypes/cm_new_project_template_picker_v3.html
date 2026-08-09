@@ -1,0 +1,884 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Russo+One&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0a0b0f;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Russo One', sans-serif;
+    color: #e2e8f0;
+  }
+
+  .modal-backdrop {
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(ellipse at 30% 20%, rgba(99,102,241,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 80%, rgba(20,184,166,0.06) 0%, transparent 60%);
+    padding: 24px;
+  }
+
+  .modal {
+    background: rgba(15,17,26,0.97);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    width: 100%;
+    max-width: 720px;
+    box-shadow: 0 40px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
+    overflow: hidden;
+  }
+
+  .modal-header {
+    padding: 28px 32px 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .modal-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .step-indicator { display: flex; gap: 6px; align-items: center; }
+  .step-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.15);
+    transition: all 0.3s ease;
+  }
+  .step-dot.active { background: #6366f1; box-shadow: 0 0 8px rgba(99,102,241,0.6); width: 20px; border-radius: 3px; }
+  .step-dot.done { background: rgba(20,184,166,0.6); }
+
+  .modal-body {
+    padding: 24px 32px 28px;
+    min-height: 460px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .page { display: none; flex-direction: column; flex: 1; animation: fadeSlide 0.3s ease; }
+  .page.active { display: flex; }
+
+  @keyframes fadeSlide {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes fadeSlideBack {
+    from { opacity: 0; transform: translateX(-16px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .page.back-anim { animation: fadeSlideBack 0.3s ease; }
+
+  .page-label { font-size: 30px; font-weight: 400; color: #fff; margin-bottom: 6px; letter-spacing: -0.02em; }
+  .page-sub   { font-size: 13px; color: rgba(255,255,255,0.35); margin-bottom: 24px; font-family: 'JetBrains Mono', monospace; }
+
+  .form-group { margin-bottom: 18px; }
+  .form-label {
+    display: block;
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: rgba(255,255,255,0.4);
+    margin-bottom: 8px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .form-input {
+    width: 100%;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: #e2e8f0;
+    font-size: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .form-input:focus { border-color: rgba(99,102,241,0.5); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+  .form-input::placeholder { color: rgba(255,255,255,0.2); }
+
+  .folder-row { display: flex; gap: 8px; }
+  .folder-btn {
+    background: rgba(99,102,241,0.1);
+    border: 1px solid rgba(99,102,241,0.25);
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: #818cf8;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .folder-btn:hover { background: rgba(99,102,241,0.2); }
+
+  .section-label {
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: rgba(255,255,255,0.25);
+    margin-bottom: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .card-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+
+  .template-card {
+    flex: 1; min-width: 100px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px;
+    padding: 16px 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .template-card:hover { border-color: rgba(255,255,255,0.15); transform: translateY(-1px); }
+  .template-card.selected {
+    border-color: rgba(99,102,241,0.6);
+    background: rgba(99,102,241,0.08);
+    box-shadow: 0 0 20px rgba(99,102,241,0.15);
+  }
+  /* "None" default card style */
+  .template-card.default-selected {
+    border-color: rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.04);
+  }
+  .template-card.default-selected.selected {
+    border-color: rgba(99,102,241,0.6);
+    background: rgba(99,102,241,0.08);
+  }
+
+  .card-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; margin-bottom: 10px; }
+  .card-name { font-size: 13px; font-weight: 100; color: #fff; margin-bottom: 3px; }
+  .card-desc { font-size: 11px; color: rgba(255,255,255,0.3); font-family: 'JetBrains Mono', monospace; line-height: 1.4; }
+  .card-badge { display: inline-block; font-size: 9px; font-family: 'JetBrains Mono', monospace; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; margin-top: 8px; }
+
+  .tier-tauri    .card-icon { background: rgba(255,140,50,0.12); }
+  .tier-electron .card-icon { background: rgba(20,184,166,0.12); }
+  .tier-web      .card-icon { background: rgba(99,102,241,0.12); }
+
+  .badge-tauri    { background: rgba(255,140,50,0.15);   color: #fb923c; }
+  .badge-electron { background: rgba(20,184,166,0.15);   color: #2dd4bf; }
+  .badge-web      { background: rgba(99,102,241,0.15);   color: #818cf8; }
+  .badge-optional { background: rgba(255,255,255,0.06);  color: rgba(255,255,255,0.3); }
+
+  .radio-group { display: flex; gap: 18px; margin-bottom: 16px; }
+  .radio-group label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-family: 'JetBrains Mono', monospace; color: rgba(255,255,255,0.5); cursor: pointer; }
+  .radio-group input[type="radio"] { accent-color: #6366f1; }
+  .radio-hint { color: rgba(255,255,255,0.2); font-size: 10px; }
+
+  .dep-hint { font-size: 9px; font-family: 'JetBrains Mono', monospace; color: rgba(99,102,241,0.6); margin-top: 4px; font-style: italic; }
+  .template-card.dep-locked { border-color: rgba(99,102,241,0.35); background: rgba(99,102,241,0.05); }
+
+  .review-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 20px 22px;
+    margin-top: 20px;
+  }
+  .review-title {
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: rgba(255,255,255,0.25);
+    margin-bottom: 14px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .review-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 16px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .review-label { color: rgba(255,255,255,0.35); }
+  .review-value { color: #e2e8f0; }
+  .review-command {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .review-command-label {
+    font-size: 10px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgba(255,255,255,0.2);
+    margin-bottom: 8px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── SLIDE DOWN — 400ms with decelerating ease-out ── */
+  .subsection {
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-14px);
+    transition:
+      max-height 0.4s cubic-bezier(0.0, 0.0, 0.2, 1),
+      opacity    0.32s cubic-bezier(0.0, 0.0, 0.2, 1) 0.06s,
+      transform  0.4s  cubic-bezier(0.0, 0.0, 0.2, 1) 0.04s;
+  }
+  .subsection.visible {
+    max-height: 220px;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .flag-preview {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+    margin-top: 4px;
+    min-height: 34px;
+    transition: all 0.3s;
+    word-break: break-all;
+  }
+  .flag-preview .flag-key { color: #2dd4bf; }
+  .flag-preview .flag-val { color: #6366f1; }
+  .flag-preview .flag-comment { color: rgba(255,255,255,0.2); }
+
+  /* PAGE 3 */
+  .theme-cards { display: flex; gap: 10px; flex-wrap: wrap; }
+  .theme-card { flex: 1; min-width: 130px; border-radius: 14px; padding: 16px; border: 1px solid rgba(255,255,255,0.07); cursor: pointer; position: relative; transition: all 0.2s; }
+  .theme-card.locked { opacity: 0.4; cursor: not-allowed; }
+  .theme-card.selected { border-color: rgba(99,102,241,0.6); box-shadow: 0 0 16px rgba(99,102,241,0.15); }
+  .theme-preview { height: 48px; border-radius: 8px; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .theme-name { font-size: 13px; font-weight: 100; color: #fff; }
+  .theme-tag  { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: rgba(255,255,255,0.3); margin-top: 2px; }
+  .lock-badge { position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.05); border-radius: 4px; padding: 2px 6px; font-size: 9px; font-family: 'JetBrains Mono', monospace; color: rgba(255,255,255,0.25); }
+
+  /* FOOTER */
+  .modal-footer {
+    padding: 20px 32px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    margin-top: auto;
+  }
+  .btn { display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 10px; font-size: 13px; font-weight: 600; font-family: 'Russo One', sans-serif; cursor: pointer; transition: all 0.2s; border: none; outline: none; }
+  .btn-ghost { background: transparent; color: rgba(255,255,255,0.3); border: 1px solid rgba(255,255,255,0.08); }
+  .btn-ghost:hover { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.15); }
+  .btn-nav { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.08); width: 40px; height: 40px; padding: 0; justify-content: center; border-radius: 10px; font-size: 16px; }
+  .btn-nav:not(:disabled):hover { background: rgba(255,255,255,0.1); color: #fff; }
+  .btn-nav:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-nav.active { background: rgba(99,102,241,0.2); border-color: rgba(99,102,241,0.4); color: #818cf8; }
+  .btn-nav.active:hover { background: rgba(99,102,241,0.35); }
+  .btn-primary { background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff; box-shadow: 0 4px 16px rgba(99,102,241,0.3); }
+  .btn-primary:hover { box-shadow: 0 4px 24px rgba(99,102,241,0.5); transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: 0.3; cursor: not-allowed; transform: none; box-shadow: none; }
+  .nav-group { display: flex; gap: 8px; align-items: center; }
+
+  .selected-check { position: absolute; top: 10px; right: 10px; width: 18px; height: 18px; background: #6366f1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; opacity: 0; transition: opacity 0.2s; }
+  .template-card.selected .selected-check { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">New Project</div>
+      <div class="step-indicator">
+        <div class="step-dot active" id="dot-0"></div>
+        <div class="step-dot" id="dot-1"></div>
+        <div class="step-dot" id="dot-2"></div>
+      </div>
+    </div>
+
+    <div class="modal-body">
+
+      <!-- PAGE 1 -->
+      <div class="page active" id="page-0">
+        <div class="page-label">Let's start here.</div>
+        <div class="page-sub">Name it. Place it. Let's build.</div>
+        <div class="form-group">
+          <label class="form-label">Project Name</label>
+          <input class="form-input" id="proj-name" type="text" placeholder="my-awesome-app" oninput="checkPage1()" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project Folder</label>
+          <div class="folder-row">
+            <input class="form-input" id="proj-folder" type="text" placeholder="/home/user/projects/..." oninput="checkPage1()" />
+            <button class="folder-btn" onclick="simulateFolderPick()">Browse →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAGE 2 -->
+      <div class="page" id="page-1">
+        <div class="page-label">Pick your stack.</div>
+        <div class="page-sub">Choose what powers your project.</div>
+
+        <div class="section-label">Runtime Wrapper</div>
+        <div class="card-row" id="wrapper-row">
+          <div class="template-card tier-tauri" onclick="selectWrapper('tauri', this)">
+            <div class="selected-check">✓</div>
+            <div class="card-icon">🦀</div>
+            <div class="card-name">Tauri</div>
+            <div class="card-desc">Rust-powered native desktop</div>
+            <div class="card-badge badge-tauri">DESKTOP</div>
+          </div>
+          <div class="template-card tier-electron" onclick="selectWrapper('electron', this)">
+            <div class="selected-check">✓</div>
+            <div class="card-icon">⚡</div>
+            <div class="card-name">Electron</div>
+            <div class="card-desc">Node-powered native desktop</div>
+            <div class="card-badge badge-electron">DESKTOP</div>
+          </div>
+          <div class="template-card tier-web" onclick="selectWrapper('web', this)">
+            <div class="selected-check">✓</div>
+            <div class="card-icon">🌐</div>
+            <div class="card-name">Web Only</div>
+            <div class="card-desc">Browser-first, no wrapper</div>
+            <div class="card-badge badge-web">WEB</div>
+          </div>
+        </div>
+
+        <!-- Framework -->
+        <div class="subsection" id="framework-section">
+          <div class="section-label">Framework</div>
+          <div class="card-row" id="framework-row">
+            <div class="template-card" onclick="selectChoice('framework','react',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(97,218,251,0.1)">⚛️</div>
+              <div class="card-name">React</div>
+              <div class="card-desc">Component-driven UI</div>
+            </div>
+            <div class="template-card" onclick="selectChoice('framework','svelte',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(255,62,0,0.1)">🔥</div>
+              <div class="card-name">Svelte</div>
+              <div class="card-desc">Compiled, minimal runtime</div>
+            </div>
+            <div class="template-card" onclick="selectChoice('framework','vue',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(66,184,131,0.1)">💚</div>
+              <div class="card-name">Vue</div>
+              <div class="card-desc">Progressive, approachable</div>
+            </div>
+            <div class="template-card" id="fw-angular" onclick="selectChoice('framework','angular',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(221,0,49,0.1)">🅰️</div>
+              <div class="card-name">Angular</div>
+              <div class="card-desc">Tauri only</div>
+              <div class="card-badge badge-tauri">TAURI</div>
+            </div>
+            <div class="template-card" onclick="selectChoice('framework','solid',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(68,107,230,0.1)">💠</div>
+              <div class="card-name">Solid</div>
+              <div class="card-desc">Fine-grained reactivity</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Language -->
+        <div class="subsection" id="lang-section">
+          <div class="section-label">Language</div>
+          <div class="card-row" id="lang-row">
+            <div class="template-card" id="lang-ts" onclick="selectChoice('lang','ts',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(49,120,198,0.1)">🔷</div>
+              <div class="card-name">TypeScript</div>
+              <div class="card-desc">Typed, safer, recommended</div>
+            </div>
+            <div class="template-card" id="lang-js" onclick="selectChoice('lang','js',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(247,223,30,0.1)">🟨</div>
+              <div class="card-name">JavaScript</div>
+              <div class="card-desc">Flexible, zero overhead</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Backend — Web Only only -->
+        <div class="subsection" id="backend-section">
+          <div class="section-label">Backend <span style="color:rgba(255,255,255,0.2);font-size:10px"> — optional, none by default</span></div>
+          <div class="card-row" id="backend-row">
+            <div class="template-card default-selected selected" onclick="selectChoice('backend','none',this)" id="backend-none">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(255,255,255,0.04)">🚫</div>
+              <div class="card-name">None</div>
+              <div class="card-desc">Frontend only</div>
+              <div class="card-badge badge-optional">DEFAULT</div>
+            </div>
+            <div class="template-card" onclick="selectChoice('backend','express',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(255,255,255,0.06)">🟩</div>
+              <div class="card-name">Express</div>
+              <div class="card-desc">Minimal Node.js server</div>
+              <div class="card-badge badge-web">NODE</div>
+            </div>
+            <div class="template-card" onclick="selectChoice('backend','fastify',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(255,200,50,0.08)">⚡</div>
+              <div class="card-name">Fastify</div>
+              <div class="card-desc">Fast, low overhead Node</div>
+              <div class="card-badge badge-web">NODE</div>
+            </div>
+            <div class="template-card" onclick="selectChoice('backend','axum',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(255,140,50,0.1)">🦀</div>
+              <div class="card-name">Axum</div>
+              <div class="card-desc">Rust-powered API server</div>
+              <div class="card-badge badge-tauri">RUST</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Addons -->
+        <div class="subsection" id="addon-section">
+          <div class="section-label">Addons <span style="color:rgba(255,255,255,0.2);font-size:10px"> — pick as many as you like</span></div>
+          <div class="card-row" id="addon-row">
+            <div class="template-card" id="addon-tailwind" onclick="toggleAddon('tailwind',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(56,189,248,0.1)">🌊</div>
+              <div class="card-name">Tailwind</div>
+              <div class="card-desc">Utility-first CSS</div>
+            </div>
+            <div class="template-card" id="addon-shadcn" onclick="toggleAddon('shadcn',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(255,255,255,0.05)">🧩</div>
+              <div class="card-name">ShadCN</div>
+              <div class="card-desc">Accessible UI components</div>
+            </div>
+            <div class="template-card" id="addon-router" onclick="toggleAddon('router',this)">
+              <div class="selected-check">✓</div>
+              <div class="card-icon" style="background:rgba(99,102,241,0.1)">🔀</div>
+              <div class="card-name">Router</div>
+              <div class="card-desc">Client-side navigation</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: auto; padding-top: 12px;">
+          <div class="section-label">Package Manager</div>
+          <div class="radio-group">
+            <label><input type="radio" name="pkg" value="npm" checked onchange="setPkgManager('npm')"> npm <span class="radio-hint">(default)</span></label>
+            <label><input type="radio" name="pkg" value="pnpm" onchange="setPkgManager('pnpm')"> pnpm</label>
+            <label><input type="radio" name="pkg" value="yarn" onchange="setPkgManager('yarn')"> yarn</label>
+          </div>
+          <div class="section-label">Compiled Scaffold Command</div>
+          <div class="flag-preview" id="flag-output">// select your stack above to see the command build here</div>
+        </div>
+      </div>
+
+      <!-- PAGE 3 -->
+      <div class="page" id="page-2">
+        <div class="page-label">Base theme.</div>
+        <div class="page-sub">Set the look for your workspace. More coming soon.</div>
+        <div class="theme-cards">
+          <div class="theme-card selected" onclick="selectTheme(this)">
+            <div class="theme-preview" style="background: linear-gradient(135deg, rgba(99,102,241,0.2), rgba(20,184,166,0.1)); border: 1px solid rgba(255,255,255,0.08);">🪟</div>
+            <div class="theme-name">Glass</div>
+            <div class="theme-tag">DEFAULT · AVAILABLE</div>
+          </div>
+          <div class="theme-card locked">
+            <div class="lock-badge">SOON</div>
+            <div class="theme-preview" style="background: linear-gradient(135deg, #1a1a2e, #16213e);">🌑</div>
+            <div class="theme-name">Obsidian</div>
+            <div class="theme-tag">DEEP DARK</div>
+          </div>
+          <div class="theme-card locked">
+            <div class="lock-badge">SOON</div>
+            <div class="theme-preview" style="background: linear-gradient(135deg, #0d1117, #00ff4133, #0d1117);">💻</div>
+            <div class="theme-name">Terminal</div>
+            <div class="theme-tag">RETRO GREEN</div>
+          </div>
+          <div class="theme-card locked">
+            <div class="lock-badge">SOON</div>
+            <div class="theme-preview" style="background: linear-gradient(135deg, #fff8f0, #ffecd2);">☀️</div>
+            <div class="theme-name">Paper</div>
+            <div class="theme-tag">LIGHT MODE</div>
+          </div>
+        </div>
+
+        <div class="review-card">
+          <div class="review-title">Your Project at a Glance</div>
+          <div class="review-grid" id="review-grid"></div>
+          <div class="review-command">
+            <div class="review-command-label">Scaffold Command</div>
+            <div class="flag-preview" id="review-command-output" style="margin-top:0"></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- end modal-body -->
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="cancelAll()">Cancel</button>
+      <div class="nav-group">
+        <button class="btn btn-nav" id="btn-back" disabled onclick="goBack()">←</button>
+        <button class="btn btn-nav" id="btn-next" disabled onclick="goNext()">→</button>
+        <button class="btn btn-primary" id="btn-done" style="display:none" onclick="handleDone()">Create Project ✦</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentPage = 0;
+  const totalPages = 3;
+  const state = {
+    name: '', folder: '',
+    wrapper: null, framework: null, lang: null, backend: 'none',
+    addons: new Set(),
+    pkgManager: 'npm'
+  };
+
+  function updateDots() {
+    for (let i = 0; i < totalPages; i++) {
+      const dot = document.getElementById('dot-' + i);
+      dot.className = 'step-dot';
+      if (i === currentPage) dot.classList.add('active');
+      else if (i < currentPage) dot.classList.add('done');
+    }
+  }
+
+  function checkPage1() {
+    state.name   = document.getElementById('proj-name').value.trim();
+    state.folder = document.getElementById('proj-folder').value.trim();
+    const next = document.getElementById('btn-next');
+    if (state.name && state.folder) { next.disabled = false; next.classList.add('active'); }
+    else { next.disabled = true; next.classList.remove('active'); }
+  }
+
+  function checkPage2() {
+    const next = document.getElementById('btn-next');
+    // backend is always satisfied (defaults to 'none')
+    if (state.wrapper && state.framework && state.lang) {
+      next.disabled = false; next.classList.add('active');
+    } else {
+      next.disabled = true; next.classList.remove('active');
+    }
+  }
+
+  function checkPage3() {
+    document.getElementById('btn-next').style.display = 'none';
+    const done = document.getElementById('btn-done');
+    done.style.display = 'flex';
+    done.disabled = false;
+    buildReviewCard();
+  }
+
+  function buildReviewCard() {
+    const grid = document.getElementById('review-grid');
+    const capitalize = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : '—';
+    const langLabel = state.lang === 'ts' ? 'TypeScript' : state.lang === 'js' ? 'JavaScript' : '—';
+    const addonList = state.addons.size ? [...state.addons].map(capitalize).join(', ') : 'None';
+    const getBackendLabel = () => {
+      if (state.wrapper === 'tauri') return 'Rust (via Tauri)';
+      if (state.wrapper === 'electron') return 'Node (via Electron)';
+      if (!state.backend || state.backend === 'none') return 'None';
+      return capitalize(state.backend);
+    };
+    const backendLabel = getBackendLabel();
+
+    const rows = [
+      ['Project', state.name || 'my-app'],
+      ['Location', state.folder || '—'],
+      ['Wrapper', capitalize(state.wrapper)],
+      ['Framework', capitalize(state.framework)],
+      ['Language', langLabel],
+      ['Backend', backendLabel],
+      ['Addons', addonList],
+      ['Package Manager', state.pkgManager || 'npm'],
+    ];
+
+    grid.innerHTML = rows.map(([label, value]) =>
+      `<span class="review-label">${label}</span><span class="review-value">${value}</span>`
+    ).join('');
+
+    // Mirror the scaffold command from page 2
+    const cmdSource = document.getElementById('flag-output');
+    document.getElementById('review-command-output').innerHTML = cmdSource.innerHTML;
+  }
+
+  function simulateFolderPick() {
+    const paths = ['/home/dev/projects/', '/Users/dai/code/', 'C:/Users/Dai/Projects/'];
+    document.getElementById('proj-folder').value = paths[Math.floor(Math.random() * paths.length)];
+    checkPage1();
+  }
+
+  function buildFlagPreview() {
+    if (!state.wrapper) {
+      document.getElementById('flag-output').innerHTML = '// select your stack above to see the command build here';
+      return;
+    }
+    const n = state.name || 'my-app';
+    const f = state.framework;
+    const mgr = state.pkgManager !== 'npm' ? ` --manager <span class="flag-val">${state.pkgManager}</span>` : '';
+    let cmd = '';
+
+    if (state.wrapper === 'tauri') {
+      cmd = `<span class="flag-key">create-tauri-app</span> <span class="flag-val">${n}</span>`;
+      if (f) {
+        let tpl = f;
+        if (state.lang === 'ts') tpl += '-ts';
+        cmd += ` --template <span class="flag-val">${tpl}</span>`;
+      }
+      cmd += mgr;
+      if (state.addons.has('tailwind')) cmd += ` <span class="flag-comment"># +tailwind</span>`;
+      if (state.addons.has('shadcn'))   cmd += ` <span class="flag-comment"># +shadcn</span>`;
+      if (state.addons.has('router'))   cmd += ` <span class="flag-comment"># +router</span>`;
+    } else if (state.wrapper === 'electron') {
+      cmd = `<span class="flag-key">create-electron-app</span> <span class="flag-val">${n}</span>`;
+      let tpl = 'vite';
+      if (state.lang === 'ts') tpl += '-typescript';
+      cmd += ` --template=<span class="flag-val">${tpl}</span>`;
+      if (f) cmd += ` <span class="flag-comment"># +${f}</span>`;
+      cmd += mgr;
+      if (state.addons.has('tailwind')) cmd += ` <span class="flag-comment"># +tailwind</span>`;
+      if (state.addons.has('shadcn'))   cmd += ` <span class="flag-comment"># +shadcn</span>`;
+      if (state.addons.has('router'))   cmd += ` <span class="flag-comment"># +router</span>`;
+    } else if (state.wrapper === 'web') {
+      cmd = `<span class="flag-key">create-vite</span> <span class="flag-val">${n}</span>`;
+      if (f) {
+        let tpl = f;
+        if (state.lang === 'ts') tpl += '-ts';
+        cmd += ` --template <span class="flag-val">${tpl}</span>`;
+      }
+      cmd += mgr;
+      if (state.backend && state.backend !== 'none') cmd += ` <span class="flag-comment"># +backend:</span> <span class="flag-val">${state.backend}</span>`;
+      if (state.addons.has('tailwind')) cmd += ` <span class="flag-comment"># +tailwind</span>`;
+      if (state.addons.has('shadcn'))   cmd += ` <span class="flag-comment"># +shadcn</span>`;
+      if (state.addons.has('router'))   cmd += ` <span class="flag-comment"># +router</span>`;
+    }
+    document.getElementById('flag-output').innerHTML = cmd;
+  }
+
+  function selectWrapper(val, el) {
+    state.wrapper   = val;
+    state.framework = null;
+    state.lang      = null;
+    state.backend   = 'none';
+    state.addons.clear();
+
+    document.querySelectorAll('#wrapper-row .template-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+
+    // reset downstream selections
+    document.querySelectorAll('#framework-row .template-card, #lang-row .template-card, #addon-row .template-card')
+      .forEach(c => { c.classList.remove('selected', 'dep-locked'); });
+    document.querySelectorAll('.dep-hint').forEach(h => h.remove());
+
+    // reset backend row to default
+    document.querySelectorAll('#backend-row .template-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById('backend-none').classList.add('selected');
+
+    // scope Angular to Tauri only
+    const angular = document.getElementById('fw-angular');
+    if (val === 'tauri') {
+      angular.classList.remove('locked');
+      angular.style.pointerEvents = '';
+      angular.style.opacity = '';
+    } else {
+      angular.classList.add('locked');
+      angular.style.pointerEvents = 'none';
+      angular.style.opacity = '0.3';
+    }
+
+    showSection('framework-section');
+    hideSection('lang-section');
+    hideSection('backend-section');
+    hideSection('addon-section');
+    buildFlagPreview();
+    checkPage2();
+  }
+
+  function selectChoice(type, val, el) {
+    state[type] = val;
+    const rowMap = { framework: 'framework-row', lang: 'lang-row', backend: 'backend-row' };
+    document.querySelectorAll('#' + rowMap[type] + ' .template-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+
+    if (type === 'framework') {
+      state.lang = null;
+      state.backend = 'none';
+      state.addons.clear();
+      document.querySelectorAll('#lang-row .template-card, #backend-row .template-card, #addon-row .template-card')
+        .forEach(c => { c.classList.remove('selected', 'dep-locked'); });
+      document.querySelectorAll('.dep-hint').forEach(h => h.remove());
+      document.getElementById('backend-none').classList.add('selected');
+
+      const tsCard = document.getElementById('lang-ts');
+      const jsCard = document.getElementById('lang-js');
+      if (val === 'angular') {
+        // Angular is TypeScript-only — auto-select and lock
+        state.lang = 'ts';
+        tsCard.classList.add('selected', 'dep-locked');
+        if (!tsCard.querySelector('.dep-hint')) {
+          const hint = document.createElement('div');
+          hint.className = 'dep-hint';
+          hint.textContent = 'Angular is TypeScript-only';
+          tsCard.appendChild(hint);
+        }
+        jsCard.style.pointerEvents = 'none';
+        jsCard.style.opacity = '0.3';
+        // Lang is satisfied — reveal downstream rows
+        showSection('lang-section');
+        if (state.wrapper === 'web') {
+          showSection('backend-section');
+          showSection('addon-section');
+        } else {
+          hideSection('backend-section');
+          showSection('addon-section');
+        }
+      } else {
+        tsCard.classList.remove('dep-locked');
+        tsCard.querySelector('.dep-hint')?.remove();
+        jsCard.style.pointerEvents = '';
+        jsCard.style.opacity = '';
+        showSection('lang-section');
+        hideSection('backend-section');
+        hideSection('addon-section');
+      }
+    }
+    if (type === 'lang') {
+      state.backend = 'none';
+      state.addons.clear();
+      document.querySelectorAll('#backend-row .template-card, #addon-row .template-card')
+        .forEach(c => c.classList.remove('selected'));
+      document.getElementById('backend-none').classList.add('selected');
+      if (state.wrapper === 'web') {
+        showSection('backend-section');
+        showSection('addon-section');
+      } else {
+        hideSection('backend-section');
+        showSection('addon-section');
+      }
+    }
+    if (type === 'backend') {
+      showSection('addon-section');
+    }
+    buildFlagPreview();
+    checkPage2();
+  }
+
+  function toggleAddon(val, el) {
+    if (state.addons.has(val)) {
+      // Prevent deselecting Tailwind while ShadCN requires it
+      if (val === 'tailwind' && state.addons.has('shadcn')) return;
+      state.addons.delete(val);
+      el.classList.remove('selected');
+      el.classList.remove('dep-locked');
+      // Deselecting ShadCN releases the Tailwind lock
+      if (val === 'shadcn') {
+        const tw = document.getElementById('addon-tailwind');
+        if (tw) { tw.classList.remove('dep-locked'); tw.querySelector('.dep-hint')?.remove(); }
+      }
+    } else {
+      state.addons.add(val);
+      el.classList.add('selected');
+      // ShadCN requires Tailwind — auto-select with hint
+      if (val === 'shadcn') {
+        const tw = document.getElementById('addon-tailwind');
+        if (tw && !state.addons.has('tailwind')) {
+          state.addons.add('tailwind');
+          tw.classList.add('selected');
+        }
+        if (tw && !tw.querySelector('.dep-hint')) {
+          tw.classList.add('dep-locked');
+          const hint = document.createElement('div');
+          hint.className = 'dep-hint';
+          hint.textContent = 'required by ShadCN';
+          tw.appendChild(hint);
+        }
+      }
+    }
+    buildFlagPreview();
+  }
+
+  function setPkgManager(val) {
+    state.pkgManager = val;
+    buildFlagPreview();
+  }
+
+  function showSection(id) { document.getElementById(id).classList.add('visible'); }
+  function hideSection(id) { document.getElementById(id).classList.remove('visible'); }
+
+  function selectTheme(el) {
+    document.querySelectorAll('.theme-card:not(.locked)').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+  }
+
+  function goNext() {
+    if (currentPage < totalPages - 1) {
+      document.getElementById('page-' + currentPage).classList.remove('active');
+      currentPage++;
+      const p = document.getElementById('page-' + currentPage);
+      p.classList.remove('back-anim');
+      p.classList.add('active');
+      updateDots(); updateNav();
+    }
+  }
+
+  function goBack() {
+    if (currentPage > 0) {
+      document.getElementById('page-' + currentPage).classList.remove('active');
+      currentPage--;
+      const p = document.getElementById('page-' + currentPage);
+      p.classList.add('back-anim', 'active');
+      updateDots(); updateNav();
+    }
+  }
+
+  function updateNav() {
+    const back = document.getElementById('btn-back');
+    const next = document.getElementById('btn-next');
+    const done = document.getElementById('btn-done');
+    back.disabled = currentPage === 0;
+    done.style.display = 'none';
+    next.style.display = 'flex';
+    if (currentPage === 0) checkPage1();
+    else if (currentPage === 1) checkPage2();
+    else if (currentPage === 2) checkPage3();
+  }
+
+  function cancelAll() {
+    currentPage = 0;
+    Object.assign(state, { name:'', folder:'', wrapper:null, framework:null, lang:null, backend:'none', pkgManager:'npm' });
+    state.addons.clear();
+    document.querySelectorAll('.dep-hint').forEach(h => h.remove());
+    document.querySelectorAll('.dep-locked').forEach(c => c.classList.remove('dep-locked'));
+    document.querySelector('input[name="pkg"][value="npm"]').checked = true;
+    document.getElementById('proj-name').value = '';
+    document.getElementById('proj-folder').value = '';
+    document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById('backend-none').classList.add('selected');
+    ['framework-section','lang-section','backend-section','addon-section'].forEach(hideSection);
+    document.getElementById('flag-output').innerHTML = '// select your stack above to see the command build here';
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-0').classList.add('active');
+    updateDots();
+    document.getElementById('btn-back').disabled = true;
+    document.getElementById('btn-next').disabled = true;
+    document.getElementById('btn-next').style.display = 'flex';
+    document.getElementById('btn-done').style.display = 'none';
+  }
+
+  function handleDone() {
+    const btn = document.getElementById('btn-done');
+    btn.textContent = '✦ Scaffolding...';
+    btn.disabled = true;
+    setTimeout(() => { btn.textContent = '✓ Done!'; setTimeout(cancelAll, 1200); }, 1200);
+  }
+</script>
+</body>
+</html>

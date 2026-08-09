@@ -1,0 +1,392 @@
+/* Canvas quick-action HUD (ADR-018 Phase A).
+   Glass treatment = cm-hover-card finish (160deg gradient, top glint) per
+   ADR-014; accents match node visual language (electric-blue for node
+   creation). Signed-off visual system:
+   docs/prototypes/prototype-hud-widget-group.html.
+
+   Stacking note: backdrop-filter promotes each glass element to its own
+   stacking context, so the pill (which hosts the dropdown) must sit above
+   the sibling sections — hence .hud-pill { z-index: 2 }. */
+
+.canvas-hud {
+  position: absolute;
+  width: 224px; /* fits the 190px pan/zoom cluster with section padding */
+  z-index: 40; /* above minimap (30), below drawers/menus */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+/* Canvas drags pass through overlays (same rule as minimap/status bar). */
+.app-dragging .canvas-hud {
+  pointer-events: none;
+}
+
+.hud-pill,
+.hud-section,
+.hud-menu {
+  background: rgba(20, 24, 36, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ── Pill: permanent chrome — grip + title + menu trigger ── */
+.hud-pill {
+  position: relative; /* anchors the dropdown */
+  z-index: 2;         /* pill's stacking context paints above the sections */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  cursor: grab;
+  user-select: none;
+}
+.hud-pill:active {
+  cursor: grabbing;
+}
+.hud-pill-grip {
+  display: grid;
+  grid-template-columns: repeat(2, 3px);
+  gap: 2.5px;
+  opacity: 0.5;
+}
+.hud-pill-grip i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(160, 165, 180, 0.75);
+}
+.hud-pill-title {
+  flex: 1;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(160, 165, 180, 0.75);
+}
+.hud-menu-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: rgba(160, 165, 180, 0.75);
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.hud-menu-btn:hover {
+  color: #f3f6ff;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.03) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* ── Visibility menu (generated from the widget registry) ── */
+.hud-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 178px;
+  padding: 8px;
+  cursor: default;
+}
+.hud-menu-heading {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(160, 165, 180, 0.75);
+  padding: 2px 8px 6px;
+}
+.hud-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #f3f6ff;
+  cursor: pointer;
+}
+.hud-menu label:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.hud-menu input[type='checkbox'] {
+  accent-color: var(--cm-indigo);
+}
+.hud-menu-hint {
+  font-size: 10px;
+  color: rgba(160, 165, 180, 0.75);
+  padding: 6px 8px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  margin-top: 6px;
+}
+
+/* ── Sections ── */
+.hud-section {
+  padding: 9px 11px;
+}
+.hud-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(160, 165, 180, 0.75);
+  margin-bottom: 7px;
+}
+
+/* Create section — cm-hover-card glass finish, electric-blue accent hover */
+.hud-create-buttons {
+  display: flex;
+  gap: 8px;
+}
+.hud-create-buttons button {
+  flex: 1;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 4px;
+  border-radius: 10px;
+  cursor: pointer;
+  background: linear-gradient(160deg, rgba(46, 52, 70, 0.9) 0%, rgba(22, 26, 38, 0.9) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: #f3f6ff;
+}
+.hud-new-node {
+  border: 1.5px solid rgba(41, 121, 255, 0.6);
+}
+.hud-new-node:hover {
+  background: linear-gradient(160deg, rgba(41, 121, 255, 0.30) 0%, rgba(41, 121, 255, 0.10) 100%);
+}
+.hud-new-group {
+  border: 1.5px solid rgba(121, 134, 203, 0.6);
+}
+.hud-new-group:hover {
+  background: linear-gradient(160deg, rgba(92, 107, 192, 0.34) 0%, rgba(92, 107, 192, 0.12) 100%);
+}
+
+/* ── Box-first group inline naming (ADR-018 gate amendment): screen-space
+      input pinned to the new box's top-left corner. ── */
+.hud-group-name-overlay {
+  position: absolute;
+  z-index: 45;
+}
+.hud-group-name-overlay input {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f3f6ff;
+  background: rgba(20, 24, 36, 0.9);
+  border: 1px solid var(--cm-indigo-light);
+  border-radius: 6px;
+  padding: 2px 6px;
+  outline: none;
+  width: 150px;
+}
+
+/* ── Pan & Zoom dial (ADR-018 Phase B) — interlocking puzzle-piece motif:
+      one circle carved into 4 wedge sectors wrapping the split hub,
+      diagonal hairline seams, zoom arc band crowning the top. Ported from
+      the signed-off prototype (geometry + glass values verbatim). ── */
+.hud-pz-cluster {
+  position: relative;
+  width: 190px;
+  height: 172px;
+  margin: 0 auto;
+}
+.hud-pz-dial {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  overflow: hidden;
+  /* clip-path (unlike border-radius overflow) reliably clips CHILD
+     hit-testing to the circle — without it a click in the dial's square
+     corner can land on a wedge instead of the zoom arc underneath */
+  clip-path: circle(50%);
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  /* rim light: inset shadow follows the circle's top curve */
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.10);
+}
+/* lens glare: light pooling upper-left, painted OVER the pieces so the
+   carved sectors read as one glass surface */
+.hud-pz-dial::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(ellipse 90px 60px at 32% 20%, rgba(255, 255, 255, 0.10), transparent 70%);
+}
+.hud-pz-wedge {
+  position: absolute;
+  inset: 0;
+  border: none;
+  color: #f3f6ff;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  user-select: none;
+  touch-action: none;
+  /* same gradient on all four full-square wedges -> the clipped sectors
+     reassemble into one continuously-lit glass disc */
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 50%, rgba(0, 0, 0, 0.12) 100%);
+}
+.hud-pz-wedge:hover {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.05) 100%);
+}
+.hud-pz-wedge:active {
+  background: linear-gradient(160deg, rgba(41, 121, 255, 0.32) 0%, rgba(41, 121, 255, 0.14) 100%);
+}
+/* clip-path clips hit-testing too — each wedge responds only in its sector */
+.hud-pz-n { clip-path: polygon(50% 50%, 0 0, 100% 0);       align-items: flex-start; justify-content: center;     padding-top: 10px; }
+.hud-pz-e { clip-path: polygon(50% 50%, 100% 0, 100% 100%); align-items: center;     justify-content: flex-end;   padding-right: 11px; }
+.hud-pz-s { clip-path: polygon(50% 50%, 100% 100%, 0 100%); align-items: flex-end;   justify-content: center;     padding-bottom: 10px; }
+.hud-pz-w { clip-path: polygon(50% 50%, 0 100%, 0 0);       align-items: center;     justify-content: flex-start; padding-left: 11px; }
+.hud-pz-seams {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(45deg,  transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.14) calc(50% - 0.5px), rgba(255, 255, 255, 0.14) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(-45deg, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.14) calc(50% - 0.5px), rgba(255, 255, 255, 0.14) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+}
+.hud-pz-hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(160deg, rgba(52, 60, 82, 0.96) 0%, rgba(14, 17, 26, 0.96) 100%);
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.14);
+}
+.hud-pz-hub button {
+  flex: 1;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+  color: #f3f6ff;
+}
+.hud-pz-hub button:first-child { border-bottom: 1px solid rgba(255, 255, 255, 0.14); }
+.hud-pz-hub button:hover {
+  background: linear-gradient(160deg, rgba(92, 107, 192, 0.40) 0%, rgba(92, 107, 192, 0.16) 100%);
+}
+/* Zoom ring: annular band over the top of the dial, split at twelve
+   o'clock into − / +, ends ~8% above the horizontal midline. The dial
+   paints after it, so the band's inner edge tucks under the dial rim. */
+.hud-pz-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 190px;
+  height: 190px;
+  pointer-events: none; /* only the arcs themselves are interactive */
+}
+.hud-pz-arc {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(160deg, rgba(70, 78, 104, 0.96) 0%, rgba(24, 28, 40, 0.96) 100%);
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.16);
+  color: #f3f6ff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  user-select: none;
+  /* punch the hole: keep only the outer 21px band */
+  -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 22px), #000 calc(100% - 21px));
+  mask: radial-gradient(closest-side, transparent calc(100% - 22px), #000 calc(100% - 21px));
+}
+.hud-pz-arc:hover {
+  background: linear-gradient(160deg, rgba(88, 98, 128, 0.96) 0%, rgba(34, 40, 56, 0.96) 100%);
+}
+.hud-pz-arc:active {
+  background: linear-gradient(160deg, rgba(41, 121, 255, 0.42) 0%, rgba(41, 121, 255, 0.18) 100%);
+}
+.hud-pz-arc-l {
+  clip-path: polygon(50% 50%, 49.6% 0%, 0% 0%, 0% 42%);
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 27px 0 0 30px;
+}
+.hud-pz-arc-r {
+  clip-path: polygon(50% 50%, 50.4% 0%, 100% 0%, 100% 42%);
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 27px 30px 0 0;
+}
+.hud-pz-readout {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: rgba(160, 165, 180, 0.75);
+}
+
+/* ── Help widget (ADR-018 Phase C) — gestures-first quick reference ── */
+.hud-help-sub {
+  margin-bottom: 8px;
+}
+.hud-help-sub:last-child {
+  margin-bottom: 0;
+}
+.hud-help-sub-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--cm-indigo-light);
+  margin-bottom: 3px;
+}
+.hud-help-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.5px;
+  padding: 1.5px 0;
+}
+.hud-help-keys {
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: #f3f6ff;
+  white-space: nowrap;
+}
+.hud-help-what {
+  color: rgba(160, 165, 180, 0.75);
+  text-align: right;
+}
+
+/* ── Spawn ghost: dashed placeholder at the viewport center while the
+      create modal is open — the node is "there" before it's named. ── */
+.hud-spawn-ghost {
+  position: absolute;
+  border: 2px dashed rgba(41, 121, 255, 0.55);
+  border-radius: 12px;
+  background: rgba(41, 121, 255, 0.06);
+  pointer-events: none;
+  z-index: 25; /* above the stage, below the minimap and HUD */
+}

@@ -1,0 +1,94 @@
+/* ===================================
+   Search Pill (canvas top-center)
+   =================================== */
+
+.search-pill-container {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.search-pill-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 45px;
+  padding: 5px 22px;
+  border: 1px solid rgba(212, 212, 212, 0.18);
+  border-radius: var(--cm-pill-radius, 999px);
+  background: rgba(24, 24, 24, 0.86);
+  backdrop-filter: blur(10px);
+  color: var(--cm-text-muted, rgba(212, 212, 212, 0.5));
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--cm-transition-fast, 150ms ease),
+              background var(--cm-transition-fast, 150ms ease);
+  user-select: none;
+}
+
+.search-pill-trigger:hover {
+  border-color: rgba(212, 212, 212, 0.32);
+  background: rgba(24, 24, 24, 0.94);
+  color: var(--cm-text-secondary, rgba(212, 212, 212, 0.7));
+}
+
+/* ===================================
+   Search Popover (both pill & compass)
+   =================================== */
+
+.search-pill-popover,
+.status-bar-search-popover {
+  width: 320px;
+  padding: 0;
+  border: 1px solid rgba(212, 212, 212, 0.28);
+  border-radius: 14px;
+  background: rgba(24, 24, 24, 0.96);
+  backdrop-filter: blur(10px);
+}
+
+/* ===================================
+   NodeSearchPanel internals
+   =================================== */
+
+.node-search-panel {
+  background: transparent;
+}
+
+.node-search-panel [data-slot="command-input-wrapper"] {
+  border-color: rgba(212, 212, 212, 0.14);
+}
+
+.node-search-panel [data-slot="command-input"] {
+  color: var(--cm-electric-blue, #2979ff);
+}
+
+.node-search-panel [data-slot="command-input"]::placeholder {
+  color: rgba(41, 121, 255, 0.4);
+}
+
+.node-search-panel [data-slot="command-item"] {
+  color: var(--cm-electric-blue, #2979ff);
+}
+
+.node-search-panel [data-slot="command-item"][data-selected="true"] {
+  background: rgba(41, 121, 255, 0.12);
+  color: var(--cm-electric-blue, #2979ff);
+}
+
+.node-search-panel [data-slot="command-empty"] {
+  color: rgba(41, 121, 255, 0.4);
+}
+
+.node-search-panel [data-slot="command-separator"] {
+  background: rgba(212, 212, 212, 0.14);
+}
+
+.node-search-filename {
+  margin-left: 4px;
+  color: rgba(41, 121, 255, 0.5);
+  font-size: 11px;
+}
+
+.node-search-home-icon {
+  color: rgba(41, 121, 255, 0.5);
+}

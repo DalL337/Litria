@@ -1,0 +1,198 @@
+/* --- Create Piece Dialog (shadcn Dialog) --- */
+
+.create-piece-dialog {
+  width: 330px;
+  border-radius: 14px;
+  border: 1px solid rgba(212, 212, 212, 0.28);
+  background: rgba(24, 24, 24, 0.96);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.42);
+  padding: 0;
+}
+
+.create-piece-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+.create-piece-modal-title {
+  margin-bottom: 2px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f0f0f0;
+}
+
+.create-piece-field {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #b3b3b3;
+}
+
+.create-piece-optional {
+  color: #888;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.create-piece-input {
+  width: 100%;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid rgba(190, 190, 190, 0.26);
+  background: rgba(44, 44, 44, 0.9);
+  color: #f2f2f2;
+  padding: 0 14px;
+  outline: none;
+}
+
+.create-piece-input:focus {
+  border-color: rgba(225, 225, 225, 0.56);
+}
+
+.create-piece-input.is-invalid {
+  border-color: rgba(239, 83, 80, 0.9);
+}
+
+.create-piece-error {
+  color: #f28b82;
+  font-size: 12px;
+}
+
+.create-piece-actions {
+  margin-top: 4px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.create-piece-action {
+  min-height: 38px;
+  border-radius: 999px;
+  border: 1px solid rgba(196, 196, 196, 0.24);
+  background: rgba(52, 52, 52, 0.92);
+  color: #f1f1f1;
+  cursor: pointer;
+  transition: background var(--drawer-transition), border-color var(--drawer-transition);
+}
+
+.create-piece-action:hover {
+  background: rgba(70, 70, 70, 0.92);
+  border-color: rgba(232, 232, 232, 0.4);
+}
+
+@media (max-width: 920px) {
+  .create-piece-dialog {
+    width: min(330px, calc(100vw - 32px));
+  }
+}
+
+/* AlertDialog overlay is handled by Radix (bg-black/50 via Tailwind on AlertDialogOverlay) */
+
+.unsaved-prompt {
+  width: min(420px, calc(100vw - 32px));
+  border-radius: 14px;
+  border: 1px solid rgba(216, 216, 216, 0.28);
+  background: rgba(24, 24, 24, 0.97);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.unsaved-prompt-title {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #efefef;
+}
+
+.unsaved-prompt-message {
+  color: #c6c6c6;
+  font-size: 13px;
+}
+
+.unsaved-prompt-actions {
+  margin-top: 4px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.unsaved-prompt-button {
+  min-height: 36px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 210, 210, 0.24);
+  background: rgba(46, 46, 46, 0.9);
+  color: #efefef;
+  cursor: pointer;
+}
+
+.unsaved-prompt-button.is-primary {
+  background: rgba(70, 98, 142, 0.88);
+  border-color: rgba(169, 196, 255, 0.4);
+}
+
+/* --- Color Picker Popup --- */
+.color-picker-popup {
+  padding: 4px 0 0;
+}
+
+.color-picker-swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+}
+
+.color-picker-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.1s;
+}
+
+.color-picker-swatch:hover {
+  transform: translateY(-1px);
+  border-color: rgba(250, 250, 250, 0.5);
+}
+
+.color-picker-swatch.is-selected {
+  border-color: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.28);
+}
+
+.color-picker-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  align-items: center;
+}
+
+.color-picker-spacer {
+  flex: 1;
+}
+
+.color-picker-btn {
+  min-height: 26px;
+  border-radius: 999px;
+  border: 1px solid rgba(200, 200, 200, 0.2);
+  background: rgba(40, 40, 40, 0.9);
+  color: #f1f1f1;
+  font-size: 11px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.color-picker-btn.is-primary {
+  background: rgba(70, 98, 142, 0.88);
+  border-color: rgba(169, 196, 255, 0.4);
+}
+
+.color-picker-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

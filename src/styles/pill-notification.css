@@ -1,0 +1,208 @@
+/* ===================================
+   Pill Notifications
+   =================================== */
+
+.pill-notification-container {
+  position: absolute;
+  top: 36px;
+  right: 8px;
+  z-index: 105;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.pill-notification {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: var(--cm-pill-radius);
+  background: var(--cm-pill-bg);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--cm-pill-border);
+  color: var(--cm-pill-color);
+  box-shadow: none;
+  font-size: 11px;
+  animation: pill-slide-in 0.2s ease-out;
+  overflow: hidden;
+  transition: border-color var(--cm-transition-fast),
+              background var(--cm-transition-fast),
+              color var(--cm-transition-fast),
+              box-shadow var(--cm-transition-fast);
+}
+
+.pill-notification:hover {
+  border-color: var(--cm-pill-hover-border);
+  background: var(--cm-pill-hover-bg);
+  color: var(--cm-pill-hover-color);
+  box-shadow: var(--cm-pill-hover-glow);
+}
+
+/* Semantic overrides take precedence */
+.pill-notification.pill-success {
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.pill-notification.pill-error {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+/* Action offers (ADR-020 first-open pills) — indigo accent, no urgency. */
+.pill-notification.pill-info {
+  border-color: rgba(129, 140, 248, 0.4);
+}
+
+.pill-info .pill-notification-body {
+  color: #a5b4fc;
+}
+
+/* Action pills can carry a full command sentence — give them more room. */
+.pill-info .pill-notification-text {
+  max-width: 340px;
+}
+
+.pill-notification-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pill-success .pill-notification-body {
+  color: #4ade80;
+}
+
+.pill-error .pill-notification-body {
+  color: #f87171;
+}
+
+.pill-notification-text {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill-notification-dismiss {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-left: 1px solid rgba(92, 107, 192, 0.25);
+  /* Was 0.5 at 10px — present, but dim enough that it read as "no dismiss
+     control exists". */
+  color: rgba(200, 200, 210, 0.75);
+  cursor: pointer;
+}
+
+.pill-notification-dismiss:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+/* ── Pill actions (copy / send to logs) ──
+   A pill auto-dismisses after 8s and is the only surface some advisories
+   ever get, so it needs a way to keep the message. */
+
+.pill-notification-menu-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.pill-notification-caret {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-left: 1px solid rgba(92, 107, 192, 0.25);
+  color: rgba(200, 200, 210, 0.75);
+  cursor: pointer;
+}
+
+.pill-notification-caret:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.pill-notification-status {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 10px;
+  color: rgba(200, 200, 210, 0.7);
+  white-space: nowrap;
+}
+
+.pill-notification-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Above the pill stack (105) so any outside click closes the menu, but
+     below the menu itself. */
+  z-index: 120;
+}
+
+.pill-notification-menu {
+  /* Fixed, not absolute: .pill-notification sets overflow:hidden for its
+     radius, which clipped an absolutely-positioned menu down to a sliver.
+     top/right are supplied inline from the caret's measured rect. */
+  position: fixed;
+  z-index: 121;
+  min-width: 172px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(28, 30, 40, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pill-notification-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pill-notification-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+@keyframes pill-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

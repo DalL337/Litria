@@ -1,0 +1,86 @@
+/* ===================================
+   Toast Notifications
+   Lightweight transient notices for canvas actions (e.g. "Already imported").
+   Bottom-right, distinct from the top-right terminal pills.
+   =================================== */
+
+.toast-viewport {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 106;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  max-width: 320px;
+  border-radius: var(--cm-pill-radius);
+  background: var(--cm-pill-bg);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--cm-pill-border);
+  color: var(--cm-pill-color);
+  font-size: 11px;
+  overflow: hidden;
+  pointer-events: auto;
+  animation: toast-slide-in 0.2s ease-out;
+}
+
+.toast.toast-error {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.toast.toast-success {
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.toast-text {
+  padding: 6px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toast-error .toast-text {
+  color: #f87171;
+}
+
+.toast-success .toast-text {
+  color: #4ade80;
+}
+
+.toast-dismiss {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  align-self: stretch;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-left: 1px solid rgba(92, 107, 192, 0.25);
+  color: rgba(200, 200, 210, 0.5);
+  cursor: pointer;
+}
+
+.toast-dismiss:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

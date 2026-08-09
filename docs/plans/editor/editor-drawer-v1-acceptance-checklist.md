@@ -1,0 +1,32 @@
+# Editor Drawer v1 Acceptance Checklist
+
+- [x] Editor rail/tab is hidden when no pieces are selected.
+- [x] Selecting one or more pieces shows editor rail/tab.
+- [x] Double-clicking a piece opens editor drawer immediately.
+- [x] Opening editor rebuilds tabs from current selection only.
+- [x] Tabs are sorted alphabetically by `filename`.
+- [x] Tab titles use `filename` only (never `label`).
+- [x] Maximum open tabs is 8.
+- [x] Editor drawer width is configurable in the 75-80% Desk range and overlays artboard.
+- [x] Monaco is lazy-mounted on first editor open.
+- [x] Monaco remains mounted after first load (drawer hide/show does not re-init Monaco).
+- [x] Brand-new empty file gets first-line filename header comment.
+- [x] Unknown language uses fallback comment syntax.
+- [x] `workingCode` is the live editor buffer for each tab.
+- [x] Dirty detection is `workingCode !== code`.
+- [x] Dirty tabs render with dot indicator and italic filename.
+- [x] Clicking `X` on clean tab closes immediately.
+- [x] Clicking `X` on dirty tab prompts `Save / Discard / Cancel`.
+- [x] Dirty-tab save prompt applies to that tab only.
+- [x] Choosing `Save` updates piece `code` and writes file to project disk.
+- [x] Choosing `Discard` drops unsaved tab changes and closes tab.
+- [x] Choosing `Cancel` keeps tab open unchanged.
+- [x] Closing the editor drawer never prompts save.
+- [x] Closing editor drawer preserves open tabs and `workingCode` session state.
+- [x] App exit with dirty tabs prompts `Save / Discard / Cancel`.
+- [x] App-exit `Save` persists all dirty tabs to piece state and project files.
+- [x] App-exit `Discard` exits without persisting dirty buffers.
+- [x] App-exit `Cancel` aborts exit and returns to app.
+- [x] Unsaved recovery restores `workingCode` buffers after crash/restart.
+- [x] Recovery restores tab order and active tab when possible.
+- [x] No cross-project bleed: buffers/tabs/recovery state are scoped to project instance.

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "resources/servers": "resources/servers",
+      "resources/node": "resources/node",
+      "resources/conpty/conpty.dll": "conpty.dll",
+      "resources/conpty/OpenConsole.exe": "OpenConsole.exe"
+    }
+  }
+}

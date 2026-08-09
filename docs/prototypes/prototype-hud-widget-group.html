@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Litria — Canvas Quick-Action HUD Prototype</title>
+<!--
+  Interactive prototype for the Canvas Quick-Action Widget Group (HUD).
+  Companion to docs/plans/ideas/canvas-quick-action-widget-group.md — implements
+  the 2026-07-02 addendum decisions so they can be *felt*, not just read:
+
+    - Screen-anchored HUD floating over a pannable/zoomable stand-in canvas
+    - Whole-HUD drag from any non-interactive glass; grip on the pill
+    - Pill = permanent chrome (drag grip + menu trigger), always rendered
+    - Checkbox visibility menu GENERATED from the widget registry
+      (uncheck everything -> pill-only degenerate state; no lock-out)
+    - Keybind axis: H hides everything including the pill (clean canvas)
+    - Position + visibility set persisted (localStorage) and viewport-clamped
+    - New Node: placeholder-then-name flow (node lands at viewport center
+      instantly, modal names it, Esc removes the placeholder)
+    - New Group: box-first, folder-less, inline-rename on the box
+    - Three registry sections (the sample set): Create / Help-shortcuts / Pan & Zoom
+      Help's subsections (M+KB / KB / Drag) are INTERNAL to the Help widget.
+
+  No ambient animation (project perf lock). Glass material only.
+-->
+<style>
+  :root {
+    --cm-indigo:        #5c6bc0;
+    --cm-indigo-light:  #7986cb;
+    --cm-electric-blue: #2979ff;
+
+    --canvas-bg:   #0d0f14;
+    --canvas-grid: rgba(255, 255, 255, 0.035);
+
+    --glass-surface: rgba(20, 24, 36, 0.55);
+    --glass-border:  rgba(255, 255, 255, 0.14);
+    --glass-blur:    10px;
+
+    --label-color:    #f3f6ff;
+    --sublabel-color: rgba(160, 165, 180, 0.75);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: #e0e0e0;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    background: var(--canvas-bg);
+  }
+
+  /* ═══════════ Canvas (stand-in for the Konva stage) ═══════════ */
+  #canvas {
+    position: absolute;
+    inset: 0;
+    background-color: var(--canvas-bg);
+    background-image:
+      linear-gradient(var(--canvas-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px);
+    background-size: 20px 20px;
+    cursor: grab;
+  }
+  #canvas.panning { cursor: grabbing; }
+
+  #world {
+    position: absolute;
+    top: 0; left: 0;
+    transform-origin: 0 0;
+  }
+
+  /* ── Stand-in nodes (left-edge cascade, electric blue accent) ── */
+  .node {
+    position: absolute;
+    min-width: 148px;
+    padding: 10px 14px 10px 16px;
+    background: var(--glass-surface);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1.5px solid var(--glass-border);
+    border-radius: 12px;
+    box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.08), 0 4px 16px rgba(0,0,0,0.4);
+    cursor: grab;
+    user-select: none;
+    z-index: 2;
+  }
+  .node::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--cm-electric-blue);
+    box-shadow: 0 0 8px rgba(41, 121, 255, 0.5);
+  }
+  .node.dragging { cursor: grabbing; z-index: 10; }
+  .node .node-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--label-color);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  }
+  .node .node-label:empty { display: none; }
+  .node .node-file {
+    font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--sublabel-color);
+    margin-top: 2px;
+  }
+  .node.placeholder {
+    border-style: dashed;
+    border-color: rgba(41, 121, 255, 0.55);
+    opacity: 0.75;
+  }
+  .node.placeholder .node-file { font-style: italic; }
+
+  /* ── Stand-in groups (box-first, indigo accent) ── */
+  .group {
+    position: absolute;
+    width: 340px;
+    height: 230px;
+    background: rgba(92, 107, 192, 0.07);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: 1.5px solid rgba(121, 134, 203, 0.45);
+    border-radius: 14px;
+    cursor: grab;
+    user-select: none;
+    z-index: 1;
+  }
+  .group.dragging { cursor: grabbing; }
+  .group-name {
+    position: absolute;
+    top: 8px; left: 12px;
+    display: flex;
+    align-items: center;
+  }
+  .group-name span {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cm-indigo-light);
+    letter-spacing: 0.02em;
+    padding: 2px 6px;
+    border-radius: 6px;
+  }
+  .group-name span:hover { background: rgba(121, 134, 203, 0.15); }
+  .group-name input {
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--label-color);
+    background: rgba(20, 24, 36, 0.85);
+    border: 1px solid var(--cm-indigo-light);
+    border-radius: 6px;
+    padding: 2px 6px;
+    outline: none;
+    width: 140px;
+  }
+
+  /* ═══════════ The HUD ═══════════ */
+  #hud {
+    position: fixed;
+    width: 246px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    /* screen-anchored: never affected by canvas pan/zoom */
+  }
+  #hud.hud-hidden { display: none; }
+
+  .hud-glass {
+    background: var(--glass-surface);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1.5px solid var(--glass-border);
+    border-radius: 14px;
+    box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.08), 0 6px 24px rgba(0,0,0,0.45);
+  }
+
+  /* ── Pill: permanent chrome — grip + title + menu trigger ── */
+  #hud-pill {
+    position: relative; /* anchor for the menu */
+    z-index: 120;       /* pill's stacking context must paint above the
+                           sections' (backdrop-filter makes each a context,
+                           so the menu can't escape the pill on its own) */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: grab;
+    user-select: none;
+  }
+  #hud-pill.dragging { cursor: grabbing; }
+  .pill-grip {
+    display: grid;
+    grid-template-columns: repeat(2, 3px);
+    gap: 2.5px;
+    opacity: 0.5;
+  }
+  .pill-grip i {
+    width: 3px; height: 3px;
+    border-radius: 50%;
+    background: var(--sublabel-color);
+  }
+  .pill-title {
+    flex: 1;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--sublabel-color);
+    text-transform: uppercase;
+  }
+  #hud-menu-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--sublabel-color);
+    font-size: 14px;
+    line-height: 1;
+    padding: 3px 7px;
+    cursor: pointer;
+  }
+  #hud-menu-btn:hover {
+    color: var(--label-color);
+    border-color: var(--glass-border);
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.03) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+
+  /* ── Visibility menu (generated from the registry) ── */
+  #hud-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px); /* just below the pill, whatever its height */
+    right: 0;
+    width: 200px;
+    padding: 8px;
+    cursor: default;
+  }
+  #hud-menu.open { display: block; }
+  #hud-menu .menu-heading {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--sublabel-color);
+    padding: 2px 8px 6px;
+  }
+  #hud-menu label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--label-color);
+    cursor: pointer;
+  }
+  #hud-menu label:hover { background: rgba(255,255,255,0.06); }
+  #hud-menu input[type="checkbox"] { accent-color: var(--cm-indigo); }
+  #hud-menu .menu-hint {
+    font-size: 10.5px;
+    color: var(--sublabel-color);
+    padding: 6px 8px 2px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    margin-top: 6px;
+  }
+
+  /* ── Sections ── */
+  .hud-section { padding: 10px 12px; }
+  .hud-section .section-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--sublabel-color);
+    margin-bottom: 8px;
+  }
+
+  /* Create section */
+  .create-buttons { display: flex; gap: 8px; }
+  /* Glass finish (cm-hover-card treatment): diagonal 160deg gradient,
+     light catching top-left, falling dark; soft top-edge glint. */
+  .create-buttons button {
+    flex: 1;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 8px 4px;
+    border-radius: 10px;
+    cursor: pointer;
+    background: linear-gradient(160deg, rgba(46, 52, 70, 0.9) 0%, rgba(22, 26, 38, 0.9) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    color: var(--label-color);
+  }
+  #btn-new-node {
+    border: 1.5px solid rgba(41, 121, 255, 0.6);
+  }
+  #btn-new-node:hover {
+    background: linear-gradient(160deg, rgba(41, 121, 255, 0.30) 0%, rgba(41, 121, 255, 0.10) 100%);
+  }
+  #btn-new-group {
+    border: 1.5px solid rgba(121, 134, 203, 0.6);
+  }
+  #btn-new-group:hover {
+    background: linear-gradient(160deg, rgba(92, 107, 192, 0.34) 0%, rgba(92, 107, 192, 0.12) 100%);
+  }
+
+  /* Help section — subsections are INTERNAL to this widget */
+  .help-sub { margin-bottom: 8px; }
+  .help-sub:last-child { margin-bottom: 0; }
+  .help-sub-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--cm-indigo-light);
+    margin-bottom: 3px;
+  }
+  .help-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 11.5px;
+    padding: 1.5px 0;
+  }
+  .help-row .keys {
+    font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 10.5px;
+    color: var(--label-color);
+    white-space: nowrap;
+  }
+  .help-row .what { color: var(--sublabel-color); text-align: right; }
+
+  /* Pan & Zoom — interlocking dial (puzzle-piece motif):
+     one circle carved into 4 wedge sectors wrapping the split hub,
+     diagonal seams between the pieces, zoom pucks socketed into the
+     top corner voids the circle leaves behind.                     */
+  .pz-cluster {
+    position: relative;
+    width: 190px;
+    height: 172px;
+    margin: 0 auto;
+  }
+  .pz-dial {
+    position: absolute;
+    left: 20px;
+    top: 20px;
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 1.5px solid var(--glass-border);
+    background: rgba(255, 255, 255, 0.03);
+    /* rim light: inset shadow follows the circle's top curve */
+    box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.10);
+  }
+  /* lens glare: soft light pooling at the upper-left of the disc,
+     painted over the pieces so it reads as one glass surface */
+  .pz-dial::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    border-radius: 50%;
+    pointer-events: none;
+    background: radial-gradient(ellipse 90px 60px at 32% 20%, rgba(255, 255, 255, 0.10), transparent 70%);
+  }
+  .pz-wedge {
+    position: absolute;
+    inset: 0;
+    border: none;
+    background: transparent;
+    color: var(--label-color);
+    font: inherit;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex;
+    user-select: none;
+    touch-action: none;
+  }
+  /* same gradient on all four full-square wedges -> the clipped sectors
+     reassemble into one continuously-lit glass disc */
+  .pz-wedge {
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 50%, rgba(0, 0, 0, 0.12) 100%);
+  }
+  .pz-wedge:hover {
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.05) 100%);
+  }
+  .pz-wedge:active {
+    background: linear-gradient(160deg, rgba(41, 121, 255, 0.32) 0%, rgba(41, 121, 255, 0.14) 100%);
+  }
+  /* clip-path clips hit-testing too — each wedge only responds in its sector */
+  .pz-n { clip-path: polygon(50% 50%, 0 0, 100% 0);       align-items: flex-start; justify-content: center;   padding-top: 10px; }
+  .pz-e { clip-path: polygon(50% 50%, 100% 0, 100% 100%); align-items: center;     justify-content: flex-end; padding-right: 11px; }
+  .pz-s { clip-path: polygon(50% 50%, 100% 100%, 0 100%); align-items: flex-end;   justify-content: center;   padding-bottom: 10px; }
+  .pz-w { clip-path: polygon(50% 50%, 0 100%, 0 0);       align-items: center;     justify-content: flex-start; padding-left: 11px; }
+  .pz-seams {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(45deg,  transparent calc(50% - 0.5px), var(--glass-border) calc(50% - 0.5px), var(--glass-border) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+      linear-gradient(-45deg, transparent calc(50% - 0.5px), var(--glass-border) calc(50% - 0.5px), var(--glass-border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  }
+  .pz-hub {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 62px;
+    height: 62px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 1.5px solid var(--glass-border);
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(160deg, rgba(52, 60, 82, 0.96) 0%, rgba(14, 17, 26, 0.96) 100%);
+    box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.14);
+  }
+  .pz-hub button {
+    flex: 1;
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    border: none;
+    cursor: pointer;
+    background: transparent;
+    color: var(--label-color);
+  }
+  .pz-hub button:first-child { border-bottom: 1px solid var(--glass-border); }
+  .pz-hub button:hover {
+    background: linear-gradient(160deg, rgba(92, 107, 192, 0.40) 0%, rgba(92, 107, 192, 0.16) 100%);
+  }
+  /* Zoom ring: an annular band over the top of the dial, split at
+     twelve o'clock into − / +, reaching a little past the horizontal
+     on each side. The dial paints after it, so the band's inner edge
+     tucks under the dial rim — one assembled piece.                */
+  .pz-ring {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 190px;
+    height: 190px;
+    pointer-events: none; /* only the arcs themselves are interactive */
+  }
+  .pz-arc {
+    position: absolute;
+    inset: 0;
+    pointer-events: auto;
+    border-radius: 50%;
+    border: 1.5px solid var(--glass-border);
+    background: linear-gradient(160deg, rgba(70, 78, 104, 0.96) 0%, rgba(24, 28, 40, 0.96) 100%);
+    box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.16);
+    color: var(--label-color);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    user-select: none;
+    /* punch the hole: keep only the outer 21px band */
+    -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 22px), #000 calc(100% - 21px));
+    mask: radial-gradient(closest-side, transparent calc(100% - 22px), #000 calc(100% - 21px));
+  }
+  .pz-arc:hover {
+    background: linear-gradient(160deg, rgba(88, 98, 128, 0.96) 0%, rgba(34, 40, 56, 0.96) 100%);
+  }
+  .pz-arc:active {
+    background: linear-gradient(160deg, rgba(41, 121, 255, 0.42) 0%, rgba(41, 121, 255, 0.18) 100%);
+  }
+  /* sectors: top-center seam, ends ~8% above the horizontal midline */
+  .pz-arc-l {
+    clip-path: polygon(50% 50%, 49.6% 0%, 0% 0%, 0% 42%);
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: 27px 0 0 30px;
+  }
+  .pz-arc-r {
+    clip-path: polygon(50% 50%, 50.4% 0%, 100% 0%, 100% 42%);
+    align-items: flex-start;
+    justify-content: flex-end;
+    padding: 27px 30px 0 0;
+  }
+  #pz-readout {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--sublabel-color);
+  }
+
+  /* ═══════════ New Node modal ═══════════ */
+  #modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 7, 12, 0.5);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+  #modal-backdrop.open { display: flex; }
+  #node-modal {
+    width: 320px;
+    padding: 18px;
+  }
+  #node-modal h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--label-color);
+    margin-bottom: 4px;
+  }
+  #node-modal .modal-sub {
+    font-size: 11.5px;
+    color: var(--sublabel-color);
+    margin-bottom: 14px;
+  }
+  #node-modal .field { margin-bottom: 12px; }
+  #node-modal .field label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--sublabel-color);
+    margin-bottom: 4px;
+  }
+  #node-modal input {
+    width: 100%;
+    font: inherit;
+    font-size: 13px;
+    color: var(--label-color);
+    background: rgba(10, 13, 20, 0.7);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    outline: none;
+  }
+  #node-modal input:focus { border-color: var(--cm-electric-blue); }
+  #modal-error {
+    font-size: 11px;
+    color: #ef7070;
+    min-height: 15px;
+    margin-bottom: 8px;
+  }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-actions button {
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: 9px;
+    cursor: pointer;
+  }
+  #modal-cancel {
+    background: linear-gradient(160deg, rgba(40, 45, 60, 0.6) 0%, rgba(22, 26, 36, 0.6) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--sublabel-color);
+  }
+  #modal-cancel:hover { color: var(--label-color); }
+  #modal-create {
+    background: linear-gradient(160deg, rgba(41, 121, 255, 0.38) 0%, rgba(41, 121, 255, 0.16) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    border: 1.5px solid var(--cm-electric-blue);
+    color: var(--label-color);
+  }
+  #modal-create:hover {
+    background: linear-gradient(160deg, rgba(41, 121, 255, 0.52) 0%, rgba(41, 121, 255, 0.26) 100%);
+  }
+
+  /* Corner hint */
+  #corner-hint {
+    position: fixed;
+    bottom: 10px;
+    right: 14px;
+    font-size: 11px;
+    color: var(--sublabel-color);
+    z-index: 50;
+    user-select: none;
+  }
+  #corner-hint b { color: var(--label-color); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div id="canvas"><div id="world"></div></div>
+
+<!-- The HUD: pill (permanent chrome) + registry-driven sections + visibility menu -->
+<div id="hud">
+  <div id="hud-pill" class="hud-glass">
+    <span class="pill-grip"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <span class="pill-title">Litria</span>
+    <button id="hud-menu-btn" title="Compose HUD" aria-label="Compose HUD">☰</button>
+    <div id="hud-menu" class="hud-glass">
+      <div class="menu-heading">Widgets</div>
+      <div id="hud-menu-items"><!-- generated from registry --></div>
+      <div class="menu-hint">Uncheck all → pill only. Press <b>H</b> to hide the whole HUD.</div>
+    </div>
+  </div>
+  <div id="hud-sections"><!-- generated from registry --></div>
+</div>
+
+<div id="modal-backdrop">
+  <div id="node-modal" class="hud-glass">
+    <h2>New Node</h2>
+    <div class="modal-sub">It's already on the canvas — name it. Esc removes it.</div>
+    <div class="field">
+      <label for="modal-filename">Filename</label>
+      <input id="modal-filename" placeholder="widget.jsx" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="modal-label">Label <span style="font-weight:400">(optional)</span></label>
+      <input id="modal-label" placeholder="My widget" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="modal-error"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel">Cancel</button>
+      <button id="modal-create">Create Node</button>
+    </div>
+  </div>
+</div>
+
+<div id="corner-hint">HUD prototype — <b>H</b> toggles the HUD</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const STORE_KEY = 'litria-hud-prototype-v1';
+  const canvas = document.getElementById('canvas');
+  const world = document.getElementById('world');
+  const hud = document.getElementById('hud');
+  const hudPill = document.getElementById('hud-pill');
+  const hudMenu = document.getElementById('hud-menu');
+  const hudMenuBtn = document.getElementById('hud-menu-btn');
+  const hudMenuItems = document.getElementById('hud-menu-items');
+  const hudSections = document.getElementById('hud-sections');
+
+  /* ════════════════ Canvas state: pan / zoom / objects ════════════════ */
+
+  const view = { panX: 0, panY: 0, scale: 1 };
+  const objects = []; // { id, type: 'node'|'group', x, y, el }
+  let nextId = 1;
+
+  function applyView() {
+    world.style.transform =
+      `translate(${view.panX}px, ${view.panY}px) scale(${view.scale})`;
+    const g = 20 * view.scale;
+    canvas.style.backgroundSize = `${g}px ${g}px`;
+    canvas.style.backgroundPosition = `${view.panX}px ${view.panY}px`;
+    updateZoomReadout();
+  }
+
+  function screenToWorld(sx, sy) {
+    return { x: (sx - view.panX) / view.scale, y: (sy - view.panY) / view.scale };
+  }
+
+  function viewportCenterWorld() {
+    return screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+  }
+
+  function zoomAt(sx, sy, factor) {
+    const next = Math.min(3, Math.max(0.25, view.scale * factor));
+    view.panX = sx - (sx - view.panX) * (next / view.scale);
+    view.panY = sy - (sy - view.panY) * (next / view.scale);
+    view.scale = next;
+    applyView();
+  }
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.1 : 1 / 1.1);
+  }, { passive: false });
+
+  // Pan: drag on empty canvas
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.target !== canvas && e.target !== world) return;
+    e.preventDefault();
+    canvas.classList.add('panning');
+    canvas.setPointerCapture(e.pointerId);
+    const start = { x: e.clientX, y: e.clientY, panX: view.panX, panY: view.panY };
+    const move = (ev) => {
+      view.panX = start.panX + (ev.clientX - start.x);
+      view.panY = start.panY + (ev.clientY - start.y);
+      applyView();
+    };
+    const up = () => {
+      canvas.classList.remove('panning');
+      canvas.removeEventListener('pointermove', move);
+      canvas.removeEventListener('pointerup', up);
+    };
+    canvas.addEventListener('pointermove', move);
+    canvas.addEventListener('pointerup', up);
+  });
+
+  /* ── Object dragging (nodes + groups, in world coordinates) ── */
+  function makeDraggable(obj) {
+    obj.el.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('input')) return; // inline rename in progress
+      e.stopPropagation();
+      e.preventDefault();
+      obj.el.classList.add('dragging');
+      obj.el.setPointerCapture(e.pointerId);
+      const start = { x: e.clientX, y: e.clientY, ox: obj.x, oy: obj.y };
+      const move = (ev) => {
+        obj.x = start.ox + (ev.clientX - start.x) / view.scale;
+        obj.y = start.oy + (ev.clientY - start.y) / view.scale;
+        positionObject(obj);
+      };
+      const up = () => {
+        obj.el.classList.remove('dragging');
+        obj.el.removeEventListener('pointermove', move);
+        obj.el.removeEventListener('pointerup', up);
+      };
+      obj.el.addEventListener('pointermove', move);
+      obj.el.addEventListener('pointerup', up);
+    });
+  }
+
+  function positionObject(obj) {
+    obj.el.style.left = obj.x + 'px';
+    obj.el.style.top = obj.y + 'px';
+  }
+
+  /* ════════════════ Spawning: nodes ════════════════ */
+
+  function spawnNode(x, y, filename, label, placeholder) {
+    const el = document.createElement('div');
+    el.className = 'node' + (placeholder ? ' placeholder' : '');
+    el.innerHTML = '<div class="node-label"></div><div class="node-file"></div>';
+    el.querySelector('.node-label').textContent = label || '';
+    el.querySelector('.node-file').textContent = filename || 'unnamed…';
+    world.appendChild(el);
+    // spawn centered on the point, not cornered
+    const obj = { id: nextId++, type: 'node', x: 0, y: 0, el };
+    obj.x = x - el.offsetWidth / 2;
+    obj.y = y - el.offsetHeight / 2;
+    positionObject(obj);
+    makeDraggable(obj);
+    objects.push(obj);
+    return obj;
+  }
+
+  function removeObject(obj) {
+    const i = objects.indexOf(obj);
+    if (i !== -1) objects.splice(i, 1);
+    obj.el.remove();
+  }
+
+  /* ── New Node: placeholder-then-name flow ── */
+  const backdrop = document.getElementById('modal-backdrop');
+  const inFilename = document.getElementById('modal-filename');
+  const inLabel = document.getElementById('modal-label');
+  const modalError = document.getElementById('modal-error');
+  let pendingNode = null;
+
+  function openNodeFlow() {
+    const c = viewportCenterWorld();
+    pendingNode = spawnNode(c.x, c.y, '', '', true); // node is "there" instantly
+    inFilename.value = '';
+    inLabel.value = '';
+    modalError.textContent = '';
+    backdrop.classList.add('open');
+    inFilename.focus();
+  }
+
+  function cancelNodeFlow() {
+    if (pendingNode) removeObject(pendingNode);
+    pendingNode = null;
+    backdrop.classList.remove('open');
+  }
+
+  function commitNodeFlow() {
+    const name = inFilename.value.trim();
+    if (!name) { modalError.textContent = 'Filename is required.'; inFilename.focus(); return; }
+    if (!/\.[A-Za-z0-9]+$/.test(name)) {
+      modalError.textContent = 'Filename needs an extension (.jsx, .py, …).';
+      inFilename.focus();
+      return;
+    }
+    pendingNode.el.classList.remove('placeholder');
+    pendingNode.el.querySelector('.node-file').textContent = name;
+    pendingNode.el.querySelector('.node-label').textContent = inLabel.value.trim();
+    pendingNode = null;
+    backdrop.classList.remove('open');
+  }
+
+  document.getElementById('modal-cancel').addEventListener('click', cancelNodeFlow);
+  document.getElementById('modal-create').addEventListener('click', commitNodeFlow);
+  backdrop.addEventListener('pointerdown', (e) => {
+    if (e.target === backdrop) cancelNodeFlow();
+  });
+  [inFilename, inLabel].forEach((inp) => {
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') commitNodeFlow();
+      if (e.key === 'Escape') cancelNodeFlow();
+    });
+  });
+
+  /* ════════════════ Spawning: box-first groups ════════════════ */
+
+  function spawnGroup(x, y, name, startEditing) {
+    const el = document.createElement('div');
+    el.className = 'group';
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'group-name';
+    el.appendChild(nameWrap);
+    world.appendChild(el);
+    const obj = { id: nextId++, type: 'group', x: x - 170, y: y - 115, el, name: name || '' };
+    positionObject(obj);
+    makeDraggable(obj);
+    objects.push(obj);
+
+    function showLabel() {
+      nameWrap.innerHTML = '';
+      const span = document.createElement('span');
+      span.textContent = obj.name;
+      span.title = 'Double-click to rename';
+      span.addEventListener('dblclick', (e) => { e.stopPropagation(); showInput(false); });
+      nameWrap.appendChild(span);
+    }
+
+    // initial=true -> Escape cancels the whole box (box-first naming moment);
+    // initial=false -> Escape just reverts a rename.
+    function showInput(initial) {
+      nameWrap.innerHTML = '';
+      const input = document.createElement('input');
+      input.value = obj.name;
+      input.placeholder = 'Group name';
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          obj.name = input.value.trim() || 'Group';
+          showLabel();
+        } else if (e.key === 'Escape') {
+          if (initial) removeObject(obj);
+          else showLabel();
+        }
+      });
+      input.addEventListener('blur', () => {
+        if (!nameWrap.contains(input)) return; // already resolved via keydown
+        if (initial && !input.value.trim()) { removeObject(obj); return; }
+        obj.name = input.value.trim() || obj.name || 'Group';
+        showLabel();
+      });
+      input.addEventListener('pointerdown', (e) => e.stopPropagation());
+      nameWrap.appendChild(input);
+      input.focus();
+      input.select();
+    }
+
+    if (startEditing) showInput(true); else showLabel();
+    return obj;
+  }
+
+  /* ════════════════ Fit / reset (used by Pan & Zoom widget) ════════════════ */
+
+  function fitAll() {
+    if (!objects.length) { resetView(); return; }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const o of objects) {
+      minX = Math.min(minX, o.x);
+      minY = Math.min(minY, o.y);
+      maxX = Math.max(maxX, o.x + o.el.offsetWidth);
+      maxY = Math.max(maxY, o.y + o.el.offsetHeight);
+    }
+    const pad = 90;
+    const bw = maxX - minX, bh = maxY - minY;
+    const s = Math.min(
+      (window.innerWidth - pad * 2) / bw,
+      (window.innerHeight - pad * 2) / bh,
+      1.5
+    );
+    view.scale = Math.max(0.25, s);
+    view.panX = (window.innerWidth - bw * view.scale) / 2 - minX * view.scale;
+    view.panY = (window.innerHeight - bh * view.scale) / 2 - minY * view.scale;
+    applyView();
+  }
+
+  function resetView() {
+    view.scale = 1;
+    view.panX = 0;
+    view.panY = 0;
+    applyView();
+  }
+
+  function updateZoomReadout() {
+    const r = document.getElementById('pz-readout');
+    if (r) r.textContent = Math.round(view.scale * 100) + '%';
+  }
+
+  /* ════════════════ Widget registry ════════════════
+     The container contract: { id, title, node, defaultVisible }.
+     The checkbox menu below is GENERATED from this list — appending a
+     widget adds its menu row and its section for free.               */
+
+  function renderCreateSection() {
+    const div = document.createElement('div');
+    div.innerHTML =
+      '<div class="create-buttons">' +
+      '<button id="btn-new-node">+ Node</button>' +
+      '<button id="btn-new-group">+ Group</button>' +
+      '</div>';
+    div.querySelector('#btn-new-node').addEventListener('click', openNodeFlow);
+    div.querySelector('#btn-new-group').addEventListener('click', () => {
+      const c = viewportCenterWorld();
+      spawnGroup(c.x, c.y, '', true); // box-first: land it, then inline-name it
+    });
+    return div;
+  }
+
+  // Help subsections are internal content of this widget — they do NOT
+  // exist in the container contract.
+  // Curation rule (decided 2026-07-02): gestures-first. The menubar already
+  // teaches command accelerators next to menu items; this widget covers the
+  // gap menus can't — gestures — plus the few keys with NO menu row
+  // (modal/chord-only). Menu-covered accelerators are deliberately absent.
+  function renderHelpSection() {
+    const SUBS = [
+      { title: 'Drag', rows: [
+        ['Empty canvas', 'Pan the view'],
+        ['Node / group', 'Move it'],
+        ['Node → group', 'Add to group'],
+        ['Node → editor pane', 'Open it there'],
+        ['HUD glass', 'Move the HUD'],
+      ]},
+      { title: 'Mouse + Keyboard', rows: [
+        ['Wheel', 'Zoom to cursor'],
+        ['Shift + Drag', 'Lasso select'],
+        ['Dbl-click node', 'Open in editor'],
+        ['Dbl-click group name', 'Rename'],
+        ['Hold pan arrow', 'Glide the view'],
+      ]},
+      { title: 'Canvas Keys', rows: [
+        ['E', 'Toggle edit mode'],
+        ['Ctrl (tap)', 'Additive sub-mode'],
+        ['Alt (tap)', 'Subtractive sub-mode'],
+        ['← ↑ → ↓', 'Pan the view'],
+        ['H', 'Show / hide HUD'],
+        ['Enter / Esc', 'Commit / cancel name'],
+      ]},
+    ];
+    const div = document.createElement('div');
+    for (const sub of SUBS) {
+      const s = document.createElement('div');
+      s.className = 'help-sub';
+      s.innerHTML = '<div class="help-sub-title"></div>';
+      s.querySelector('.help-sub-title').textContent = sub.title;
+      for (const [keys, what] of sub.rows) {
+        const row = document.createElement('div');
+        row.className = 'help-row';
+        row.innerHTML = '<span class="keys"></span><span class="what"></span>';
+        row.querySelector('.keys').textContent = keys;
+        row.querySelector('.what').textContent = what;
+        s.appendChild(row);
+      }
+      div.appendChild(s);
+    }
+    return div;
+  }
+
+  const PAN_HOLD_SPEED = 8; // px per frame while an arrow is held
+
+  // Hold-to-pan: pointerdown starts a rAF glide, release stops it.
+  // User-driven motion only — no ambient animation (perf lock intact).
+  function holdPan(btn, dx, dy) {
+    let raf = null;
+    const step = () => {
+      view.panX += dx;
+      view.panY += dy;
+      applyView();
+      raf = requestAnimationFrame(step);
+    };
+    const stop = () => {
+      if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
+    };
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      btn.setPointerCapture(e.pointerId);
+      step();
+    });
+    btn.addEventListener('pointerup', stop);
+    btn.addEventListener('pointercancel', stop);
+    btn.addEventListener('lostpointercapture', stop);
+  }
+
+  function renderPanZoomSection() {
+    const div = document.createElement('div');
+    div.innerHTML =
+      '<div class="pz-cluster">' +
+      '<div class="pz-ring">' +
+      '<button class="pz-arc pz-arc-l" id="pz-out" title="Zoom out">−</button>' +
+      '<button class="pz-arc pz-arc-r" id="pz-in" title="Zoom in">+</button>' +
+      '</div>' +
+      '<div class="pz-dial">' +
+      '<button class="pz-wedge pz-n" id="pz-up" title="Pan up (hold to glide)">▲</button>' +
+      '<button class="pz-wedge pz-e" id="pz-right" title="Pan right (hold to glide)">▶</button>' +
+      '<button class="pz-wedge pz-s" id="pz-down" title="Pan down (hold to glide)">▼</button>' +
+      '<button class="pz-wedge pz-w" id="pz-left" title="Pan left (hold to glide)">◀</button>' +
+      '<div class="pz-seams"></div>' +
+      '<div class="pz-hub">' +
+      '<button id="pz-fit" title="Fit all content">Fit</button>' +
+      '<button id="pz-reset" title="Reset to 100%">1:1</button>' +
+      '</div>' +
+      '</div>' +
+      '<span id="pz-readout">100%</span>' +
+      '</div>';
+    const cx = () => window.innerWidth / 2, cy = () => window.innerHeight / 2;
+    div.querySelector('#pz-in').addEventListener('click', () => zoomAt(cx(), cy(), 1.2));
+    div.querySelector('#pz-out').addEventListener('click', () => zoomAt(cx(), cy(), 1 / 1.2));
+    div.querySelector('#pz-fit').addEventListener('click', fitAll);
+    div.querySelector('#pz-reset').addEventListener('click', resetView);
+    // Arrow = the camera moves that way, so the content shifts opposite.
+    holdPan(div.querySelector('#pz-up'), 0, PAN_HOLD_SPEED);
+    holdPan(div.querySelector('#pz-down'), 0, -PAN_HOLD_SPEED);
+    holdPan(div.querySelector('#pz-left'), PAN_HOLD_SPEED, 0);
+    holdPan(div.querySelector('#pz-right'), -PAN_HOLD_SPEED, 0);
+    return div;
+  }
+
+  const WIDGET_REGISTRY = [
+    { id: 'create',  title: 'Create',           defaultVisible: true, render: renderCreateSection },
+    { id: 'help',    title: 'Help — Shortcuts', defaultVisible: true, render: renderHelpSection },
+    { id: 'panzoom', title: 'Pan & Zoom',       defaultVisible: true, render: renderPanZoomSection },
+  ];
+
+  /* ════════════════ HUD state: ONE visibility set + one hidden bool ════════════════ */
+
+  const hudState = {
+    x: 24,
+    y: 24,
+    visible: new Set(WIDGET_REGISTRY.filter(w => w.defaultVisible).map(w => w.id)),
+    hidden: false, // the keybind axis — hides everything incl. the pill
+  };
+
+  function saveHudState() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        x: hudState.x, y: hudState.y,
+        visible: [...hudState.visible],
+        hidden: hudState.hidden,
+      }));
+    } catch { /* storage unavailable — prototype shrug */ }
+  }
+
+  function loadHudState() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (typeof s.x === 'number') hudState.x = s.x;
+      if (typeof s.y === 'number') hudState.y = s.y;
+      if (Array.isArray(s.visible)) {
+        const known = new Set(WIDGET_REGISTRY.map(w => w.id));
+        hudState.visible = new Set(s.visible.filter(id => known.has(id)));
+      }
+      if (typeof s.hidden === 'boolean') hudState.hidden = s.hidden;
+    } catch { /* corrupt store — fall back to defaults */ }
+  }
+
+  function renderHud() {
+    // sections
+    hudSections.innerHTML = '';
+    for (const w of WIDGET_REGISTRY) {
+      if (!hudState.visible.has(w.id)) continue; // unchecked -> gone entirely
+      const sec = document.createElement('div');
+      sec.className = 'hud-section hud-glass';
+      const title = document.createElement('div');
+      title.className = 'section-title';
+      title.textContent = w.title;
+      sec.appendChild(title);
+      sec.appendChild(w.render());
+      hudSections.appendChild(sec);
+    }
+    // menu checkboxes (generated from the registry)
+    hudMenuItems.innerHTML = '';
+    for (const w of WIDGET_REGISTRY) {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = hudState.visible.has(w.id);
+      cb.addEventListener('change', () => {
+        if (cb.checked) hudState.visible.add(w.id);
+        else hudState.visible.delete(w.id);
+        renderHud();
+        clampHud();
+        saveHudState();
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(w.title));
+      hudMenuItems.appendChild(label);
+    }
+    hud.classList.toggle('hud-hidden', hudState.hidden);
+    updateZoomReadout();
+  }
+
+  /* ── HUD position: drag + clamp + persist ── */
+
+  function clampHud() {
+    const m = 8;
+    const w = hud.offsetWidth || 246;
+    const h = hud.offsetHeight || 40;
+    hudState.x = Math.min(Math.max(hudState.x, m), Math.max(m, window.innerWidth - w - m));
+    hudState.y = Math.min(Math.max(hudState.y, m), Math.max(m, window.innerHeight - h - m));
+    hud.style.left = hudState.x + 'px';
+    hud.style.top = hudState.y + 'px';
+  }
+
+  // Drag from any non-interactive glass: pill, section padding, titles,
+  // help rows. Buttons / inputs / checkboxes stay clickable.
+  hud.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, input, label, #hud-menu')) return;
+    e.preventDefault();
+    hudPill.classList.add('dragging');
+    hud.setPointerCapture(e.pointerId);
+    const start = { x: e.clientX, y: e.clientY, hx: hudState.x, hy: hudState.y };
+    const move = (ev) => {
+      hudState.x = start.hx + (ev.clientX - start.x);
+      hudState.y = start.hy + (ev.clientY - start.y);
+      clampHud();
+    };
+    const up = () => {
+      hudPill.classList.remove('dragging');
+      hud.removeEventListener('pointermove', move);
+      hud.removeEventListener('pointerup', up);
+      saveHudState();
+    };
+    hud.addEventListener('pointermove', move);
+    hud.addEventListener('pointerup', up);
+  });
+
+  window.addEventListener('resize', clampHud);
+
+  /* ── Visibility menu open/close ── */
+  hudMenuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    hudMenu.classList.toggle('open');
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('#hud-menu, #hud-menu-btn')) hudMenu.classList.remove('open');
+  });
+
+  /* ── Keybind axis: H hides EVERYTHING, pill included ── */
+  window.addEventListener('keydown', (e) => {
+    const t = document.activeElement;
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    if (typing) return;
+    if (e.key === 'h' || e.key === 'H') {
+      hudState.hidden = !hudState.hidden;
+      hud.classList.toggle('hud-hidden', hudState.hidden);
+      saveHudState();
+    }
+    if (e.key === 'Escape') hudMenu.classList.remove('open');
+    // Arrow keys pan too — key auto-repeat gives the held-glide for free.
+    const KEY_PAN = 60;
+    const pan = {
+      ArrowUp: [0, KEY_PAN], ArrowDown: [0, -KEY_PAN],
+      ArrowLeft: [KEY_PAN, 0], ArrowRight: [-KEY_PAN, 0],
+    }[e.key];
+    if (pan) {
+      e.preventDefault();
+      view.panX += pan[0];
+      view.panY += pan[1];
+      applyView();
+    }
+  });
+
+  /* ════════════════ Boot ════════════════ */
+
+  loadHudState();
+  renderHud();
+  clampHud();
+  applyView();
+
+  // Seed the canvas so it isn't empty: one group + two nodes.
+  const g = spawnGroup(430, 260, 'auth', false);
+  spawnNode(g.x + 100, g.y + 90, 'login.jsx', 'Login form', false);
+  spawnNode(g.x + 250, g.y + 165, 'session.js', 'Session store', false);
+})();
+</script>
+</body>
+</html>

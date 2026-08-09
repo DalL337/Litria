@@ -1,0 +1,87 @@
+/* ================================================
+   Monaco hover widget -- CM skin
+   Matches cm-hover-card glass design
+   ================================================ */
+
+.monaco-editor .monaco-hover {
+  border-radius: 12px !important;
+  border: 1px solid rgba(214, 214, 214, 0.26) !important;
+  background: linear-gradient(160deg, rgba(38, 38, 38, 0.96) 0%, rgba(22, 22, 22, 0.96) 100%) !important;
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.42) !important;
+  backdrop-filter: blur(10px) !important;
+  overflow: hidden !important;
+}
+
+/* Content padding -- matches cm-hover-card-body */
+.monaco-hover .hover-contents:not(.html-hover-contents) {
+  padding: 10px !important;
+}
+
+/* Code block (signature) -- matches cm-hover-item */
+.monaco-hover .code.hover-contents.code-hover-contents {
+  border-radius: 8px !important;
+  border: 1px solid rgba(203, 203, 203, 0.16) !important;
+  background: rgba(28, 28, 28, 0.86) !important;
+  padding: 7px 9px !important;
+  margin: 0 !important;
+}
+
+/* Tokenized source inside code block */
+.monaco-hover .monaco-tokenized-source {
+  font-family: Consolas, monospace !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+}
+
+/* Inline code spans in markdown text */
+.monaco-hover code {
+  background: rgba(28, 28, 28, 0.86) !important;
+  border-radius: 4px !important;
+  padding: 0 5px !important;
+  font-family: Consolas, monospace !important;
+  font-size: 12px !important;
+}
+
+/* Description text rows -- matches cm-hover-item-message / cm-hover-card-subtitle */
+.monaco-hover p {
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+  color: #b7b7b7 !important;
+  margin: 2px 0 !important;
+}
+
+/* Section dividers */
+.monaco-hover hr {
+  border-color: rgba(215, 215, 215, 0.15) !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+/* Verbosity expand/collapse action column */
+.monaco-editor .monaco-hover .hover-row .verbosity-actions {
+  border-right-color: rgba(215, 215, 215, 0.15) !important;
+}
+
+.monaco-editor .monaco-hover .hover-row .verbosity-actions .codicon {
+  color: #a8a8a8 !important;
+}
+
+.monaco-editor .monaco-hover .hover-row .verbosity-actions .codicon.enabled {
+  color: #7eb6ff !important;
+}
+
+/* Status bar strip at bottom */
+.monaco-hover .hover-row.status-bar {
+  background: rgba(40, 40, 40, 0.5) !important;
+  border-top: 1px solid rgba(215, 215, 215, 0.12) !important;
+  font-size: 11px !important;
+}
+
+.monaco-hover .hover-row.status-bar .actions .action-container a {
+  color: #7eb6ff !important;
+}
+
+/* Token highlight in editor when hovering */
+.monaco-editor .hoverHighlight {
+  background: rgba(126, 182, 255, 0.12) !important;
+}

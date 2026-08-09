@@ -1,0 +1,50 @@
+:root {
+  /* ── Drawer (existing) ── */
+  --drawer-bg: rgba(18, 18, 18, 0.92);
+  --drawer-border: rgba(210, 210, 210, 0.25);
+  --drawer-tab-bg: rgba(30, 30, 30, 0.75);
+  --drawer-tab-border: rgba(210, 210, 210, 0.2);
+  --drawer-tab-active-bg: rgba(64, 64, 64, 0.85);
+  --drawer-transition: 280ms;
+
+  /* ── CM Interaction Colors ── */
+  --cm-indigo:          #5c6bc0;
+  --cm-indigo-light:    #7986cb;
+  --cm-electric-blue:   #2979ff;
+  --cm-electric-bright: #448aff;
+  --cm-purple:          #b39ddb;
+  --cm-navy:            #3949ab;
+
+  /* ── CM Glow Tokens ── */
+  --cm-glow-hover:      rgba(121, 134, 203, 0.30);
+  --cm-glow-active:     rgba(41, 121, 255, 0.35);
+  --cm-glow-pressed:    rgba(68, 138, 255, 0.45);
+  --cm-glow-purple:     rgba(179, 157, 219, 0.25);
+  --cm-glow-close:      rgba(229, 57, 53, 0.40);
+
+  /* ── CM Window Controls ── */
+  --cm-control-static:  #505050;
+  --cm-close-click:     #e53935;
+
+  /* ── CM Surfaces ── */
+  --cm-surface-card:    rgba(30, 30, 35, 0.92);
+  --cm-surface-overlay: rgba(22, 22, 22, 0.98);
+  --cm-text-primary:    #e0e0e0;
+  --cm-text-muted:      #949494;
+
+  /* ── CM Pill Tokens ── */
+  --cm-pill-radius:     999px;
+  --cm-pill-border:     var(--cm-indigo);
+  --cm-pill-bg:         var(--cm-surface-card);
+  --cm-pill-color:      var(--cm-text-primary);
+  --cm-pill-hover-border: var(--cm-indigo-light);
+  --cm-pill-hover-bg:   var(--cm-indigo);
+  --cm-pill-hover-color: #ffffff;
+  --cm-pill-hover-glow: 0 0 6px 0 var(--cm-glow-hover);
+  --cm-pill-primary-bg: var(--cm-navy);
+  --cm-pill-primary-border: var(--cm-indigo);
+  --cm-pill-primary-color: #ffffff;
+
+  /* ── CM Transitions ── */
+  --cm-transition-fast: 150ms ease;
+}

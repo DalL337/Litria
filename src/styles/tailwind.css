@@ -1,0 +1,46 @@
+/*
+ * Tailwind CSS v4 — Litria Integration
+ *
+ * Preflight is excluded: CM has its own reset.css.
+ * Import only theme, utilities, and the parts we need.
+ */
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+
+/*
+ * CM Design Token → Tailwind Theme Mapping
+ *
+ * These extend Tailwind's theme with CM's design tokens so utility
+ * classes like bg-surface-card, text-cm-indigo, rounded-pill work.
+ * Source of truth remains src/styles/tokens.css.
+ */
+@theme {
+  /* --- CM Interaction Colors --- */
+  --color-cm-indigo: var(--cm-indigo);
+  --color-cm-indigo-light: var(--cm-indigo-light);
+  --color-cm-electric-blue: var(--cm-electric-blue);
+  --color-cm-electric-bright: var(--cm-electric-bright);
+  --color-cm-purple: var(--cm-purple);
+  --color-cm-navy: var(--cm-navy);
+
+  /* --- CM Surfaces --- */
+  --color-surface-base: var(--cm-surface-base, #1e1e1e);
+  --color-surface-dark: var(--cm-surface-dark);
+  --color-surface-card: var(--cm-surface-card);
+  --color-surface-elevated: var(--cm-surface-elevated);
+
+  /* --- CM Text --- */
+  --color-text-primary: var(--cm-text-primary);
+  --color-text-muted: var(--cm-text-muted);
+  --color-text-bright: var(--cm-text-bright);
+
+  /* --- CM Border Radius --- */
+  --radius-pill: 999px;
+  --radius-card: 14px;
+  --radius-panel: 12px;
+  --radius-squircle: 10px;
+
+  /* --- CM Transitions --- */
+  --transition-duration-fast: 150ms;
+  --transition-duration-drawer: 280ms;
+}

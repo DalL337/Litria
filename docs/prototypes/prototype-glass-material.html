@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Litria — Glass Material System Prototype</title>
+<style>
+  :root {
+    /* Material tokens */
+    --glass-refractive-index: 1.5;
+    --glass-blur-radius: 6px;
+    --glass-rim-width: 1.5px;
+    --glass-surface-alpha: 0;
+    --glass-frosted-alpha: 0.75;
+    --glass-specular-intensity: 0.9;
+    --glass-specular-radius: 28px;
+    --glass-corner-radius: 12px;
+
+    /* LED colors */
+    --led-empty: rgba(180, 180, 190, 0.5);
+    --led-blue: rgba(60, 140, 255, 0.95);
+    --led-green: rgba(50, 205, 100, 0.9);
+    --led-amber: rgba(240, 180, 40, 0.9);
+    --led-red: rgba(240, 60, 60, 0.95);
+
+    /* Canvas */
+    --canvas-bg: #0d0f14;
+    --canvas-grid: rgba(255, 255, 255, 0.03);
+    --canvas-grid-accent: rgba(255, 255, 255, 0.06);
+
+    /* Connection lines */
+    --connection-color: rgba(120, 160, 255, 0.3);
+    --connection-width: 1.5px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--canvas-bg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: #e0e0e0;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* ───── Canvas Background ───── */
+  .canvas {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background:
+      linear-gradient(var(--canvas-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px),
+      linear-gradient(var(--canvas-grid-accent) 1px, transparent 1px),
+      linear-gradient(90deg, var(--canvas-grid-accent) 1px, transparent 1px),
+      radial-gradient(ellipse at 30% 40%, rgba(60, 90, 180, 0.08) 0%, transparent 60%),
+      radial-gradient(ellipse at 70% 60%, rgba(120, 50, 160, 0.06) 0%, transparent 50%),
+      var(--canvas-bg);
+    background-size:
+      20px 20px,
+      20px 20px,
+      100px 100px,
+      100px 100px,
+      100% 100%,
+      100% 100%,
+      100% 100%;
+  }
+
+  /* ───── SVG Connections Layer ───── */
+  .connections-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .connections-layer line {
+    stroke: var(--connection-color);
+    stroke-width: var(--connection-width);
+  }
+
+  .connections-layer line.active {
+    stroke: rgba(120, 160, 255, 0.5);
+    filter: drop-shadow(0 0 4px rgba(100, 140, 255, 0.3));
+  }
+
+  /* ───── Glass Node ───── */
+  .glass-node {
+    position: absolute;
+    width: 180px;
+    height: 110px;
+    border-radius: var(--glass-corner-radius);
+    cursor: grab;
+    z-index: 1;
+    transition: transform 0.15s ease;
+  }
+
+  .glass-node:hover {
+    transform: scale(1.02);
+    z-index: 10;
+  }
+
+  .glass-node:active {
+    cursor: grabbing;
+  }
+
+  /* Refraction rim — Snell-inspired edge light */
+  .glass-rim {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--glass-corner-radius);
+    /* Outer refraction: light bending at glass boundary */
+    border: var(--glass-rim-width) solid rgba(255, 255, 255, 0.15);
+    /* Inner specular from refraction */
+    box-shadow:
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
+      /* Outer Snell displacement glow — light refracting outward */
+      0 0 8px rgba(180, 200, 255, 0.06),
+      0 0 1px rgba(255, 255, 255, 0.1);
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  /* Glass body — transparent with backdrop blur */
+  .glass-body {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--glass-corner-radius);
+    background: rgba(20, 24, 36, var(--glass-surface-alpha));
+    backdrop-filter: blur(var(--glass-blur-radius));
+    -webkit-backdrop-filter: blur(var(--glass-blur-radius));
+    z-index: 1;
+    transition: background 0.4s ease, backdrop-filter 0.4s ease;
+  }
+
+  /* Frosted state — when editor is open */
+  .glass-node.frosted .glass-body {
+    background: rgba(20, 24, 36, var(--glass-frosted-alpha));
+  }
+
+  .glass-node.frosted .glass-rim {
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow:
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.12),
+      0 0 12px rgba(180, 200, 255, 0.1),
+      0 0 1px rgba(255, 255, 255, 0.15);
+  }
+
+  /* ───── Edge Assignment Gradients ───── */
+  .edge-assignment {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    height: 2px;
+    z-index: 3;
+    pointer-events: none;
+    border-radius: 1px;
+  }
+
+  .edge-assignment.top {
+    top: 0;
+    transform: translateY(-0.5px);
+  }
+
+  .edge-assignment.bottom {
+    bottom: 0;
+    transform: translateY(0.5px);
+  }
+
+  /* Assignment color variants */
+  .glass-node[data-assignment="orange"] .edge-assignment {
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(255, 160, 40, 0.7) 15%,
+      rgba(255, 160, 40, 0.9) 50%,
+      rgba(255, 160, 40, 0.7) 85%,
+      transparent 100%
+    );
+  }
+
+  .glass-node[data-assignment="blue"] .edge-assignment {
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(80, 140, 255, 0.7) 15%,
+      rgba(80, 140, 255, 0.9) 50%,
+      rgba(80, 140, 255, 0.7) 85%,
+      transparent 100%
+    );
+  }
+
+  .glass-node[data-assignment="purple"] .edge-assignment {
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(160, 90, 220, 0.7) 15%,
+      rgba(160, 90, 220, 0.9) 50%,
+      rgba(160, 90, 220, 0.7) 85%,
+      transparent 100%
+    );
+  }
+
+  .glass-node[data-assignment="teal"] .edge-assignment {
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(50, 200, 180, 0.7) 15%,
+      rgba(50, 200, 180, 0.9) 50%,
+      rgba(50, 200, 180, 0.7) 85%,
+      transparent 100%
+    );
+  }
+
+  .glass-node[data-assignment="none"] .edge-assignment {
+    background: none;
+  }
+
+  /* ───── Corner LED — Radial (ball) mode ───── */
+  .corner-led {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: var(--glass-specular-radius);
+    height: var(--glass-specular-radius);
+    border-radius: 50%;
+    z-index: 5;
+    pointer-events: none;
+    transition: background 0.6s ease, box-shadow 0.6s ease, opacity 0.4s ease;
+  }
+
+  .glass-node[data-health="empty"] .corner-led {
+    background: radial-gradient(circle at 40% 40%,
+      var(--led-empty) 0%,
+      rgba(180, 180, 190, 0.15) 50%,
+      transparent 75%
+    );
+    box-shadow: 0 0 6px rgba(180, 180, 190, 0.15);
+  }
+
+  .glass-node[data-health="blue"] .corner-led {
+    background: radial-gradient(circle at 40% 40%,
+      var(--led-blue) 0%,
+      rgba(60, 140, 255, 0.4) 45%,
+      transparent 75%
+    );
+    box-shadow: 0 0 12px rgba(60, 140, 255, 0.4), 0 0 24px rgba(60, 140, 255, 0.15);
+    animation: pulse-blue 2.5s ease-in-out infinite;
+  }
+
+  .glass-node[data-health="green"] .corner-led {
+    background: radial-gradient(circle at 40% 40%,
+      var(--led-green) 0%,
+      rgba(50, 205, 100, 0.35) 45%,
+      transparent 75%
+    );
+    box-shadow: 0 0 10px rgba(50, 205, 100, 0.35), 0 0 20px rgba(50, 205, 100, 0.12);
+  }
+
+  .glass-node[data-health="amber"] .corner-led {
+    background: radial-gradient(circle at 40% 40%,
+      var(--led-amber) 0%,
+      rgba(240, 180, 40, 0.4) 45%,
+      transparent 75%
+    );
+    box-shadow: 0 0 12px rgba(240, 180, 40, 0.35), 0 0 22px rgba(240, 180, 40, 0.12);
+  }
+
+  .glass-node[data-health="red"] .corner-led {
+    background: radial-gradient(circle at 40% 40%,
+      var(--led-red) 0%,
+      rgba(240, 60, 60, 0.45) 45%,
+      transparent 75%
+    );
+    box-shadow: 0 0 14px rgba(240, 60, 60, 0.4), 0 0 28px rgba(240, 60, 60, 0.15);
+    animation: pulse-red 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-blue {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+  }
+
+  @keyframes pulse-red {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  /* ───── Corner LED — Specular (glass highlight) mode ───── */
+  /*
+   * Arc-shaped LED: a curved crescent in the corner that reads
+   * as a specular catchpoint but is still a discrete indicator.
+   * 6px inset from edges, no splash/bleed onto the node.
+   */
+  .corner-specular {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 30px;
+    height: 30px;
+    z-index: 5;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+    display: none;
+  }
+
+  /*
+   * L-shaped highlight: follows the corner radius along both
+   * top and right edges. Uses border on a rounded box — only
+   * the top and right borders are visible, forming the L.
+   */
+  .corner-specular::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 4px var(--glass-corner-radius) 4px 4px;
+    border: 2.5px solid transparent;
+    border-top-color: currentColor;
+    border-right-color: currentColor;
+    transition: border-color 0.6s ease;
+    filter: blur(0.4px);
+  }
+
+  /* Specular color states */
+  .glass-node[data-health="empty"] .corner-specular {
+    color: rgba(180, 180, 190, 0.45);
+  }
+
+  .glass-node[data-health="blue"] .corner-specular {
+    color: rgba(60, 140, 255, 0.85);
+    animation: specular-pulse-blue 2.5s ease-in-out infinite;
+  }
+
+  .glass-node[data-health="green"] .corner-specular {
+    color: rgba(50, 205, 100, 0.8);
+  }
+
+  .glass-node[data-health="amber"] .corner-specular {
+    color: rgba(240, 180, 40, 0.85);
+  }
+
+  .glass-node[data-health="red"] .corner-specular {
+    color: rgba(240, 60, 60, 0.9);
+    animation: specular-pulse-red 2s ease-in-out infinite;
+  }
+
+  @keyframes specular-pulse-blue {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  @keyframes specular-pulse-red {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+
+  /* ── LED mode visibility ── */
+  .led-mode-radial .corner-led { display: block; }
+  .led-mode-radial .corner-specular { display: none; }
+  .led-mode-specular .corner-led { display: none; }
+  .led-mode-specular .corner-specular { display: block; }
+
+  /* ───── Filename Label ───── */
+  .node-label {
+    position: absolute;
+    bottom: 14px;
+    left: 14px;
+    right: 50px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    color: rgba(220, 225, 240, 0.92);
+    text-shadow:
+      0 0 8px rgba(0, 0, 0, 0.9),
+      0 0 16px rgba(0, 0, 0, 0.6),
+      0 1px 3px rgba(0, 0, 0, 0.8);
+    z-index: 5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    letter-spacing: 0.02em;
+  }
+
+  .node-sublabel {
+    position: absolute;
+    bottom: 30px;
+    left: 14px;
+    font-size: 9px;
+    font-weight: 400;
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: rgba(160, 165, 180, 0.6);
+    text-shadow:
+      0 0 6px rgba(0, 0, 0, 0.8),
+      0 1px 2px rgba(0, 0, 0, 0.6);
+    z-index: 5;
+    pointer-events: none;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  /* ───── Editor Mock (frosted state) ───── */
+  .editor-mock {
+    position: absolute;
+    inset: 8px;
+    top: 12px;
+    border-radius: 6px;
+    z-index: 3;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+    overflow: hidden;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 9px;
+    line-height: 1.5;
+    color: rgba(180, 190, 210, 0.7);
+    padding: 6px 8px;
+  }
+
+  .glass-node.frosted .editor-mock {
+    opacity: 1;
+  }
+
+  .editor-mock .line-num {
+    color: rgba(100, 110, 130, 0.5);
+    margin-right: 8px;
+    user-select: none;
+  }
+
+  .editor-mock .keyword { color: rgba(200, 130, 255, 0.8); }
+  .editor-mock .string { color: rgba(130, 220, 160, 0.8); }
+  .editor-mock .func { color: rgba(100, 180, 255, 0.8); }
+
+  .glass-node.frosted .node-label {
+    bottom: auto;
+    top: -22px;
+    left: 4px;
+    font-size: 10px;
+    color: rgba(180, 185, 200, 0.7);
+  }
+
+  .glass-node.frosted .node-sublabel {
+    display: none;
+  }
+
+  /* ───── Controls Panel ───── */
+  .controls {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(16, 18, 28, 0.85);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    padding: 20px;
+    z-index: 100;
+    width: 260px;
+    font-size: 12px;
+  }
+
+  .controls h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(160, 170, 200, 0.7);
+    margin-bottom: 12px;
+    font-weight: 500;
+  }
+
+  .control-group {
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .control-group:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .control-group label {
+    display: block;
+    font-size: 10px;
+    color: rgba(140, 150, 175, 0.8);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .control-group input[type="range"] {
+    width: 100%;
+    accent-color: rgba(100, 140, 255, 0.8);
+    height: 4px;
+    margin-bottom: 4px;
+  }
+
+  .control-value {
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: rgba(100, 140, 255, 0.7);
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    padding: 5px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+    color: rgba(200, 205, 220, 0.85);
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: inherit;
+  }
+
+  .btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .btn.active {
+    background: rgba(100, 140, 255, 0.15);
+    border-color: rgba(100, 140, 255, 0.4);
+    color: rgba(140, 175, 255, 0.95);
+  }
+
+  /* ───── Title ───── */
+  .title-bar {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 100;
+  }
+
+  .title-bar h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: rgba(200, 210, 240, 0.9);
+    letter-spacing: -0.02em;
+  }
+
+  .title-bar p {
+    font-size: 10px;
+    color: rgba(130, 140, 170, 0.6);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  /* ───── Legend ───── */
+  .legend {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    z-index: 100;
+    display: flex;
+    gap: 16px;
+    font-size: 10px;
+    color: rgba(140, 150, 175, 0.7);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .legend-dot.empty { background: rgba(180, 180, 190, 0.5); }
+  .legend-dot.blue { background: rgba(60, 140, 255, 0.9); box-shadow: 0 0 6px rgba(60, 140, 255, 0.4); }
+  .legend-dot.green { background: rgba(50, 205, 100, 0.9); box-shadow: 0 0 6px rgba(50, 205, 100, 0.3); }
+  .legend-dot.amber { background: rgba(240, 180, 40, 0.9); box-shadow: 0 0 6px rgba(240, 180, 40, 0.3); }
+  .legend-dot.red { background: rgba(240, 60, 60, 0.9); box-shadow: 0 0 6px rgba(240, 60, 60, 0.3); }
+
+  /* ───── Ambient light blobs (behind glass) ───── */
+  .ambient-light {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+    filter: blur(60px);
+  }
+</style>
+</head>
+<body>
+
+<div class="canvas" id="canvas">
+  <!-- Ambient light sources — visible through glass tiles -->
+  <div class="ambient-light" style="width: 300px; height: 300px; top: 150px; left: 200px; background: rgba(60, 100, 200, 0.12);"></div>
+  <div class="ambient-light" style="width: 250px; height: 250px; top: 350px; left: 550px; background: rgba(160, 60, 180, 0.08);"></div>
+  <div class="ambient-light" style="width: 200px; height: 200px; top: 100px; left: 700px; background: rgba(40, 180, 160, 0.07);"></div>
+  <div class="ambient-light" style="width: 280px; height: 280px; top: 400px; left: 150px; background: rgba(200, 120, 50, 0.06);"></div>
+
+  <!-- SVG Connection Lines -->
+  <svg class="connections-layer" id="connections"></svg>
+
+  <!-- ─── Node: app.tsx — Green / Healthy ─── -->
+  <div class="glass-node" id="node-app"
+       data-health="green" data-assignment="blue"
+       style="left: 120px; top: 200px; width: 190px; height: 115px;">
+    <div class="glass-body"></div>
+    <div class="glass-rim"></div>
+    <div class="edge-assignment top"></div>
+    <div class="edge-assignment bottom"></div>
+    <div class="corner-led"></div>
+    <div class="corner-specular"></div>
+    <span class="node-sublabel">component</span>
+    <span class="node-label">App.tsx</span>
+  </div>
+
+  <!-- ─── Node: auth.ts — Amber / Warnings ─── -->
+  <div class="glass-node" id="node-auth"
+       data-health="amber" data-assignment="orange"
+       style="left: 380px; top: 160px; width: 180px; height: 110px;">
+    <div class="glass-body"></div>
+    <div class="glass-rim"></div>
+    <div class="edge-assignment top"></div>
+    <div class="edge-assignment bottom"></div>
+    <div class="corner-led"></div>
+    <div class="corner-specular"></div>
+    <span class="node-sublabel">service</span>
+    <span class="node-label">auth.service.ts</span>
+  </div>
+
+  <!-- ─── Node: api.ts — Red / Errors ─── -->
+  <div class="glass-node" id="node-api"
+       data-health="red" data-assignment="orange"
+       style="left: 620px; top: 210px; width: 170px; height: 110px;">
+    <div class="glass-body"></div>
+    <div class="glass-rim"></div>
+    <div class="edge-assignment top"></div>
+    <div class="edge-assignment bottom"></div>
+    <div class="corner-led"></div>
+    <div class="corner-specular"></div>
+    <span class="node-sublabel">api</span>
+    <span class="node-label">api.handler.ts</span>
+  </div>
+
+  <!-- ─── Node: utils.ts — Blue / Unsaved ─── -->
+  <div class="glass-node" id="node-utils"
+       data-health="blue" data-assignment="teal"
+       style="left: 250px; top: 370px; width: 175px; height: 110px;">
+    <div class="glass-body"></div>
+    <div class="glass-rim"></div>
+    <div class="edge-assignment top"></div>
+    <div class="edge-assignment bottom"></div>
+    <div class="corner-led"></div>
+    <div class="corner-specular"></div>
+    <span class="node-sublabel">utility</span>
+    <span class="node-label">helpers.utils.ts</span>
+  </div>
+
+  <!-- ─── Node: types.ts — Empty file ─── -->
+  <div class="glass-node" id="node-types"
+       data-health="empty" data-assignment="purple"
+       style="left: 500px; top: 400px; width: 165px; height: 105px;">
+    <div class="glass-body"></div>
+    <div class="glass-rim"></div>
+    <div class="edge-assignment top"></div>
+    <div class="edge-assignment bottom"></div>
+    <div class="corner-led"></div>
+    <div class="corner-specular"></div>
+    <span class="node-sublabel">types</span>
+    <span class="node-label">models.types.ts</span>
+  </div>
+
+  <!-- ─── Node: config.ts — Green / No assignment ─── -->
+  <div class="glass-node" id="node-config"
+       data-health="green" data-assignment="none"
+       style="left: 730px; top: 390px; width: 170px; height: 108px;">
+    <div class="glass-body"></div>
+    <div class="glass-rim"></div>
+    <div class="edge-assignment top"></div>
+    <div class="edge-assignment bottom"></div>
+    <div class="corner-led"></div>
+    <div class="corner-specular"></div>
+    <span class="node-sublabel">config</span>
+    <span class="node-label">env.config.ts</span>
+  </div>
+
+  <!-- ─── Node: index.ts — Frosted / Editor Open ─── -->
+  <div class="glass-node frosted" id="node-index"
+       data-health="green" data-assignment="blue"
+       style="left: 400px; top: 550px; width: 220px; height: 150px;">
+    <div class="glass-body"></div>
+    <div class="glass-rim"></div>
+    <div class="edge-assignment top"></div>
+    <div class="edge-assignment bottom"></div>
+    <div class="corner-led"></div>
+    <div class="corner-specular"></div>
+    <span class="node-sublabel">entry</span>
+    <span class="node-label">index.ts</span>
+  </div>
+</div>
+
+<!-- Title -->
+<div class="title-bar">
+  <h1>Glass Material System</h1>
+  <p>Litria Theme Prototype</p>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <h3>Material Tokens</h3>
+
+  <div class="control-group">
+    <label>Surface Alpha <span class="control-value" id="alpha-val">0.00</span></label>
+    <input type="range" min="0" max="40" value="0" id="alpha-slider">
+  </div>
+
+  <div class="control-group">
+    <label>Blur Radius <span class="control-value" id="blur-val">6px</span></label>
+    <input type="range" min="0" max="30" value="6" id="blur-slider">
+  </div>
+
+  <div class="control-group">
+    <label>Rim Width <span class="control-value" id="rim-val">1.5px</span></label>
+    <input type="range" min="5" max="30" value="15" id="rim-slider">
+  </div>
+
+  <div class="control-group">
+    <label>LED Size <span class="control-value" id="led-val">28px</span></label>
+    <input type="range" min="12" max="50" value="28" id="led-slider">
+  </div>
+
+  <div class="control-group">
+    <label>Corner Radius <span class="control-value" id="radius-val">12px</span></label>
+    <input type="range" min="2" max="24" value="12" id="radius-slider">
+  </div>
+
+  <h3 style="margin-top: 4px;">Cycle LED States</h3>
+  <div class="control-group">
+    <div class="btn-row">
+      <button class="btn" onclick="setAllHealth('empty')">Empty</button>
+      <button class="btn" onclick="setAllHealth('blue')">Unsaved</button>
+      <button class="btn" onclick="setAllHealth('green')">Clean</button>
+      <button class="btn" onclick="setAllHealth('amber')">Warn</button>
+      <button class="btn" onclick="setAllHealth('red')">Error</button>
+      <button class="btn" onclick="resetHealth()">Reset</button>
+    </div>
+  </div>
+
+  <h3>LED Style</h3>
+  <div class="control-group">
+    <div class="btn-row">
+      <button class="btn active" id="btn-led-radial" onclick="setLedMode('radial')">Radial Ball</button>
+      <button class="btn" id="btn-led-specular" onclick="setLedMode('specular')">Glass Highlight</button>
+    </div>
+  </div>
+
+  <h3>Toggle</h3>
+  <div class="control-group">
+    <div class="btn-row">
+      <button class="btn" id="btn-frost" onclick="toggleFrost()">Frost All</button>
+      <button class="btn" id="btn-assign" onclick="toggleAssignments()">Assignments</button>
+      <button class="btn" id="btn-connections" onclick="toggleConnections()">Connections</button>
+    </div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot empty"></div> Empty</div>
+  <div class="legend-item"><div class="legend-dot blue"></div> Unsaved</div>
+  <div class="legend-item"><div class="legend-dot green"></div> Clean</div>
+  <div class="legend-item"><div class="legend-dot amber"></div> Warnings</div>
+  <div class="legend-item"><div class="legend-dot red"></div> Errors</div>
+</div>
+
+<script>
+  // ───── Connection Lines ─────
+  const connections = [
+    ['node-app', 'node-auth'],
+    ['node-auth', 'node-api'],
+    ['node-app', 'node-utils'],
+    ['node-utils', 'node-types'],
+    ['node-api', 'node-config'],
+    ['node-types', 'node-config'],
+    ['node-app', 'node-index'],
+    ['node-utils', 'node-index'],
+  ];
+
+  let connectionsVisible = true;
+
+  function getNodeCenter(id) {
+    const el = document.getElementById(id);
+    const rect = el.getBoundingClientRect();
+    return {
+      x: el.offsetLeft + el.offsetWidth / 2,
+      y: el.offsetTop + el.offsetHeight / 2
+    };
+  }
+
+  function drawConnections() {
+    const svg = document.getElementById('connections');
+    svg.innerHTML = '';
+    if (!connectionsVisible) return;
+
+    connections.forEach(([fromId, toId]) => {
+      const from = getNodeCenter(fromId);
+      const to = getNodeCenter(toId);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', from.x);
+      line.setAttribute('y1', from.y);
+      line.setAttribute('x2', to.x);
+      line.setAttribute('y2', to.y);
+      svg.appendChild(line);
+    });
+  }
+
+  drawConnections();
+
+  // ───── Drag System ─────
+  let dragTarget = null;
+  let dragOffset = { x: 0, y: 0 };
+
+  document.querySelectorAll('.glass-node').forEach(node => {
+    node.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.controls')) return;
+      dragTarget = node;
+      dragOffset.x = e.clientX - node.offsetLeft;
+      dragOffset.y = e.clientY - node.offsetTop;
+      node.style.zIndex = 20;
+    });
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragTarget) return;
+    dragTarget.style.left = (e.clientX - dragOffset.x) + 'px';
+    dragTarget.style.top = (e.clientY - dragOffset.y) + 'px';
+    drawConnections();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (dragTarget) {
+      dragTarget.style.zIndex = '';
+      dragTarget = null;
+    }
+  });
+
+  // ───── LED Mode ─────
+  let ledMode = 'radial';
+
+  function setLedMode(mode) {
+    ledMode = mode;
+    document.querySelectorAll('.glass-node').forEach(n => {
+      n.classList.remove('led-mode-radial', 'led-mode-specular');
+      n.classList.add('led-mode-' + mode);
+    });
+    document.getElementById('btn-led-radial').classList.toggle('active', mode === 'radial');
+    document.getElementById('btn-led-specular').classList.toggle('active', mode === 'specular');
+  }
+
+  // Initialize default LED mode
+  document.querySelectorAll('.glass-node').forEach(n => {
+    n.classList.add('led-mode-radial');
+  });
+
+  // ───── Controls ─────
+  const originalHealth = {};
+  document.querySelectorAll('.glass-node').forEach(n => {
+    originalHealth[n.id] = n.dataset.health;
+  });
+
+  document.getElementById('alpha-slider').addEventListener('input', (e) => {
+    const v = e.target.value / 100;
+    document.documentElement.style.setProperty('--glass-surface-alpha', v);
+    document.getElementById('alpha-val').textContent = v.toFixed(2);
+  });
+
+  document.getElementById('blur-slider').addEventListener('input', (e) => {
+    const v = e.target.value;
+    document.documentElement.style.setProperty('--glass-blur-radius', v + 'px');
+    document.getElementById('blur-val').textContent = v + 'px';
+  });
+
+  document.getElementById('rim-slider').addEventListener('input', (e) => {
+    const v = e.target.value / 10;
+    document.documentElement.style.setProperty('--glass-rim-width', v + 'px');
+    document.getElementById('rim-val').textContent = v.toFixed(1) + 'px';
+  });
+
+  document.getElementById('led-slider').addEventListener('input', (e) => {
+    const v = e.target.value;
+    document.documentElement.style.setProperty('--glass-specular-radius', v + 'px');
+    document.getElementById('led-val').textContent = v + 'px';
+  });
+
+  document.getElementById('radius-slider').addEventListener('input', (e) => {
+    const v = e.target.value;
+    document.documentElement.style.setProperty('--glass-corner-radius', v + 'px');
+    document.getElementById('radius-val').textContent = v + 'px';
+  });
+
+  function setAllHealth(state) {
+    document.querySelectorAll('.glass-node').forEach(n => {
+      n.dataset.health = state;
+    });
+  }
+
+  function resetHealth() {
+    document.querySelectorAll('.glass-node').forEach(n => {
+      n.dataset.health = originalHealth[n.id];
+    });
+  }
+
+  let allFrosted = false;
+  function toggleFrost() {
+    allFrosted = !allFrosted;
+    document.querySelectorAll('.glass-node').forEach(n => {
+      if (allFrosted) n.classList.add('frosted');
+      else n.classList.remove('frosted');
+    });
+    document.getElementById('btn-frost').classList.toggle('active', allFrosted);
+  }
+
+  let assignmentsVisible = true;
+  function toggleAssignments() {
+    assignmentsVisible = !assignmentsVisible;
+    document.querySelectorAll('.edge-assignment').forEach(el => {
+      el.style.display = assignmentsVisible ? '' : 'none';
+    });
+    document.getElementById('btn-assign').classList.toggle('active', !assignmentsVisible);
+  }
+
+  function toggleConnections() {
+    connectionsVisible = !connectionsVisible;
+    drawConnections();
+    document.getElementById('btn-connections').classList.toggle('active', !connectionsVisible);
+  }
+</script>
+</body>
+</html>

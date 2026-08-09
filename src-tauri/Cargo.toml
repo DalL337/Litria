@@ -1,0 +1,58 @@
+[package]
+name = "litria"
+version = "1.0.0-9"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "litria_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+# Server-side only (see lib.rs): the webview gets no clipboard IPC.
+tauri-plugin-clipboard-manager = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["clock"] }
+rand = "0.9"
+portable-pty = "0.9"
+rusqlite = { version = "0.31", features = ["bundled"] }
+toml = "0.8"
+# ADR-005 download manager (Slice 4): synchronous HTTP fits the tokio-free
+# LSP stack; sha2 verifies BEFORE extraction; zip/flate2/tar cover the
+# registry's artifact formats (.zip, single-file .gz, .tar.gz).
+ureq = "3"
+sha2 = "0.10"
+zip = "2"
+flate2 = "1"
+tar = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+win32job = "2"
+windows = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Crash system hook #4 (WebView2 ProcessFailed). These MUST stay on the same
+# versions tauri/wry pin (webview2-com 0.38 / windows-core 0.61) or the COM
+# wrapper types from with_webview won't unify. Re-check on tauri bumps:
+#   cargo tree -d -p webview2-com -p windows-core
+webview2-com = "0.38"
+windows-core = "0.61"
+
+# Vendored portable-pty with ONE patch (vendor/portable-pty/src/win/psuedocon.rs):
+# drop the hardcoded INHERIT_CURSOR + WIN32_INPUT_MODE ConPTY flags, which fit
+# wezterm's own terminal but break an xterm.js consumer (startup cursor-query
+# handshake desync + per-keystroke win32 input synthesis). Diff is marked with
+# "LITRIA PATCH". Re-vendor when bumping the portable-pty version.
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }

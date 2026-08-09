@@ -1,0 +1,116 @@
+/* Crash surfaces (B5): top-level boundary fallback + next-launch banner.
+   Self-contained styling on purpose — the fallback must render even when
+   the themed app shell is the thing that crashed. */
+
+/* ── Boundary fallback ── */
+
+.crash-fallback {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d1017;
+  color: rgba(255, 255, 255, 0.87);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  z-index: 99999;
+}
+
+.crash-fallback-panel {
+  max-width: 520px;
+  padding: 28px 32px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.crash-fallback-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.crash-fallback-sub {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 14px;
+}
+
+.crash-fallback-error {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  color: #f28b82;
+  background: rgba(242, 139, 130, 0.08);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 18px;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.crash-fallback-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* ── Shared buttons ── */
+
+.crash-btn {
+  padding: 7px 14px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.crash-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.crash-btn-primary {
+  background: rgba(99, 102, 241, 0.35);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.crash-btn-primary:hover {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+/* ── Next-launch banner (LaunchScreen) ── */
+
+.crash-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid rgba(242, 139, 130, 0.35);
+  border-radius: 8px;
+  background: rgba(242, 139, 130, 0.08);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.crash-banner-lead {
+  font-weight: 600;
+  color: #f28b82;
+}
+
+.crash-banner-msg {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.crash-banner-more {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.crash-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}

@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Litria Minimap — redesign prototype</title>
+<style>
+  /* ─────────────────────────────────────────────
+     Litria tokens (from src/styles/tokens.css)
+     ───────────────────────────────────────────── */
+  :root {
+    --cm-indigo:          #5c6bc0;
+    --cm-indigo-light:    #7986cb;
+    --cm-electric-blue:   #2979ff;
+    --cm-electric-bright: #448aff;
+    --cm-purple:          #b39ddb;
+    --cm-navy:            #3949ab;
+
+    --cm-glow-hover:      rgba(121, 134, 203, 0.30);
+    --cm-glow-active:     rgba(41, 121, 255, 0.35);
+
+    --cm-surface-card:    rgba(30, 30, 35, 0.92);
+    --cm-surface-overlay: rgba(22, 22, 22, 0.98);
+    --cm-text-primary:    #e0e0e0;
+    --cm-text-muted:      #949494;
+    --drawer-border:      rgba(210, 210, 210, 0.25);
+    --cm-transition-fast: 150ms ease;
+
+    /* LED channel (ADR-014) */
+    --led-green: #5ad17a;
+    --led-amber: #e2b340;
+    --led-red:   #e05a5a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: #0d0d10;
+    color: var(--cm-text-primary);
+  }
+
+  /* ── The canvas / workspace ── */
+  #workspace {
+    position: fixed;
+    inset: 0;
+    background-color: #101015;
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(255,255,255,0.05) 1px, transparent 0);
+    background-size: 28px 28px;
+    overflow: hidden;
+  }
+
+  /* ── Glass node tiles (ADR-014 flavor) ── */
+  .node {
+    position: absolute;
+    border-radius: 12px;
+    background: rgba(40, 42, 52, 0.34);
+    backdrop-filter: blur(7px);
+    -webkit-backdrop-filter: blur(7px);
+    border: 1px solid rgba(214, 214, 214, 0.16);
+    border-left-width: 3px;
+    box-shadow: 0 6px 22px rgba(0,0,0,0.38);
+    padding: 12px 14px;
+    overflow: hidden;
+  }
+  .node .node-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: #f0f0f4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .node .node-sub {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--cm-text-muted);
+    font-family: "Cascadia Code", "Consolas", monospace;
+  }
+  .node .led {
+    position: absolute;
+    top: 9px; right: 9px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 6px 1px currentColor;
+  }
+
+  /* faint group containers */
+  .group {
+    position: absolute;
+    border-radius: 18px;
+    border: 1px dashed rgba(124, 134, 203, 0.30);
+    background: rgba(92, 107, 192, 0.05);
+  }
+  .group-label {
+    position: absolute;
+    top: -9px; left: 14px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(124, 134, 203, 0.7);
+    background: #101015;
+    padding: 0 6px;
+  }
+
+  /* ════════════════════════════════════════════════
+     MINIMAP — redesigned (default), legacy via .legacy
+     ════════════════════════════════════════════════ */
+  .minimap-container {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 30;
+    padding: 5px;                       /* glass margin around the map body */
+    border-radius: 8px;
+    border: 1px solid var(--drawer-border);
+    background: rgba(24, 24, 28, 0.66);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.40);
+    user-select: none;
+    transition: box-shadow var(--cm-transition-fast),
+                border-color var(--cm-transition-fast);
+  }
+  /* active glow only while driving it */
+  .minimap-container.is-active {
+    border-color: var(--cm-electric-blue);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.40), 0 0 14px 1px var(--cm-glow-active);
+  }
+
+  .minimap-titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 20px;
+    padding: 0 6px 4px;
+    cursor: grab;
+  }
+  .minimap-titlebar:active { cursor: grabbing; }
+  .minimap-title {
+    font-size: 9.5px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--cm-text-muted);
+  }
+  .minimap-collapse-btn {
+    background: none; border: none;
+    color: var(--cm-text-muted);
+    font-size: 10px; cursor: pointer;
+    padding: 0 2px; line-height: 1;
+  }
+  .minimap-collapse-btn:hover { color: #e6e6e6; }
+
+  .minimap-svg {
+    display: block;
+    border-radius: 4px;
+    background: rgba(16, 16, 19, 0.92);   /* readable interior — NOT transparent */
+    cursor: crosshair;
+  }
+
+  /* SVG element styling via classes so legacy can override */
+  .mm-piece     { opacity: 0.78; }
+  .mm-group     { fill: var(--cm-indigo); opacity: 0.32; }
+  .mm-viewport  {
+    fill: rgba(41, 121, 255, 0.10);
+    stroke: var(--cm-electric-blue);
+    stroke-width: 1.5;
+  }
+  .minimap-container.is-active .mm-viewport { stroke: var(--cm-electric-bright); }
+
+  /* ── LEGACY look (the "old RPG box") ── */
+  .minimap-container.legacy {
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: #1a1a1a;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  }
+  .minimap-container.legacy.is-active {
+    border-color: rgba(255, 255, 255, 0.12);    /* legacy didn't react */
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  }
+  .minimap-container.legacy .minimap-titlebar {
+    height: 22px;
+    padding: 0 8px;
+    background: #252525;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .minimap-container.legacy .minimap-svg {
+    border-radius: 0;
+    background: #111;
+  }
+  .minimap-container.legacy .mm-group    { fill: #5c6bc0; }
+  .minimap-container.legacy .mm-viewport {
+    fill: rgba(59, 130, 246, 0.08);
+    stroke: #3b82f6;        /* off-palette tailwind blue */
+    rx: 0;
+  }
+
+  /* ── controls ── */
+  #toolbar {
+    position: fixed;
+    top: 16px; left: 16px;
+    z-index: 40;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .pill-btn {
+    font: inherit;
+    font-size: 12px;
+    color: var(--cm-text-primary);
+    background: var(--cm-surface-card);
+    border: 1px solid var(--cm-indigo);
+    border-radius: 999px;
+    padding: 7px 16px;
+    cursor: pointer;
+    backdrop-filter: blur(10px);
+    transition: all var(--cm-transition-fast);
+  }
+  .pill-btn:hover {
+    border-color: var(--cm-indigo-light);
+    background: var(--cm-indigo);
+    color: #fff;
+    box-shadow: 0 0 6px 0 var(--cm-glow-hover);
+  }
+  #mode-label {
+    font-size: 12px;
+    color: var(--cm-text-muted);
+  }
+  #mode-label b { color: var(--cm-electric-bright); font-weight: 600; }
+  .hint {
+    position: fixed;
+    bottom: 16px; left: 16px;
+    z-index: 40;
+    font-size: 11px;
+    color: rgba(148,148,148,0.7);
+    max-width: 340px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+  <div id="workspace"></div>
+
+  <div id="toolbar">
+    <button class="pill-btn" id="toggle-btn">Toggle old / new</button>
+    <span id="mode-label">Showing: <b>NEW (glass)</b></span>
+  </div>
+
+  <div class="hint">
+    Drag the <b>viewport rectangle</b> inside the minimap to pan — watch the
+    frame pick up the electric-blue glow while you drive it. Drag the minimap’s
+    titlebar to reposition it. Click <b>Toggle old / new</b> to compare.
+  </div>
+
+  <!-- Minimap -->
+  <div class="minimap-container" id="minimap">
+    <div class="minimap-titlebar" id="mm-titlebar">
+      <span class="minimap-title">Minimap</span>
+      <button class="minimap-collapse-btn" id="mm-collapse" title="Collapse">&#9662;</button>
+    </div>
+    <svg class="minimap-svg" id="mm-svg" width="220" height="150"></svg>
+  </div>
+
+<script>
+  // ── World model ──────────────────────────────────────
+  const WORLD = { w: 2400, h: 1500 };
+
+  const PALETTE = {
+    indigo:   getComputedStyle(document.documentElement).getPropertyValue('--cm-indigo').trim(),
+    indigoL:  getComputedStyle(document.documentElement).getPropertyValue('--cm-indigo-light').trim(),
+    eblue:    getComputedStyle(document.documentElement).getPropertyValue('--cm-electric-blue').trim(),
+    ebright:  getComputedStyle(document.documentElement).getPropertyValue('--cm-electric-bright').trim(),
+    purple:   getComputedStyle(document.documentElement).getPropertyValue('--cm-purple').trim(),
+    navy:     getComputedStyle(document.documentElement).getPropertyValue('--cm-navy').trim(),
+  };
+
+  const nodes = [
+    { x: 160,  y: 150, w: 250, h: 120, color: PALETTE.indigo,  led: 'green', title: 'main.py',        sub: 'entrypoint' },
+    { x: 540,  y: 330, w: 250, h: 120, color: PALETTE.eblue,   led: 'green', title: 'router.tsx',     sub: 'routes' },
+    { x: 940,  y: 140, w: 250, h: 120, color: PALETTE.purple,  led: 'amber', title: 'parser.rs',      sub: 'lexer' },
+    { x: 1420, y: 360, w: 250, h: 120, color: PALETTE.navy,    led: 'green', title: 'schema.sql',     sub: 'migrations' },
+    { x: 300,  y: 600, w: 250, h: 120, color: PALETTE.ebright, led: 'green', title: 'useCanvas.js',   sub: 'hook' },
+    { x: 820,  y: 720, w: 250, h: 120, color: PALETTE.indigoL, led: 'red',   title: 'auth.ts',        sub: 'session' },
+    { x: 1360, y: 820, w: 250, h: 120, color: PALETTE.purple,  led: 'green', title: 'Minimap.jsx',    sub: 'overview' },
+    { x: 1820, y: 220, w: 250, h: 120, color: PALETTE.eblue,   led: 'green', title: 'tokens.css',     sub: 'theme' },
+    { x: 1900, y: 980, w: 250, h: 120, color: PALETTE.indigo,  led: 'green', title: 'ProjectBar.jsx', sub: 'titlebar' },
+    { x: 2040, y: 560, w: 250, h: 120, color: PALETTE.ebright, led: 'amber', title: 'drawers.css',    sub: 'glass' },
+  ];
+
+  const groups = [
+    { x: 120,  y: 110, w: 700,  h: 420, label: 'src/app' },
+    { x: 1340, y: 300, w: 760,  h: 360, label: 'data' },
+  ];
+
+  const ledColor = (k) => getComputedStyle(document.documentElement)
+    .getPropertyValue('--led-' + k).trim();
+
+  // ── Viewport (what the big canvas shows) ──────────────
+  const screenAspect = () => window.innerWidth / window.innerHeight;
+  const viewport = { x: 380, y: 230, w: 1300, h: 1300 / screenAspect() };
+
+  // ── Render big canvas (nodes/groups transformed by viewport) ──
+  const ws = document.getElementById('workspace');
+
+  function worldToScreen(wx, wy) {
+    const sx = (wx - viewport.x) * (window.innerWidth / viewport.w);
+    const sy = (wy - viewport.y) * (window.innerHeight / viewport.h);
+    return [sx, sy];
+  }
+  function worldScale() { return window.innerWidth / viewport.w; }
+
+  function renderCanvas() {
+    ws.innerHTML = '';
+    const sc = worldScale();
+
+    groups.forEach(g => {
+      const [sx, sy] = worldToScreen(g.x, g.y);
+      const el = document.createElement('div');
+      el.className = 'group';
+      el.style.left = sx + 'px';
+      el.style.top = sy + 'px';
+      el.style.width = (g.w * sc) + 'px';
+      el.style.height = (g.h * sc) + 'px';
+      const lbl = document.createElement('span');
+      lbl.className = 'group-label';
+      lbl.textContent = g.label;
+      el.appendChild(lbl);
+      ws.appendChild(el);
+    });
+
+    nodes.forEach(n => {
+      const [sx, sy] = worldToScreen(n.x, n.y);
+      const el = document.createElement('div');
+      el.className = 'node';
+      el.style.left = sx + 'px';
+      el.style.top = sy + 'px';
+      el.style.width = (n.w * sc) + 'px';
+      el.style.height = (n.h * sc) + 'px';
+      el.style.borderLeftColor = n.color;
+      el.innerHTML = `
+        <span class="led" style="color:${ledColor(n.led)}"></span>
+        <div class="node-title">${n.title}</div>
+        <div class="node-sub">${n.sub}</div>`;
+      ws.appendChild(el);
+    });
+  }
+
+  // ── Render minimap SVG ────────────────────────────────
+  const svg = document.getElementById('mm-svg');
+  const MM_W = 220, MM_H = 150;
+  const mapScale = Math.min(MM_W / WORLD.w, MM_H / WORLD.h);
+  const offX = (MM_W - WORLD.w * mapScale) / 2;
+  const offY = (MM_H - WORLD.h * mapScale) / 2;
+  const toMapX = wx => offX + wx * mapScale;
+  const toMapY = wy => offY + wy * mapScale;
+
+  function svgEl(tag, attrs, cls) {
+    const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (cls) e.setAttribute('class', cls);
+    return e;
+  }
+
+  function renderMinimap() {
+    svg.innerHTML = '';
+    // groups
+    groups.forEach(g => {
+      svg.appendChild(svgEl('rect', {
+        x: toMapX(g.x), y: toMapY(g.y),
+        width: g.w * mapScale, height: g.h * mapScale,
+        rx: 4
+      }, 'mm-group'));
+    });
+    // pieces
+    nodes.forEach(n => {
+      svg.appendChild(svgEl('rect', {
+        x: toMapX(n.x), y: toMapY(n.y),
+        width: Math.max(2, n.w * mapScale), height: Math.max(2, n.h * mapScale),
+        fill: n.color, rx: 1.5
+      }, 'mm-piece'));
+    });
+    // viewport indicator
+    const vp = svgEl('rect', {
+      x: toMapX(viewport.x), y: toMapY(viewport.y),
+      width: viewport.w * mapScale, height: viewport.h * mapScale,
+      rx: legacy ? 0 : 2,
+      id: 'mm-vp'
+    }, 'mm-viewport');
+    svg.appendChild(vp);
+  }
+
+  // ── Interactions ──────────────────────────────────────
+  const container = document.getElementById('minimap');
+  let legacy = false;
+
+  // drag viewport to pan
+  let draggingVp = false, vpStart = null;
+  svg.addEventListener('pointerdown', (e) => {
+    draggingVp = true;
+    container.classList.add('is-active');
+    svg.setPointerCapture(e.pointerId);
+    panToPointer(e);
+  });
+  svg.addEventListener('pointermove', (e) => { if (draggingVp) panToPointer(e); });
+  svg.addEventListener('pointerup', (e) => {
+    draggingVp = false;
+    container.classList.remove('is-active');
+  });
+  function panToPointer(e) {
+    const rect = svg.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    // center viewport on pointer (in world coords)
+    const wx = (mx - offX) / mapScale - viewport.w / 2;
+    const wy = (my - offY) / mapScale - viewport.h / 2;
+    viewport.x = Math.max(0, Math.min(WORLD.w - viewport.w, wx));
+    viewport.y = Math.max(0, Math.min(WORLD.h - viewport.h, wy));
+    renderCanvas();
+    renderMinimap();
+  }
+
+  // drag titlebar to move minimap
+  const titlebar = document.getElementById('mm-titlebar');
+  let movingMap = false, moveStart = null;
+  titlebar.addEventListener('pointerdown', (e) => {
+    movingMap = true;
+    container.classList.add('is-active');
+    const r = container.getBoundingClientRect();
+    moveStart = { mx: e.clientX, my: e.clientY, left: r.left, top: r.top };
+    titlebar.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  });
+  titlebar.addEventListener('pointermove', (e) => {
+    if (!movingMap) return;
+    const dx = e.clientX - moveStart.mx;
+    const dy = e.clientY - moveStart.my;
+    container.style.left = (moveStart.left + dx) + 'px';
+    container.style.top  = (moveStart.top + dy) + 'px';
+    container.style.right = 'auto';
+    container.style.bottom = 'auto';
+  });
+  titlebar.addEventListener('pointerup', () => {
+    movingMap = false;
+    container.classList.remove('is-active');
+  });
+
+  // collapse
+  let collapsed = false;
+  document.getElementById('mm-collapse').addEventListener('click', () => {
+    collapsed = !collapsed;
+    svg.style.display = collapsed ? 'none' : 'block';
+    document.getElementById('mm-collapse').innerHTML = collapsed ? '&#9652;' : '&#9662;';
+  });
+
+  // toggle old/new
+  const label = document.getElementById('mode-label');
+  document.getElementById('toggle-btn').addEventListener('click', () => {
+    legacy = !legacy;
+    container.classList.toggle('legacy', legacy);
+    label.innerHTML = 'Showing: <b>' + (legacy ? 'OLD (box)' : 'NEW (glass)') + '</b>';
+    renderMinimap();
+  });
+
+  // init + resize
+  function renderAll() {
+    viewport.h = viewport.w / screenAspect();
+    viewport.h = Math.min(viewport.h, WORLD.h);
+    renderCanvas();
+    renderMinimap();
+  }
+  window.addEventListener('resize', renderAll);
+  renderAll();
+</script>
+</body>
+</html>

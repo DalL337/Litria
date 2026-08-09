@@ -1,0 +1,168 @@
+.project-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 50px;
+  min-height: 50px;
+  padding: 0 12px;
+  background: rgba(18, 18, 18, 0.92);
+  border-bottom: 1px solid rgba(210, 210, 210, 0.14);
+  z-index: 50;
+}
+
+.project-bar-lead {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.project-bar-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-bar-zoom {
+  font-size: 11px;
+  color: rgba(200, 200, 200, 0.55);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  min-width: 36px;
+  text-align: right;
+  user-select: none;
+}
+.project-switcher {
+  position: relative;
+  min-width: 0;
+}
+
+/* Trigger doubles as the project title. Whole box is the hit target. */
+.project-switcher-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  min-width: 0;
+  background: none;
+  padding: 5px 8px;
+  cursor: pointer;
+  /* Bottom-edge "glowing seam": border-image paints only the side given a
+     width, so the gradient renders as a center-bright underline that fades
+     out at both ends. Same mechanism the drawers use on their edge. */
+  border: 0 solid transparent;
+  border-bottom-width: 1px;
+  border-image: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--cm-indigo) 50%,
+    transparent 100%
+  ) 1;
+  transition: box-shadow 120ms ease;
+}
+.project-switcher-trigger:disabled {
+  cursor: default;
+}
+
+.project-switcher-current {
+  font-size: 12px;
+  color: #ececec;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Chevron is a constant calm marker — it does NOT escalate with state. */
+.project-switcher-chevron {
+  flex-shrink: 0;
+  color: var(--cm-indigo);
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* Hover: seam brightens + downward-biased glow. */
+.project-switcher:not(.is-empty) .project-switcher-trigger:hover {
+  border-image: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--cm-electric-blue) 50%,
+    transparent 100%
+  ) 1;
+  box-shadow: 0 3px 6px -2px var(--cm-glow-hover);
+}
+
+/* Open: brightest seam + active glow. */
+.project-switcher.is-open .project-switcher-trigger,
+.project-switcher.is-open .project-switcher-trigger:hover {
+  border-image: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--cm-electric-bright) 50%,
+    transparent 100%
+  ) 1;
+  box-shadow: 0 3px 8px -2px var(--cm-glow-active);
+}
+
+/* Empty state: placeholder, no seam, no glow. */
+.project-switcher.is-empty .project-switcher-trigger {
+  border-image: none;
+  border-bottom-color: transparent;
+}
+.project-switcher.is-empty .project-switcher-current {
+  color: rgba(200, 200, 200, 0.45);
+}
+
+.project-switcher-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 220px;
+  max-width: 340px;
+  background: #1e1e1e;
+  border: 1px solid var(--cm-indigo);
+  border-radius: 6px;
+  padding: 4px 0;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+.project-switcher-item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.project-switcher-item:hover {
+  background: #2a2a2a;
+}
+.project-switcher-item-name {
+  font-size: 12px;
+  color: #e6e6e6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-switcher-item-path {
+  font-size: 10px;
+  color: rgba(200, 200, 200, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* "You are here" — marked, not filtered out. Non-actionable. */
+.project-switcher-item.is-current {
+  cursor: default;
+}
+.project-switcher-item.is-current:hover {
+  background: none;
+}
+.project-switcher-item-check {
+  color: var(--cm-electric-bright);
+}

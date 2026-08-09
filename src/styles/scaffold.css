@@ -1,0 +1,422 @@
+/* ── New Node / New Group pills (Litria visual language) ──
+   Node = electric-blue (glass piece accent), Group = indigo (group-pill accent). */
+.scaffold-create-pills {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.scaffold-create-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: var(--cm-pill-radius, 999px);
+  background: rgba(24, 24, 24, 0.86);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background var(--drawer-transition), border-color var(--drawer-transition),
+    box-shadow var(--drawer-transition), color var(--drawer-transition);
+}
+
+.scaffold-create-pill svg {
+  flex: none;
+}
+
+/* Node → electric-blue, mirrors the canvas node selection accent */
+.scaffold-create-pill--node {
+  border: 1px solid var(--cm-electric-blue);
+  color: var(--cm-electric-blue);
+}
+.scaffold-create-pill--node:hover {
+  background: rgba(41, 121, 255, 0.10);
+  box-shadow: 0 0 10px 1px var(--cm-glow-active);
+}
+.scaffold-create-pill--node:active {
+  box-shadow: 0 0 12px 1px var(--cm-glow-pressed);
+}
+
+/* Group → indigo, mirrors the canvas group-pill accent */
+.scaffold-create-pill--group {
+  border: 1px solid var(--cm-indigo);
+  color: var(--cm-indigo-light);
+}
+.scaffold-create-pill--group:hover {
+  background: rgba(92, 107, 192, 0.12);
+  border-color: var(--cm-indigo-light);
+  box-shadow: 0 0 8px 0 var(--cm-glow-hover);
+}
+.scaffold-create-pill--group:active {
+  box-shadow: 0 0 10px 1px var(--cm-glow-hover);
+}
+
+.scaffold-addon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(200, 200, 200, 0.14);
+  background: rgba(35, 35, 35, 0.8);
+  color: #dfdfdf;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.scaffold-addon input {
+  accent-color: #78a7ff;
+}
+
+.scaffold-addon.is-selected {
+  border-color: rgba(208, 220, 255, 0.38);
+  background: rgba(56, 64, 78, 0.78);
+}
+
+.scaffold-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scaffold-plan-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.scaffold-plan-code {
+  white-space: pre-wrap;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #dcdcdc;
+  border: 1px solid rgba(200, 200, 200, 0.14);
+  border-radius: 10px;
+  background: rgba(25, 25, 25, 0.92);
+  padding: 8px 9px;
+}
+
+.scaffold-plan-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scaffold-plan-button {
+  min-height: 36px;
+  border-radius: 999px;
+  border: 1px solid rgba(200, 200, 200, 0.24);
+  background: rgba(48, 48, 48, 0.86);
+  color: #f0f0f0;
+  font-size: 12px;
+}
+
+.scaffold-plan-button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.scaffold-tree {
+  margin-top: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(200, 200, 200, 0.16);
+  background: rgba(20, 20, 20, 0.82);
+  padding: 6px 0;
+  overflow: visible;
+}
+
+.scaffold-tree-row {
+  display: block;
+}
+
+.scaffold-tree-row-header {
+  display: flex;
+  /* stretch, not center: the entry button carries the depth-rail background,
+     and the 28px visibility button makes the row taller than the ~26px
+     entry — centering left hairline gaps above/below every entry that
+     snapped the rails into per-row dashes (owner report 2026-07-26,
+     screenshot-verified both ways). The entry stretches to full row
+     height; fixed-height siblings re-center themselves below. */
+  align-items: stretch;
+  gap: 6px;
+  padding-right: 6px;
+}
+
+.scaffold-tree-toggle,
+.scaffold-tree-toggle-spacer,
+.scaffold-tree-visibility {
+  align-self: center;
+}
+
+.scaffold-tree-children {
+  display: block;
+}
+
+.scaffold-tree-toggle {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid rgba(200, 200, 200, 0.18);
+  background: rgba(36, 36, 36, 0.85);
+  color: #e6e6e6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-left: 6px;
+}
+
+.scaffold-tree-toggle:hover {
+  background: rgba(56, 56, 56, 0.9);
+}
+
+.scaffold-tree-toggle-spacer {
+  /* Must occupy EXACTLY the toggle button's footprint INCLUDING its 6px
+     margin-left (scaffold.css .scaffold-tree-toggle) — #194 removed this
+     margin as a "stray" after a truncated grep hid the toggle's matching
+     one, which shifted every chevron row's entry (and its depth rail) 6px
+     right of file rows: the "lines pushed over a few pixels" jog
+     (owner report + getBoundingClientRect-verified 2026-07-26). */
+  width: 20px;
+  height: 20px;
+  margin-left: 6px;
+}
+
+.scaffold-tree-entry {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: #e6e6e6;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  box-sizing: border-box;
+  /* Depth rails with classic tree turns (owner rulings 2026-07-26:
+     bracket EVERY level incl. root; elbows/ticks "pointing at the file
+     dots" like standard IDE trees). Three layers, front to back:
+       1. own-level vertical — full height (├); rows flagged
+          .is-last-child (last sibling with nothing rendered beneath)
+          drop it to the top half so the line TURNS into the tick (└).
+          A last child that is an EXPANDED folder keeps the full line —
+          its subtree continues below, and an elbow would leave the
+          level's rail broken-then-resumed.
+       2. tick — 1px horizontal from this row's own rail to its dot
+       3. ancestor rails — full-height verticals for levels 1..depth-1
+          (deeper rows keep every open ancestor's line running)
+     min()/max() guards zero every layer on rows without a depth var (the
+     project-root row). 0.7 alpha = empirical 1px visibility floor over
+     the drawer glass (headless-screenshot verified) — tune only with a
+     screenshot in hand.
+     MUST stay after the `background:` shorthand above (a shorthand resets
+     background-image — the rails shipped invisible the first time); state
+     rules use background-color for the same reason. */
+  --scaffold-rail: rgba(148, 158, 190, 0.7);
+  --scaffold-rail-x: calc((var(--scaffold-depth, 0) - 1) * 12px + 7px);
+  background-image:
+    linear-gradient(var(--scaffold-rail), var(--scaffold-rail)),
+    linear-gradient(var(--scaffold-rail), var(--scaffold-rail)),
+    repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent 7px,
+      var(--scaffold-rail) 7px,
+      var(--scaffold-rail) 8px,
+      transparent 8px,
+      transparent 12px
+    );
+  background-repeat: no-repeat;
+  background-size:
+    min(var(--scaffold-depth, 0) * 1px, 1px) 100%,
+    min(var(--scaffold-depth, 0) * 13px, 13px) 1px,
+    max(0px, calc((var(--scaffold-depth, 0) - 1) * 12px)) 100%;
+  background-position:
+    var(--scaffold-rail-x) 0,
+    var(--scaffold-rail-x) 50%,
+    0 0;
+}
+
+/* └ turn: the own-level vertical stops at row center where the tick takes
+   over. Applied by renderTree only to last siblings with no rendered
+   subtree below them. */
+.scaffold-tree-row.is-last-child > .scaffold-tree-row-header > .scaffold-tree-entry {
+  background-size:
+    min(var(--scaffold-depth, 0) * 1px, 1px) 50%,
+    min(var(--scaffold-depth, 0) * 13px, 13px) 1px,
+    max(0px, calc((var(--scaffold-depth, 0) - 1) * 12px)) 100%;
+}
+
+.scaffold-tree-entry.is-active {
+  /* background-color, not the shorthand — the shorthand would wipe the
+     depth-rail background-image. */
+  background-color: rgba(70, 98, 142, 0.25);
+  border-radius: 999px;
+}
+
+.scaffold-tree:focus-visible {
+  outline: 2px solid rgba(120, 180, 255, 0.35);
+  outline-offset: 4px;
+}
+
+.scaffold-root {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(200, 200, 200, 0.16);
+  background: rgba(22, 22, 22, 0.9);
+}
+
+.scaffold-root-name {
+  font-size: 12px;
+  color: #e6e6e6;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scaffold-root-path {
+  font-size: 11px;
+  color: #9a9a9a;
+  word-break: break-all;
+}
+
+.scaffold-tree-root {
+  font-weight: 600;
+}
+
+.scaffold-tree-visibility {
+  margin-right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(200, 200, 200, 0.18);
+  background: rgba(36, 36, 36, 0.85);
+  color: #e6e6e6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.scaffold-tree-visibility:hover {
+  background: rgba(56, 56, 56, 0.9);
+}
+
+.scaffold-tree-entry.is-hidden {
+  opacity: 0.5;
+}
+
+.scaffold-tree-entry:hover {
+  background-color: rgba(60, 60, 60, 0.3);
+}
+
+.scaffold-tree-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: #7c7c7c;
+  flex: 0 0 auto;
+}
+
+.scaffold-tree-dot.is-dir {
+  background: #7aa2ff;
+}
+
+.scaffold-tree-dot.is-file {
+  background: #e3e3e3;
+}
+
+.scaffold-tree-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Drag and Drop --- */
+
+.scaffold-tree.is-dragging {
+  cursor: grabbing;
+}
+
+.scaffold-tree.is-dragging .scaffold-tree-entry {
+  cursor: grabbing;
+}
+
+.scaffold-tree-row-header.is-drag-source {
+  opacity: 0.35;
+}
+
+.scaffold-tree-row-header.is-drop-inside {
+  background: rgba(122, 162, 255, 0.12);
+  border-radius: 6px;
+}
+
+.scaffold-drop-line {
+  height: 2px;
+  background: #7aa2ff;
+  border-radius: 1px;
+  margin: 0 8px 0 0;
+  pointer-events: none;
+}
+
+.scaffold-inline-input-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scaffold-inline-input {
+  width: 100%;
+  min-height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(122, 162, 255, 0.5);
+  background: rgba(30, 30, 30, 0.95);
+  color: #e6e6e6;
+  padding: 2px 8px;
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.scaffold-inline-input:focus {
+  border-color: rgba(122, 162, 255, 0.8);
+  box-shadow: 0 0 0 2px rgba(122, 162, 255, 0.15);
+}
+
+.scaffold-inline-input.is-invalid {
+  border-color: rgba(255, 100, 100, 0.6);
+}
+
+.scaffold-inline-error {
+  font-size: 10px;
+  color: #ff8888;
+  padding-left: 4px;
+}
+
+.scaffold-drag-ghost {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: rgba(30, 30, 30, 0.92);
+  border: 1px solid rgba(122, 162, 255, 0.4);
+  color: #e6e6e6;
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}

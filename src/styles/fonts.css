@@ -1,0 +1,19 @@
+/* ================================================================
+   Bundled typefaces
+
+   The UI's monospace stacks name 'JetBrains Mono' directly. It ships
+   with neither stock Linux nor macOS, and fontconfig then substitutes
+   a *proportional* face (Noto Sans on Fedora) rather than falling back
+   to a monospace one — fixed-width layouts collapse and small text
+   turns illegible. Self-hosting keeps rendering identical everywhere
+   and stays within the app CSP (font-src 'self').
+
+   Imported through the CSS pipeline, not as a JS import: Vite's
+   dependency optimizer cannot process package CSS reached from JS
+   and fails with "file does not exist in the optimize deps directory".
+   ================================================================ */
+
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/600.css';
+@import '@fontsource/jetbrains-mono/700.css';

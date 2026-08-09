@@ -1,0 +1,398 @@
+.editor-launcher-rail {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(calc(-50% + var(--editor-launcher-offset, 0px)));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(24, 24, 24, 0.65);
+  border: 1px solid var(--drawer-tab-border);
+  z-index: 40;
+  cursor: grab;
+  user-select: none;
+}
+
+.editor-launcher-rail.is-dragging {
+  cursor: grabbing;
+}
+
+.editor-launcher-tab {
+  transform: translateX(0);
+}
+
+.editor-launcher-tab:hover {
+  transform: translateX(-2px);
+}
+
+.editor-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(80vw, 1240px);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(18, 18, 18, 0.96);
+  border-left: 1px solid rgba(214, 214, 214, 0.22);
+  transform: translateX(100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 220ms ease, opacity 220ms ease;
+  z-index: 45;
+}
+
+.editor-drawer.is-open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+  border-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--cm-electric-blue) 50%,
+    transparent 100%
+  ) 1;
+  border-left-width: 1px;
+  border-left-style: solid;
+}
+
+.editor-midtab {
+  position: absolute;
+  left: -44px;
+  top: 50%;
+  transform: translate(0, -50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 6px 0 0 6px;
+  border: 1px solid var(--cm-electric-blue);
+  border-right: none;
+  background: rgba(41, 121, 255, 0.08);
+  color: var(--cm-electric-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform var(--cm-transition-fast),
+              border-color var(--cm-transition-fast),
+              color var(--cm-transition-fast),
+              background var(--cm-transition-fast),
+              box-shadow var(--cm-transition-fast);
+  box-shadow: 0 0 10px 1px var(--cm-glow-active);
+  pointer-events: auto;
+  z-index: 1;
+}
+
+.editor-midtab:hover {
+  transform: translate(0, -50%) translateX(-2px);
+  border-color: var(--cm-electric-bright);
+  color: var(--cm-electric-bright);
+  box-shadow: 0 0 12px 1px var(--cm-glow-pressed);
+}
+
+.editor-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(206, 206, 206, 0.2);
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(206, 206, 206, 0.14);
+  background: rgba(24, 24, 24, 0.86);
+}
+
+.editor-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(198, 198, 198, 0.24);
+  background: rgba(42, 42, 42, 0.9);
+  color: #efefef;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.editor-toolbar-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.editor-drawer-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #dfdfdf;
+}
+
+.editor-drawer-meta {
+  font-size: 11px;
+  color: #8f8f8f;
+}
+
+.editor-drawer-close {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(214, 214, 214, 0.24);
+  background: rgba(45, 45, 45, 0.86);
+  color: #ebebeb;
+  cursor: pointer;
+}
+
+.editor-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(206, 206, 206, 0.14);
+}
+
+.editor-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(192, 192, 192, 0.22);
+  background: rgba(34, 34, 34, 0.9);
+  color: #e8e8e8;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.editor-tab.is-active {
+  border-color: rgba(174, 201, 255, 0.56);
+  background: rgba(52, 60, 75, 0.86);
+}
+
+.editor-tab-name {
+  font-size: 12px;
+}
+
+.editor-tab-name.is-dirty {
+  font-style: italic;
+}
+
+.editor-tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #f28b82;
+}
+
+.editor-tab-close {
+  border: none;
+  background: transparent;
+  color: #dfdfdf;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.editor-drawer-body {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 12px 12px;
+}
+
+.editor-empty {
+  color: #8f8f8f;
+  font-size: 12px;
+}
+
+.editor-buffer {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border-radius: 10px;
+  border: 1px solid rgba(208, 208, 208, 0.2);
+  background: rgba(20, 20, 20, 0.94);
+  color: #e8e8e8;
+  padding: 12px;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  outline: none;
+}
+
+.editor-monaco-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Split panes (ADR-017) ──
+   Progressive chrome: .editor-pane-strips always exists (one full-width strip
+   in single-pane mode), but pane headers, the focus tint, and the divider
+   render only while split. */
+.editor-pane-strips {
+  display: flex;
+  border-bottom: 1px solid rgba(206, 206, 206, 0.14);
+}
+.editor-pane-strip {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.editor-pane-strip + .editor-pane-strip {
+  border-left: 1px solid rgba(206, 206, 206, 0.14);
+}
+.editor-pane-strip .editor-tabs {
+  border-bottom: none;
+}
+.editor-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8f8f8f;
+}
+.editor-pane-strip.is-focused .editor-pane-head {
+  color: #9db8e8;
+}
+.editor-pane-head-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.editor-monaco-row {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+}
+/* Split rows drop the gap — the divider owns the space between panes. */
+.editor-monaco-row.is-split {
+  gap: 0;
+}
+.editor-pane-slot {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+}
+.editor-pane-slot .editor-monaco-shell {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.editor-monaco-row .editor-monaco-shell {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* ── Resizable divider (ADR-017 Phase C) ── */
+.editor-pane-divider {
+  flex: 0 0 8px;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+}
+.editor-pane-divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(212, 212, 212, 0.14);
+  transition: background 150ms ease;
+}
+.editor-pane-divider:hover::before,
+.editor-pane-divider:active::before {
+  background: rgba(41, 121, 255, 0.55);
+}
+.editor-monaco-shell.is-focused-pane .editor-buffer {
+  border-color: rgba(41, 121, 255, 0.45);
+}
+
+/* ── Node → pane drop (ADR-017 Phase C slice) ── */
+.editor-drop-ghost {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  transform: translate(-50%, -130%);
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(52, 60, 75, 0.95);
+  border: 1px solid rgba(174, 201, 255, 0.56);
+  color: #e8eefc;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+.editor-pane-strip.is-drop-target {
+  background: rgba(41, 121, 255, 0.08);
+}
+.editor-monaco-shell.is-drop-target .editor-buffer {
+  border-color: rgba(41, 121, 255, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(41, 121, 255, 0.35);
+}
+.editor-drawer-body {
+  position: relative;
+}
+.editor-split-preview {
+  position: absolute;
+  top: 10px;
+  bottom: 12px;
+  right: 12px;
+  width: 38%;
+  border-radius: 10px;
+  background: rgba(41, 121, 255, 0.10);
+  border-left: 2px dashed rgba(41, 121, 255, 0.55);
+  z-index: 5;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.editor-split-preview span {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #9db8e8;
+  white-space: nowrap;
+}
+
+/* Tab-drag split zone (ADR-017 Phase C) — same look as the node-drag
+   preview, but a LIVE drop target (pointer-events on). */
+.editor-split-dropzone {
+  position: absolute;
+  top: 10px;
+  bottom: 12px;
+  right: 12px;
+  width: 38%;
+  border-radius: 10px;
+  border: 1px dashed rgba(41, 121, 255, 0.55);
+  background: rgba(41, 121, 255, 0.08);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.editor-split-dropzone span {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #9db8e8;
+  white-space: nowrap;
+  pointer-events: none;
+}

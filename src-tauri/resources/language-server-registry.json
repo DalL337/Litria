@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "servers": {
+    "rust": {
+      "name": "Rust",
+      "extensions": [".rs"],
+      "server": "rust-analyzer",
+      "version": "2026-07-06",
+      "command": "rust-analyzer",
+      "args": [],
+      "artifacts": {
+        "windows-x64": {
+          "url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-06/rust-analyzer-x86_64-pc-windows-msvc.zip",
+          "sha256": "b046120af10d0cb7c735bbd377a53007d97048666fe967e95ea88a9fc177fa09"
+        },
+        "darwin-x64": {
+          "url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-06/rust-analyzer-x86_64-apple-darwin.gz",
+          "sha256": "3a6bc5b42c27d3f8d308dacb25fdbe9bba0577be2970500cdb936e53c21c3496"
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-06/rust-analyzer-aarch64-apple-darwin.gz",
+          "sha256": "0fb2229496105666460d22d062a55e154c862bb8004c464a38c6ffaff6fd68fe"
+        },
+        "linux-x64": {
+          "url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-06/rust-analyzer-x86_64-unknown-linux-gnu.gz",
+          "sha256": "2fb596e12676e512de5dbf1c322dd591127ee089a1cca47995605593f2fc8850"
+        },
+        "linux-arm64": {
+          "url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-06/rust-analyzer-aarch64-unknown-linux-gnu.gz",
+          "sha256": "7e2627d96c6f1614115d212b61fd5f8dc9279853054b800f2b023c883e3ae056"
+        }
+      }
+    },
+    "cpp": {
+      "name": "C/C++",
+      "extensions": [".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"],
+      "server": "clangd",
+      "version": "22.1.6",
+      "command": "clangd",
+      "args": [],
+      "artifacts": {
+        "windows-x64": {
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.6/clangd-windows-22.1.6.zip",
+          "sha256": "ce54f16e0b4fd76d450eeda9664420b195360b73febcfe40e661108fa57f2ce1"
+        },
+        "darwin-x64": {
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.6/clangd-mac-22.1.6.zip",
+          "sha256": "631aef462556cbd74e0ebaae1778a38d1997d0ba3371652ca54f82652a179e7d"
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.6/clangd-mac-22.1.6.zip",
+          "sha256": "631aef462556cbd74e0ebaae1778a38d1997d0ba3371652ca54f82652a179e7d"
+        },
+        "linux-x64": {
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.6/clangd-linux-22.1.6.zip",
+          "sha256": "a9c77443af2e447ed467e84771848d3a6ac1c56f84bcfcde717e66318de77cfa"
+        }
+      }
+    }
+  }
+}

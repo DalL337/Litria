@@ -1,0 +1,140 @@
+.canvas-area {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Interaction mode cursors (ADR-013). Persistent +/- while in edit mode so the
+   active sub-mode is always visible. Konva may override the cursor while
+   hovering interactive nodes; the status-bar indicator is the reliable signal. */
+.canvas-area.is-mode-edit.is-submode-additive {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Ccircle cx='12' cy='12' r='9' fill='%235c6bc0' stroke='%23ffffff' stroke-width='1.5'/%3E%3Cpath d='M12 7v10M7 12h10' stroke='%23ffffff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") 12 12, copy;
+}
+.canvas-area.is-mode-edit.is-submode-subtractive {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Ccircle cx='12' cy='12' r='9' fill='%23ef5350' stroke='%23ffffff' stroke-width='1.5'/%3E%3Cpath d='M7 12h10' stroke='%23ffffff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") 12 12, cell;
+}
+
+/* During an active canvas drag, let the cursor pass through floating overlays to
+   the Konva stage underneath so they don't capture pointer events and strand the
+   drag at their boundary (internals note 2). */
+.app-dragging .minimap-container,
+.app-dragging .status-bar {
+  pointer-events: none;
+}
+
+/* Minimap — glass HUD widget. Calm at idle; the frame glows electric-blue only
+   while you're driving it (panning the viewport or repositioning the widget).
+   Sits above the drawer layer (z 20) so a docked drawer can't bury it. */
+.minimap-container {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  padding: 5px;
+  border-radius: 8px;
+  border: 1px solid var(--drawer-border, rgba(210, 210, 210, 0.25));
+  background: rgba(24, 24, 28, 0.66);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.40);
+  pointer-events: auto;
+  user-select: none;
+  z-index: 30;
+  transition: box-shadow var(--cm-transition-fast, 150ms ease),
+              border-color var(--cm-transition-fast, 150ms ease);
+}
+.minimap-container.is-active {
+  border-color: var(--cm-electric-blue);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.40),
+              0 0 14px 1px var(--cm-glow-active);
+}
+.minimap-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 20px;
+  padding: 0 6px 4px;
+  cursor: grab;
+  user-select: none;
+}
+.minimap-titlebar:active {
+  cursor: grabbing;
+}
+.minimap-title {
+  font-size: 9.5px;
+  color: var(--cm-text-muted, rgba(200, 200, 200, 0.6));
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+.minimap-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--cm-text-muted, rgba(200, 200, 200, 0.5));
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.minimap-collapse-btn:hover {
+  color: #e6e6e6;
+}
+.minimap-svg {
+  display: block;
+  border-radius: 4px;
+  background: rgba(16, 16, 19, 0.92);   /* readable interior — NOT transparent */
+  cursor: crosshair;
+}
+
+/* SVG element styling via classes (per-piece fill stays inline). */
+.mm-piece {
+  opacity: 0.78;
+}
+.mm-group {
+  fill: var(--cm-indigo);
+  opacity: 0.32;
+}
+.mm-viewport {
+  fill: rgba(41, 121, 255, 0.10);
+  stroke: var(--cm-electric-blue);
+  stroke-width: 1.5;
+}
+.minimap-container.is-active .mm-viewport {
+  stroke: var(--cm-electric-bright);
+}
+.mm-empty-label {
+  fill: var(--cm-text-muted, rgba(200, 200, 200, 0.5));
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+/* Desk - the infinite workspace (grid rendered inside Konva for backdrop-blur) */
+.desk {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  background-color: #0d0f14;
+}
+
+.piece-palette {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.piece-button {
+  padding: 12px;
+  background: #3d3d3d;
+  border: 2px solid #4d4d4d;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.piece-button:hover {
+  background: #4d4d4d;
+  border-color: #5d5d5d;
+}

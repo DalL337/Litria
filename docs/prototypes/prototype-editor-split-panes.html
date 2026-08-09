@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Litria — Editor Split Panes Prototype</title>
+<!--
+  Interactive UX prototype for docs/plans/ideas/editor-split-panes.md
+  (feedback #10). No Monaco, no React — pure HTML/JS mock of the editor
+  drawer so the INTERACTION MODEL can be felt before any code lands.
+
+  Rules implemented (from the capture doc):
+    1. Single-file invariant — a file has at most ONE tab. Opening it where
+       it already lives focuses it; opening it in the other pane MOVES it.
+    2. State-aware menus — "Open in new pane" (creates) vs "Send to pane 1/2"
+       (targets). Degenerate guard: no "Open in new pane" when the source
+       pane holds only that tab.
+    3. Focus follows intent — open/send focuses that file in that pane.
+    4. Closing the last tab in a pane collapses the split. No unsplit button.
+    5. Progressive revelation — pane headers/chrome only exist while split.
+    6. Max two panes. Position is identity (pane 1 = left, pane 2 = right).
+
+  Entry paths to try:
+    - Right-click an editor tab  -> state-aware context menu
+    - Ctrl+double-click a canvas node -> opens into the side pane
+    - Double-click a canvas node -> opens in the focused pane
+    - DRAG a canvas node into a pane -> opens it there (panes highlight)
+    - DRAG a node or tab to the right edge -> split-preview zone -> drop
+      creates the split (the "drag tab to drawer edge" fast-follow, felt)
+    - DRAG a tab between panes -> moves the file (single-file invariant)
+    - View menu -> "Split Editor  Ctrl+\" (generic verb: moves the next tab
+      into a new pane; disabled with <2 tabs or while split — OPEN QUESTION)
+    - Drag the divider to resize (bonus, feedback #10 asked for it)
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #101014;
+    --grid: rgba(255,255,255,0.035);
+    --drawer-bg: rgba(18,18,18,0.96);
+    --line: rgba(206,206,206,0.14);
+    --line-strong: rgba(214,214,214,0.22);
+    --text: #e8e8e8;
+    --text-dim: #8f8f8f;
+    --blue: #2979ff;
+    --blue-soft: rgba(174,201,255,0.56);
+    --dirty: #f28b82;
+    --parchment: #efe6c8;
+    --parchment-edge: #caa24a;
+  }
+  body {
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh; width: 100vw; overflow: hidden;
+    display: flex; flex-direction: column;
+    user-select: none;
+  }
+
+  /* ═══ Menu bar strip ═══ */
+  .menubar {
+    display: flex; align-items: center; gap: 2px;
+    height: 30px; padding: 0 6px;
+    background: rgba(18,18,18,0.96);
+    border-bottom: 1px solid rgba(210,210,210,0.08);
+    font-size: 11px; color: rgba(220,220,220,0.75);
+    position: relative; z-index: 60;
+  }
+  .menubar button {
+    background: none; border: none; color: inherit; font: inherit;
+    padding: 3px 8px; border-radius: 3px; cursor: pointer;
+  }
+  .menubar button:hover, .menubar button.open {
+    color: #fff; background: rgba(179,157,219,0.15);
+  }
+  .menu-pop {
+    position: absolute; top: 29px; min-width: 210px;
+    background: #1e1e1e; border: 1px solid #3a3a3a; border-radius: 6px;
+    padding: 4px 0; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    display: none; z-index: 100;
+  }
+  .menu-pop.show { display: block; }
+  .menu-pop .mi {
+    display: flex; justify-content: space-between; gap: 24px;
+    padding: 5px 12px; font-size: 12px; color: #e6e6e6; cursor: pointer;
+  }
+  .menu-pop .mi:hover { background: rgba(92,107,192,0.18); color: #fff; }
+  .menu-pop .mi.disabled { color: rgba(200,200,200,0.3); pointer-events: none; }
+  .menu-pop .mi .kbd { color: rgba(200,200,200,0.4); font-size: 11px; }
+
+  /* ═══ Stage: canvas + drawer ═══ */
+  .stage { flex: 1; display: flex; min-height: 0; position: relative; }
+
+  .canvas {
+    flex: 1; position: relative;
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+      var(--bg);
+    background-size: 22px 22px, 22px 22px, 100% 100%;
+  }
+  .node {
+    position: absolute; width: 132px; height: 84px;
+    background: var(--parchment);
+    border: 1.5px solid rgba(0,0,0,0.25);
+    border-left: 4px solid var(--parchment-edge);
+    border-radius: 8px; color: #2b2417;
+    padding: 8px 9px; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .node:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.55); }
+  .node .led {
+    position: absolute; top: 8px; right: 8px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: rgba(50,205,100,0.9); box-shadow: 0 0 8px rgba(50,205,100,0.6);
+  }
+  .node .nm { position: absolute; bottom: 8px; left: 9px; font-size: 11.5px; font-weight: 600; }
+  .node.is-open-somewhere::after {
+    content: attr(data-where);
+    position: absolute; top: -9px; left: 8px;
+    font-size: 9px; letter-spacing: 0.06em; color: #cfe0ff;
+    background: rgba(41,60,110,0.92); border: 1px solid var(--blue-soft);
+    border-radius: 999px; padding: 1px 7px;
+  }
+  .canvas-hint {
+    position: absolute; bottom: 14px; left: 14px; max-width: 300px;
+    font-size: 11px; line-height: 1.5; color: var(--text-dim);
+  }
+  .canvas-hint b { color: #c8d4f0; font-weight: 600; }
+
+  /* ═══ Editor drawer ═══ */
+  .drawer {
+    width: 68vw; min-width: 560px; height: 100%;
+    display: flex; flex-direction: column;
+    background: var(--drawer-bg);
+    border-left: 1px solid;
+    border-image: linear-gradient(to bottom, transparent 0%, var(--blue) 50%, transparent 100%) 1;
+  }
+  .drawer-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-bottom: 1px solid var(--line-strong);
+  }
+  .drawer-title { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #dfdfdf; }
+  .drawer-meta { font-size: 11px; color: var(--text-dim); }
+
+  .panes { flex: 1; display: flex; min-height: 0; }
+  .pane {
+    display: flex; flex-direction: column; min-width: 180px; min-height: 0;
+    flex: 1 1 0;
+    outline: 1px solid transparent; outline-offset: -1px;
+    transition: outline-color 140ms ease;
+  }
+  .panes.split .pane.focused { outline-color: rgba(41,121,255,0.45); }
+
+  .pane-head {
+    display: none;
+    align-items: center; gap: 8px;
+    padding: 6px 12px 0;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .panes.split .pane-head { display: flex; }
+  .panes.split .pane.focused .pane-head { color: #9db8e8; }
+  .pane-head .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.7; }
+
+  .tabs {
+    display: flex; gap: 8px; overflow-x: auto;
+    padding: 10px 12px; border-bottom: 1px solid var(--line);
+  }
+  .tab {
+    display: inline-flex; align-items: center; gap: 7px;
+    min-height: 30px; border-radius: 999px;
+    border: 1px solid rgba(192,192,192,0.22);
+    background: rgba(34,34,34,0.9);
+    color: var(--text); padding: 0 10px; cursor: pointer;
+    font-size: 12px; white-space: nowrap;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .tab.active { border-color: var(--blue-soft); background: rgba(52,60,75,0.86); }
+  .tab .dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dirty); }
+  .tab.dirty .name { font-style: italic; }
+  .tab .x { border: none; background: none; color: #dfdfdf; font-size: 13px; cursor: pointer; padding: 0 0 0 2px; }
+  .tab .x:hover { color: #fff; }
+  .tab.flash { animation: tabflash 500ms ease; }
+  @keyframes tabflash {
+    0% { box-shadow: 0 0 0 0 rgba(41,121,255,0.8); }
+    100% { box-shadow: 0 0 0 9px rgba(41,121,255,0); }
+  }
+
+  .body {
+    flex: 1; min-height: 0; overflow: auto;
+    padding: 12px 14px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px; line-height: 1.65; color: #cdd6e4;
+    cursor: text;
+  }
+  .body .kw { color: #c792ea; } .body .st { color: #c3e88d; }
+  .body .fn { color: #82aaff; } .body .cm { color: #5c6773; }
+  .body-empty { color: var(--text-dim); font-family: 'Inter', sans-serif; font-size: 12px; }
+
+  .divider {
+    width: 5px; cursor: col-resize; flex: 0 0 auto;
+    background: var(--line);
+    transition: background 120ms ease;
+    display: none;
+  }
+  .panes.split .divider { display: block; }
+  .divider:hover, .divider.dragging { background: rgba(41,121,255,0.55); }
+
+  /* ═══ Drag-into-pane ═══ */
+  body.dragging-file, body.dragging-file * { cursor: grabbing !important; }
+  .drag-ghost {
+    position: fixed; z-index: 400; pointer-events: none;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 999px; font-size: 12px;
+    background: rgba(52,60,75,0.95); border: 1px solid var(--blue-soft);
+    color: #e8eefc; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+    transform: translate(-50%, -130%);
+  }
+  .panes { position: relative; }
+  .pane.drop-target { outline-color: rgba(41,121,255,0.85); background: rgba(41,121,255,0.05); }
+  .split-preview {
+    position: absolute; top: 0; bottom: 0; right: 0; width: 38%;
+    background: rgba(41,121,255,0.10);
+    border-left: 2px dashed rgba(41,121,255,0.55);
+    display: none; z-index: 5; pointer-events: none;
+  }
+  .split-preview.show { display: block; }
+  .split-preview .hint {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: #9db8e8; white-space: nowrap;
+  }
+
+  /* ═══ Context menu ═══ */
+  .ctx {
+    position: fixed; min-width: 220px; z-index: 200;
+    background: #1e1e1e; border: 1px solid #3a3a3a; border-radius: 6px;
+    padding: 4px 0; box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: none;
+  }
+  .ctx.show { display: block; }
+  .ctx .mi {
+    display: flex; justify-content: space-between; gap: 24px;
+    padding: 5px 12px; font-size: 12px; color: #e6e6e6; cursor: pointer;
+  }
+  .ctx .mi:hover { background: rgba(92,107,192,0.18); color: #fff; }
+  .ctx .mi .kbd { color: rgba(200,200,200,0.4); font-size: 11px; }
+  .ctx .sep { height: 1px; background: rgba(210,210,210,0.12); margin: 4px 8px; }
+
+  /* ═══ Notes panel ═══ */
+  .notes {
+    position: fixed; left: 12px; top: 42px; width: 285px; z-index: 50;
+    background: rgba(20,20,24,0.96); border: 1px solid var(--line-strong);
+    border-radius: 10px; padding: 12px 14px;
+    font-size: 11px; line-height: 1.55; color: #c9c9c9;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+  }
+  .notes h1 { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #9db8e8; margin-bottom: 8px; }
+  .notes ol { padding-left: 16px; display: grid; gap: 5px; }
+  .notes .q { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line); color: #e8c98a; }
+  .notes .toggle {
+    position: absolute; top: 8px; right: 10px; border: none; background: none;
+    color: var(--text-dim); cursor: pointer; font-size: 12px;
+  }
+  .notes.min { width: auto; padding: 8px 34px 8px 14px; }
+  .notes.min > *:not(h1):not(.toggle) { display: none; }
+
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: rgba(30,34,44,0.97); border: 1px solid var(--blue-soft);
+    color: #dce6f8; border-radius: 999px; padding: 7px 16px; font-size: 12px;
+    opacity: 0; transition: opacity 180ms ease; pointer-events: none; z-index: 300;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+  <div class="menubar">
+    <button disabled style="opacity:.45">File</button>
+    <button disabled style="opacity:.45">Edit</button>
+    <button id="viewBtn">View</button>
+    <button disabled style="opacity:.45">Actions</button>
+    <button disabled style="opacity:.45">Settings</button>
+    <div class="menu-pop" id="viewMenu" style="left:64px">
+      <div class="mi" id="miSplit"><span>Split Editor</span><span class="kbd">Ctrl+\</span></div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="canvas" id="canvas">
+      <div class="canvas-hint">
+        <b>Double-click</b> a node → opens in the focused pane.<br>
+        <b>Ctrl + double-click</b> → opens into the side pane (creates the split).<br>
+        Right-click an editor <b>tab</b> for the state-aware menu.
+      </div>
+    </div>
+
+    <div class="drawer">
+      <div class="drawer-header">
+        <span class="drawer-title">Editor</span>
+        <span class="drawer-meta" id="meta"></span>
+      </div>
+      <div class="panes" id="panes">
+        <div class="split-preview" id="splitPreview"><span class="hint">Open in new pane</span></div>
+        <div class="pane" data-pane="1">
+          <div class="pane-head"><span class="dot"></span> Pane 1</div>
+          <div class="tabs" data-tabs="1"></div>
+          <div class="body" data-body="1"></div>
+        </div>
+        <div class="divider" id="divider"></div>
+        <div class="pane" data-pane="2" style="display:none">
+          <div class="pane-head"><span class="dot"></span> Pane 2</div>
+          <div class="tabs" data-tabs="2"></div>
+          <div class="body" data-body="2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ctx" id="ctx"></div>
+  <div class="toast" id="toast"></div>
+
+  <div class="notes" id="notes">
+    <button class="toggle" onclick="document.getElementById('notes').classList.toggle('min')">▁</button>
+    <h1>Rules being demonstrated</h1>
+    <ol>
+      <li><b>One tab per file.</b> Open it where it lives → focus. Open it in the other pane → it <i>moves</i> (watch the flash).</li>
+      <li><b>Open creates, Send targets.</b> Tab menu items change with split state.</li>
+      <li><b>No "Open in new pane"</b> on a pane's only tab — nothing to split away from.</li>
+      <li><b>Focus follows intent.</b> Blue ring = focused pane (only visible while split).</li>
+      <li><b>Close a pane's last tab → split collapses.</b> No unsplit button.</li>
+      <li><b>No pane chrome until you split.</b> Headers appear only in split mode.</li>
+      <li><b>Drag anything into a pane.</b> Nodes and tabs drag; panes highlight; the right-edge zone previews "open in new pane". Same guard: a pane's only tab can't split away.</li>
+    </ol>
+    <div class="q">⚖ Open question: the generic <b>View → Split Editor</b> (Ctrl+\) verb moves the <i>next tab</i> into a new pane, and disables at &lt;2 tabs or while split. Does that feel right, or should the generic verb not exist at all?</div>
+  </div>
+
+<script>
+  /* ── Fake project files ── */
+  const FILES = {
+    'App.tsx':       { code: `<span class="kw">import</span> { useState } <span class="kw">from</span> <span class="st">'react'</span>\n<span class="kw">import</span> <span class="st">'./App.css'</span>\n\n<span class="kw">function</span> <span class="fn">App</span>() {\n  <span class="kw">const</span> [count, setCount] = <span class="fn">useState</span>(0)\n  <span class="kw">return</span> (\n    &lt;main&gt;\n      &lt;h1&gt;Litria&lt;/h1&gt;\n      &lt;button onClick={() =&gt; <span class="fn">setCount</span>(c =&gt; c + 1)}&gt;\n        count is {count}\n      &lt;/button&gt;\n    &lt;/main&gt;\n  )\n}\n\n<span class="kw">export default</span> App`, dirty: false },
+    'main.tsx':      { code: `<span class="kw">import</span> { StrictMode } <span class="kw">from</span> <span class="st">'react'</span>\n<span class="kw">import</span> { createRoot } <span class="kw">from</span> <span class="st">'react-dom/client'</span>\n<span class="kw">import</span> App <span class="kw">from</span> <span class="st">'./App'</span>\n\n<span class="fn">createRoot</span>(document.<span class="fn">getElementById</span>(<span class="st">'root'</span>)!).<span class="fn">render</span>(\n  &lt;StrictMode&gt;\n    &lt;App /&gt;\n  &lt;/StrictMode&gt;\n)`, dirty: true },
+    'App.css':       { code: `<span class="cm">/* app shell */</span>\nmain {\n  max-width: <span class="st">1280px</span>;\n  margin: <span class="st">0 auto</span>;\n  padding: <span class="st">2rem</span>;\n  text-align: <span class="st">center</span>;\n}`, dirty: false },
+    'react.svg':     { code: `&lt;svg xmlns=<span class="st">"http://www.w3.org/2000/svg"</span>&gt;\n  <span class="cm">&lt;!-- atom orbits --&gt;</span>\n&lt;/svg&gt;`, dirty: false },
+    'vite-env.d.ts': { code: `<span class="cm">/// &lt;reference types="vite/client" /&gt;</span>`, dirty: false },
+  };
+
+  /* ── State (mirrors the capture doc: main + optional side, tab.paneId) ── */
+  const S = {
+    split: false,
+    order:  { 1: ['App.tsx', 'main.tsx'], 2: [] },  // tab order per pane
+    active: { 1: 'App.tsx', 2: null },
+    focused: 1,
+  };
+  const paneOf = (f) => S.order[1].includes(f) ? 1 : (S.order[2].includes(f) ? 2 : null);
+  let flashFile = null;
+
+  /* ── Core actions ── */
+  function openFile(file, target /* 1|2|'side'|'focused' */) {
+    let pane = target === 'focused' ? S.focused
+             : target === 'side' ? 2
+             : target;
+    if (pane === 2 && !S.split) createSplit();
+    const cur = paneOf(file);
+    if (cur === pane) {                    // already there -> focus
+      S.active[pane] = file; S.focused = pane;
+    } else if (cur) {                      // single-file invariant -> MOVE
+      S.order[cur] = S.order[cur].filter(f => f !== file);
+      if (S.active[cur] === file) S.active[cur] = S.order[cur][S.order[cur].length - 1] ?? null;
+      S.order[pane].push(file); S.active[pane] = file; S.focused = pane;
+      flashFile = file;
+      toast(`Moved ${file} to pane ${pane} — a file has one tab`);
+      collapseIfEmpty(cur);
+    } else {                               // fresh open
+      S.order[pane].push(file); S.active[pane] = file; S.focused = pane;
+    }
+    render();
+  }
+  function createSplit() { S.split = true; }
+  function collapseIfEmpty(pane) {
+    if (!S.split) return;
+    if (S.order[pane].length === 0) {
+      const other = pane === 1 ? 2 : 1;
+      // Remaining pane becomes the single main pane (position is identity).
+      S.order[1] = S.order[other === 1 ? 1 : 2].slice();
+      S.active[1] = S.active[other];
+      S.order[2] = []; S.active[2] = null;
+      S.split = false; S.focused = 1;
+      toast('Pane emptied — split collapsed');
+    }
+  }
+  function closeTab(file) {
+    const pane = paneOf(file); if (!pane) return;
+    S.order[pane] = S.order[pane].filter(f => f !== file);
+    if (S.active[pane] === file) S.active[pane] = S.order[pane][S.order[pane].length - 1] ?? null;
+    collapseIfEmpty(pane);
+    render();
+  }
+  function genericSplit() {   // View -> Split Editor (Ctrl+\): OPEN QUESTION verb
+    if (S.split || S.order[S.focused].length < 2) return;
+    const p = S.focused, act = S.active[p];
+    const idx = S.order[p].indexOf(act);
+    const next = S.order[p][idx + 1] ?? S.order[p][idx - 1];
+    openFile(next, 'side');
+  }
+
+  /* ── Render ── */
+  const panesEl = document.getElementById('panes');
+  function render() {
+    panesEl.classList.toggle('split', S.split);
+    document.querySelector('[data-pane="2"]').style.display = S.split ? 'flex' : 'none';
+    for (const p of [1, 2]) {
+      const paneEl = document.querySelector(`[data-pane="${p}"]`);
+      paneEl.classList.toggle('focused', S.focused === p);
+      const tabsEl = document.querySelector(`[data-tabs="${p}"]`);
+      tabsEl.innerHTML = '';
+      for (const f of S.order[p]) {
+        const t = document.createElement('div');
+        t.className = 'tab' + (S.active[p] === f ? ' active' : '') + (FILES[f].dirty ? ' dirty' : '') + (flashFile === f ? ' flash' : '');
+        t.innerHTML = (FILES[f].dirty ? '<span class="dirty-dot"></span>' : '') +
+                      `<span class="name">${f}</span><button class="x" title="Close">×</button>`;
+        t.addEventListener('click', (e) => {
+          if (e.target.classList.contains('x')) { closeTab(f); }
+          else { S.active[p] = f; S.focused = p; render(); }
+        });
+        t.addEventListener('contextmenu', (e) => { e.preventDefault(); tabMenu(e, f, p); });
+        t.addEventListener('mousedown', (e) => {
+          if (e.button !== 0 || e.target.classList.contains('x')) return;
+          beginFileDrag(f, p, e);
+        });
+        tabsEl.appendChild(t);
+      }
+      const bodyEl = document.querySelector(`[data-body="${p}"]`);
+      const act = S.active[p];
+      bodyEl.innerHTML = act ? `<pre>${FILES[act].code}</pre>` : '<div class="body-empty">No file</div>';
+      bodyEl.onclick = () => { S.focused = p; render(); };
+    }
+    flashFile = null;
+    // Canvas badges: where is each file open?
+    document.querySelectorAll('.node').forEach(n => {
+      const p = paneOf(n.dataset.file);
+      n.classList.toggle('is-open-somewhere', !!p);
+      if (p) n.dataset.where = S.split ? `PANE ${p}` : 'OPEN';
+    });
+    document.getElementById('meta').textContent = S.split ? 'Split — focus follows intent' : '';
+    // View menu enablement
+    document.getElementById('miSplit').classList.toggle('disabled', S.split || S.order[S.focused].length < 2);
+  }
+
+  /* ── Tab context menu (state-aware, teaches the gesture) ── */
+  const ctx = document.getElementById('ctx');
+  function tabMenu(e, file, pane) {
+    const items = [];
+    if (!S.split) {
+      // Degenerate guard: only tab in its pane -> nothing to split away from.
+      if (S.order[pane].length > 1) {
+        items.push({ label: 'Open in new pane', kbd: 'Ctrl+dblclick', run: () => openFile(file, 'side') });
+      }
+    } else {
+      items.push({ label: 'Send to pane 1', run: () => openFile(file, 1) });
+      items.push({ label: 'Send to pane 2', run: () => openFile(file, 2) });
+    }
+    items.push({ sep: true });
+    items.push({ label: 'Close', run: () => closeTab(file) });
+    ctx.innerHTML = '';
+    for (const it of items) {
+      if (it.sep) { const s = document.createElement('div'); s.className = 'sep'; ctx.appendChild(s); continue; }
+      const d = document.createElement('div'); d.className = 'mi';
+      d.innerHTML = `<span>${it.label}</span>` + (it.kbd ? `<span class="kbd">${it.kbd}</span>` : '');
+      d.addEventListener('click', () => { hideCtx(); it.run(); });
+      ctx.appendChild(d);
+    }
+    ctx.style.left = Math.min(e.clientX, innerWidth - 240) + 'px';
+    ctx.style.top = Math.min(e.clientY, innerHeight - 140) + 'px';
+    ctx.classList.add('show');
+  }
+  function hideCtx() { ctx.classList.remove('show'); }
+  addEventListener('mousedown', (e) => { if (!ctx.contains(e.target)) hideCtx(); });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideCtx(); viewMenu.classList.remove('show'); } });
+
+  /* ── Canvas nodes ── */
+  const canvas = document.getElementById('canvas');
+  Object.keys(FILES).forEach((f, i) => {
+    const n = document.createElement('div');
+    n.className = 'node'; n.dataset.file = f;
+    n.style.left = (30 + (i % 2) * 160) + 'px';
+    n.style.top = (70 + Math.floor(i / 2) * 118) + 'px';
+    n.innerHTML = `<span class="led"></span><span class="nm">${f}</span>`;
+    n.addEventListener('dblclick', (e) => openFile(f, (e.ctrlKey || e.metaKey) ? 'side' : 'focused'));
+    n.addEventListener('mousedown', (e) => { if (e.button === 0) beginFileDrag(f, paneOf(f), e); });
+    canvas.appendChild(n);
+  });
+
+  /* ── View menu ── */
+  const viewMenu = document.getElementById('viewMenu');
+  const viewBtn = document.getElementById('viewBtn');
+  viewBtn.addEventListener('click', () => {
+    viewMenu.classList.toggle('show'); viewBtn.classList.toggle('open');
+  });
+  addEventListener('mousedown', (e) => {
+    if (!viewMenu.contains(e.target) && e.target !== viewBtn) {
+      viewMenu.classList.remove('show'); viewBtn.classList.remove('open');
+    }
+  });
+  document.getElementById('miSplit').addEventListener('click', () => {
+    viewMenu.classList.remove('show'); viewBtn.classList.remove('open'); genericSplit();
+  });
+  addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === '\\') { e.preventDefault(); genericSplit(); }
+  });
+
+  /* ── Drag-into-pane engine ──
+     Mirrors real Litria's idioms: document-level listeners + a move
+     threshold (useScaffoldDrag) and elementsFromPoint drop resolution
+     (DrawerContentScaffold). Drop on a pane = openFile there (the
+     single-file invariant turns cross-pane drops into moves for free).
+     Right-edge split zone = the "drag tab to drawer edge" fast-follow. */
+  const ghost = document.createElement('div'); ghost.className = 'drag-ghost';
+  const splitPreview = document.getElementById('splitPreview');
+  let drag = null; // { file, fromPane|null, started }
+
+  function canSplitAway(file, fromPane) {
+    // Degenerate guard (same rule as the menus): dragging a pane's only tab
+    // to the split zone would empty the source and instantly collapse.
+    if (fromPane == null) return true; // canvas node — always fine
+    return S.order[fromPane].length > 1;
+  }
+
+  function resolveDrop(e) { // -> 1 | 2 | 'side' | null
+    const els = document.elementsFromPoint(e.clientX, e.clientY);
+    const paneEl = els.find(el => el.dataset && el.dataset.pane);
+    if (!paneEl) return null;
+    const pane = Number(paneEl.dataset.pane);
+    if (!S.split && pane === 1) {
+      const rect = panesEl.getBoundingClientRect();
+      const inSplitZone = e.clientX > rect.left + rect.width * 0.62;
+      if (inSplitZone && canSplitAway(drag.file, drag.fromPane)) return 'side';
+    }
+    return pane;
+  }
+
+  function clearDropHighlights() {
+    splitPreview.classList.remove('show');
+    document.querySelectorAll('.pane.drop-target').forEach(el => el.classList.remove('drop-target'));
+  }
+
+  function beginFileDrag(file, fromPane, startEvent) {
+    const sx = startEvent.clientX, sy = startEvent.clientY;
+    drag = { file, fromPane, started: false };
+    const move = (e) => {
+      if (!drag.started) {
+        if (Math.hypot(e.clientX - sx, e.clientY - sy) < 5) return;
+        drag.started = true;
+        document.body.classList.add('dragging-file');
+        ghost.textContent = file;
+        document.body.appendChild(ghost);
+      }
+      ghost.style.left = e.clientX + 'px';
+      ghost.style.top = e.clientY + 'px';
+      clearDropHighlights();
+      const t = resolveDrop(e);
+      if (t === 'side') splitPreview.classList.add('show');
+      else if (t) document.querySelector(`[data-pane="${t}"]`).classList.add('drop-target');
+    };
+    const up = (e) => {
+      removeEventListener('mousemove', move);
+      removeEventListener('mouseup', up);
+      if (drag && drag.started) {
+        const t = resolveDrop(e);
+        clearDropHighlights();
+        document.body.classList.remove('dragging-file');
+        ghost.remove();
+        if (t) openFile(drag.file, t === 'side' ? 'side' : t);
+      }
+      drag = null;
+    };
+    addEventListener('mousemove', move);
+    addEventListener('mouseup', up);
+  }
+
+  /* ── Divider drag ── */
+  const divider = document.getElementById('divider');
+  divider.addEventListener('mousedown', (e) => {
+    e.preventDefault(); divider.classList.add('dragging');
+    const p1 = document.querySelector('[data-pane="1"]');
+    const p2 = document.querySelector('[data-pane="2"]');
+    const rect = panesEl.getBoundingClientRect();
+    const move = (ev) => {
+      const frac = Math.min(0.8, Math.max(0.2, (ev.clientX - rect.left) / rect.width));
+      p1.style.flex = `${frac} 1 0`; p2.style.flex = `${1 - frac} 1 0`;
+    };
+    const up = () => { divider.classList.remove('dragging'); removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+    addEventListener('mousemove', move); addEventListener('mouseup', up);
+  });
+
+  /* ── Toast ── */
+  let toastTimer;
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  render();
+</script>
+</body>
+</html>

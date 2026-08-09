@@ -1,0 +1,243 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 50px;
+  min-height: 50px;
+  padding: 0 16px;
+  background: rgba(18, 18, 18, 0.92);
+  border-top: 1px solid rgba(210, 210, 210, 0.14);
+  z-index: 50;
+  user-select: none;
+  font-size: 13px;
+  color: rgba(200, 200, 200, 0.7);
+  position: relative;
+}
+
+/* === Left Zone === */
+.status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-bar-btn {
+  background: none;
+  border: none;
+  color: rgba(200, 200, 200, 0.55);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+.status-bar-btn:hover {
+  color: #e6e6e6;
+  background: rgba(255, 255, 255, 0.06);
+}
+.status-bar-btn.is-active {
+  color: #7986cb;
+}
+
+.status-bar-coords {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(200, 200, 200, 0.5);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.status-bar-separator {
+  width: 1px;
+  height: 18px;
+  background: rgba(200, 200, 200, 0.15);
+  margin: 0 4px;
+}
+
+.status-bar-zoom-btn {
+  background: none;
+  border: none;
+  color: rgba(200, 200, 200, 0.55);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  min-width: 44px;
+  text-align: center;
+  line-height: 1;
+}
+.status-bar-zoom-btn:hover {
+  color: #e6e6e6;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Zoom popover (positioned by Radix Popover via Portal) */
+.status-bar-zoom-popover {
+  width: 200px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+}
+
+.status-bar-zoom-track {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.status-bar-zoom-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: #5c6bc0;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.status-bar-zoom-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  background: #e6e6e6;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* === Center Zone === */
+.status-bar-center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.status-bar-project-name {
+  font-size: 13px;
+  color: rgba(200, 200, 200, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.status-bar-save-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: default;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: none;
+  border: none;
+  color: inherit;
+}
+.status-bar-save-indicator.is-dirty {
+  color: #e6a23c;
+  cursor: pointer;
+}
+.status-bar-save-indicator.is-dirty:hover {
+  background: rgba(230, 162, 60, 0.1);
+}
+.status-bar-save-indicator.is-clean {
+  color: rgba(102, 187, 106, 0.7);
+}
+
+/* Dirty files popover (positioned by Radix Popover via Portal) */
+.status-bar-dirty-popover {
+  min-width: 200px;
+  max-width: 300px;
+  padding: 4px 0;
+}
+
+.status-bar-dirty-item {
+  display: block;
+  width: 100%;
+  padding: 6px 14px;
+  border: none;
+  background: none;
+  color: rgba(200, 200, 200, 0.8);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-bar-dirty-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6e6e6;
+}
+
+/* === Right Zone === */
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-bar-lang {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: rgba(200, 200, 200, 0.55);
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: default;
+  white-space: nowrap;
+}
+.status-bar-lang:hover {
+  color: rgba(200, 200, 200, 0.8);
+  background: rgba(255, 255, 255, 0.04);
+}
+.status-bar-lang-label {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Interaction mode indicator (ADR-013) — present only while in edit mode. */
+.status-bar-mode {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #c5cae9;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(92, 107, 192, 0.5);
+  background: rgba(92, 107, 192, 0.18);
+  cursor: default;
+  white-space: nowrap;
+}
+
+/* Live / Calm energy toggle (ADR-014 — static intensity axis). */
+.status-bar-energy {
+  background: none;
+  border: 1px solid rgba(200, 200, 200, 0.18);
+  border-radius: 999px;
+  color: rgba(200, 200, 210, 0.7);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 10px;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.status-bar-energy:hover { color: #e6e6ee; border-color: rgba(200, 200, 200, 0.35); }
+.status-bar-energy.is-live { color: #9fa8da; border-color: rgba(92, 107, 192, 0.4); }
+.status-bar-energy.is-calm { color: rgba(200, 200, 210, 0.55); border-color: rgba(200, 200, 200, 0.15); }

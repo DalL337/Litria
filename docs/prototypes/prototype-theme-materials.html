@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Litria — Theme &amp; Material System Prototype</title>
+<!--
+  Multi-material prototype. Sibling of prototype-glass-material.html, generalized
+  from one material (Glass) to a material-based theme system.
+
+  Concept: a "theme" = a semantic channel contract (identity / organization / health)
+  rendered through a swappable MATERIAL. Three materials shown:
+    - Glass    : translucent, backdrop blur, refraction rim   (effect material)
+    - Terminal : flat, static scanlines, phosphor, monospace  (effect material)
+    - Matte    : opaque fill + solid border, no effects        (recolor material)
+                 -> ships palettes: Obsidian (cool) / Parchment (warm ochre+tannin)
+
+  Material switch re-skins every node. Live/Calm is the static energy axis.
+  No ambient animation anywhere (perf lock): scanlines + LEDs are static.
+-->
+<style>
+  :root {
+    /* Semantic — shared health LED colors (reserved palette, every material) */
+    --led-empty: rgba(180, 180, 190, 0.5);
+    --led-blue:  rgba(60, 140, 255, 0.95);
+    --led-green: rgba(50, 205, 100, 0.9);
+    --led-amber: rgba(240, 180, 40, 0.9);
+    --led-red:   rgba(240, 60, 60, 0.95);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: #e0e0e0;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* ═══════════ Canvas ═══════════ */
+  .canvas {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background:
+      linear-gradient(var(--canvas-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px),
+      var(--canvas-bg);
+    background-size: var(--canvas-grid-size, 20px) var(--canvas-grid-size, 20px),
+                     var(--canvas-grid-size, 20px) var(--canvas-grid-size, 20px),
+                     100% 100%;
+  }
+
+  /* ── Material token sets (drive every node via CSS vars) ── */
+  .canvas[data-material="glass"] {
+    --canvas-bg: #0d0f14;
+    --canvas-grid: rgba(255, 255, 255, 0.03);
+    --canvas-grid-size: 20px;
+    --surface: rgba(20, 24, 36, 0.10);
+    --surface-blur: 6px;
+    --border-color: rgba(255, 255, 255, 0.15);
+    --border-width: 1.5px;
+    --radius: 12px;
+    --label-color: #f3f6ff;
+    --label-font: 'Inter', sans-serif;
+    --label-shadow: 0 0 8px rgba(0,0,0,0.9), 0 1px 3px rgba(0,0,0,0.8);
+    --sublabel-color: rgba(160, 165, 180, 0.6);
+    --led-shape: 50%;
+    --led-glow: 10px;
+    --edge-glow: 0px;
+    --rim-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.08), 0 0 8px rgba(180,200,255,0.06);
+    --connection-color: rgba(120, 160, 255, 0.3);
+  }
+
+  .canvas[data-material="terminal"] {
+    --canvas-bg: #070b07;
+    --canvas-grid: rgba(90, 200, 110, 0.04);
+    --canvas-grid-size: 14px;
+    --surface: #0b110c;
+    --surface-blur: 0px;
+    --border-color: #1d3a1d;
+    --border-width: 1px;
+    --radius: 2px;
+    --label-color: #7df58f;
+    --label-font: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+    --label-shadow: 0 0 6px rgba(80,255,120,0.35);
+    --sublabel-color: rgba(120, 200, 130, 0.5);
+    --led-shape: 0;
+    --led-glow: 0px;
+    --edge-glow: 8px;
+    --rim-shadow: none;
+    --connection-color: rgba(51, 209, 122, 0.55);
+  }
+
+  .canvas[data-material="matte"] {
+    --canvas-bg: #0c0f14;
+    --canvas-grid: rgba(255, 255, 255, 0.03);
+    --canvas-grid-size: 22px;
+    --surface-blur: 0px;
+    --border-width: 1px;
+    --radius: 8px;
+    --label-font: 'Inter', sans-serif;
+    --label-shadow: none;
+    --led-shape: 50%;
+    --led-glow: 4px;
+    --edge-glow: 0px;
+    --rim-shadow: none;
+    --connection-color: rgba(150, 160, 175, 0.35);
+  }
+  .canvas[data-material="matte"][data-palette="obsidian"] {
+    --surface: #15151a;
+    --border-color: rgba(255, 255, 255, 0.08);
+    --label-color: #eaeaf0;
+    --sublabel-color: rgba(160, 165, 180, 0.55);
+  }
+  .canvas[data-material="matte"][data-palette="parchment"] {
+    --canvas-bg: #0c0f14;
+    --surface: #cdb98a;            /* aged parchment — warm, muted, mid-light */
+    --border-color: #8a6a3c;       /* tannin */
+    --label-color: #3b2a14;        /* deep tannin — auto-contrast dark text */
+    --sublabel-color: rgba(74, 54, 24, 0.6);
+  }
+
+  /* ═══════════ Node (material-agnostic markup) ═══════════ */
+  .node {
+    position: absolute;
+    width: 185px;
+    height: 110px;
+    cursor: grab;
+    z-index: 1;
+    transition: transform 0.15s ease;
+  }
+  .node:hover { transform: scale(1.02); z-index: 10; }
+  .node:active { cursor: grabbing; }
+
+  .node-surface {
+    position: absolute; inset: 0;
+    border-radius: var(--radius);
+    background: var(--surface);
+    backdrop-filter: blur(var(--surface-blur));
+    -webkit-backdrop-filter: blur(var(--surface-blur));
+    z-index: 1;
+  }
+
+  /* Static scanlines — Terminal only, no animation (perf lock) */
+  .node-scan {
+    position: absolute; inset: 0;
+    border-radius: var(--radius);
+    pointer-events: none; z-index: 2; opacity: 0;
+  }
+  .canvas[data-material="terminal"] .node-scan {
+    opacity: 1;
+    background: repeating-linear-gradient(rgba(0,0,0,0) 0 2px, rgba(0,45,0,0.4) 2px 3px);
+  }
+
+  .node-border {
+    position: absolute; inset: 0;
+    border-radius: var(--radius);
+    border: var(--border-width) solid var(--border-color);
+    box-shadow: var(--rim-shadow);
+    pointer-events: none; z-index: 4;
+  }
+
+  /* Left-edge organizational channel. Each node carries vivid + desaturated
+     colors inline; materials choose which, plus a neon bloom for Terminal. */
+  .node-edge {
+    position: absolute; left: 0; top: 14px; bottom: 14px; width: 4px;
+    border-radius: 2px;
+    background: var(--edge);
+    box-shadow: 0 0 var(--edge-glow) var(--edge);
+    z-index: 3; pointer-events: none;
+  }
+  .canvas[data-material="terminal"] .node-edge {
+    background: var(--edge-desat);
+    box-shadow: 0 0 var(--edge-glow) var(--edge-desat);
+  }
+  .node[data-edge="none"] .node-edge { display: none; }
+
+  /* Corner LED — health. Square for Terminal (--led-shape:0), round otherwise. */
+  .node-led {
+    position: absolute; top: 7px; right: 7px;
+    width: var(--led-size, 14px); height: var(--led-size, 14px);
+    border-radius: var(--led-shape);
+    background: var(--led);
+    box-shadow: 0 0 var(--led-glow) var(--led);
+    z-index: 5; pointer-events: none;
+  }
+  .node[data-health="empty"] { --led: var(--led-empty); }
+  .node[data-health="blue"]  { --led: var(--led-blue); }
+  .node[data-health="green"] { --led: var(--led-green); }
+  .node[data-health="amber"] { --led: var(--led-amber); }
+  .node[data-health="red"]   { --led: var(--led-red); }
+
+  .node-label {
+    position: absolute; bottom: 12px; left: 14px; right: 46px;
+    font-size: 12px; font-weight: 500;
+    color: var(--label-color);
+    font-family: var(--label-font);
+    text-shadow: var(--label-shadow);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    z-index: 5; pointer-events: none; letter-spacing: 0.02em;
+  }
+  .node-sublabel {
+    position: absolute; bottom: 30px; left: 14px;
+    font-size: 9px; font-weight: 400;
+    color: var(--sublabel-color);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    z-index: 5; pointer-events: none;
+  }
+
+  /* ═══════════ Live / Calm energy axis (static) ═══════════ */
+  .canvas[data-energy="calm"] { --led-glow: 2px; }
+  .canvas[data-energy="calm"] .node-edge { box-shadow: none; filter: saturate(0.68) brightness(1.08); }
+  .canvas[data-energy="calm"] .node-led  { opacity: 0.78; }
+  .canvas[data-energy="calm"] .node-label { text-shadow: none; }
+  .canvas[data-energy="calm"][data-material="terminal"] .node-scan { opacity: 0.35; }
+
+  /* ═══════════ Connections ═══════════ */
+  .connections-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+  .connections-layer line { stroke: var(--connection-color); stroke-width: 1.5px; }
+
+  /* ═══════════ Chrome (title / controls / legend) ═══════════ */
+  .title-bar { position: fixed; top: 20px; left: 20px; z-index: 100; }
+  .title-bar h1 { font-size: 16px; font-weight: 600; color: rgba(200,210,240,0.92); letter-spacing: -0.02em; }
+  .title-bar p { font-size: 10px; color: rgba(130,140,170,0.6); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.1em; }
+
+  .controls {
+    position: fixed; top: 20px; right: 20px;
+    background: rgba(16, 18, 28, 0.88);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px; padding: 18px; z-index: 100; width: 250px; font-size: 12px;
+  }
+  .controls h3 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em;
+    color: rgba(160,170,200,0.7); margin-bottom: 10px; font-weight: 500;
+  }
+  .control-group { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .control-group:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+  .control-group label { display: block; font-size: 10px; color: rgba(140,150,175,0.8); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .control-group input[type="range"] { width: 100%; accent-color: rgba(100,140,255,0.8); height: 4px; }
+  .control-value { float: right; font-family: monospace; font-size: 10px; color: rgba(100,140,255,0.7); }
+  .btn-row { display: flex; gap: 4px; flex-wrap: wrap; }
+  .btn {
+    padding: 5px 10px; border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.04); border-radius: 6px;
+    color: rgba(200,205,220,0.85); font-size: 10px; cursor: pointer;
+    transition: all 0.15s ease; font-family: inherit;
+  }
+  .btn:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); }
+  .btn.active { background: rgba(100,140,255,0.15); border-color: rgba(100,140,255,0.4); color: rgba(140,175,255,0.95); }
+  #palette-group.hidden { display: none; }
+
+  .legend { position: fixed; bottom: 20px; left: 20px; z-index: 100; display: flex; gap: 16px; font-size: 10px; color: rgba(140,150,175,0.7); }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .legend-dot.empty { background: rgba(180,180,190,0.5); }
+  .legend-dot.blue  { background: rgba(60,140,255,0.9); }
+  .legend-dot.green { background: rgba(50,205,100,0.9); }
+  .legend-dot.amber { background: rgba(240,180,40,0.9); }
+  .legend-dot.red   { background: rgba(240,60,60,0.9); }
+</style>
+</head>
+<body>
+
+<div class="canvas" id="canvas" data-material="glass" data-palette="obsidian" data-energy="live">
+  <svg class="connections-layer" id="connections"></svg>
+
+  <div class="node" data-health="green" data-edge="blue" style="left: 120px; top: 190px; --edge:#4a90d9; --edge-desat:#6488a8;">
+    <div class="node-surface"></div><div class="node-scan"></div><div class="node-border"></div>
+    <div class="node-edge"></div><div class="node-led"></div>
+    <span class="node-sublabel">component</span><span class="node-label">App.tsx</span>
+  </div>
+
+  <div class="node" data-health="amber" data-edge="orange" style="left: 390px; top: 150px; --edge:#e0922f; --edge-desat:#b8863f;">
+    <div class="node-surface"></div><div class="node-scan"></div><div class="node-border"></div>
+    <div class="node-edge"></div><div class="node-led"></div>
+    <span class="node-sublabel">service</span><span class="node-label">auth.service.ts</span>
+  </div>
+
+  <div class="node" data-health="red" data-edge="orange" style="left: 660px; top: 200px; --edge:#e0922f; --edge-desat:#b8863f;">
+    <div class="node-surface"></div><div class="node-scan"></div><div class="node-border"></div>
+    <div class="node-edge"></div><div class="node-led"></div>
+    <span class="node-sublabel">api</span><span class="node-label">api.handler.ts</span>
+  </div>
+
+  <div class="node" data-health="blue" data-edge="teal" style="left: 250px; top: 370px; --edge:#32c8b4; --edge-desat:#5fa090;">
+    <div class="node-surface"></div><div class="node-scan"></div><div class="node-border"></div>
+    <div class="node-edge"></div><div class="node-led"></div>
+    <span class="node-sublabel">utility</span><span class="node-label">helpers.utils.ts</span>
+  </div>
+
+  <div class="node" data-health="empty" data-edge="purple" style="left: 530px; top: 380px; --edge:#a05adc; --edge-desat:#8a72d6;">
+    <div class="node-surface"></div><div class="node-scan"></div><div class="node-border"></div>
+    <div class="node-edge"></div><div class="node-led"></div>
+    <span class="node-sublabel">types</span><span class="node-label">models.types.ts</span>
+  </div>
+
+  <div class="node" data-health="green" data-edge="none" style="left: 790px; top: 380px; --edge:#888; --edge-desat:#888;">
+    <div class="node-surface"></div><div class="node-scan"></div><div class="node-border"></div>
+    <div class="node-edge"></div><div class="node-led"></div>
+    <span class="node-sublabel">config</span><span class="node-label">env.config.ts</span>
+  </div>
+</div>
+
+<div class="title-bar">
+  <h1>Theme &amp; Material System</h1>
+  <p>Litria Prototype</p>
+</div>
+
+<div class="controls">
+  <h3>Material</h3>
+  <div class="control-group">
+    <div class="btn-row">
+      <button class="btn active" id="m-glass" onclick="setMaterial('glass')">Glass</button>
+      <button class="btn" id="m-terminal" onclick="setMaterial('terminal')">Terminal</button>
+      <button class="btn" id="m-matte" onclick="setMaterial('matte')">Matte</button>
+    </div>
+  </div>
+
+  <div class="control-group hidden" id="palette-group">
+    <label>Matte palette</label>
+    <div class="btn-row">
+      <button class="btn active" id="p-obsidian" onclick="setPalette('obsidian')">Obsidian</button>
+      <button class="btn" id="p-parchment" onclick="setPalette('parchment')">Parchment</button>
+    </div>
+  </div>
+
+  <h3>Energy</h3>
+  <div class="control-group">
+    <div class="btn-row">
+      <button class="btn active" id="e-live" onclick="setEnergy('live')">Live</button>
+      <button class="btn" id="e-calm" onclick="setEnergy('calm')">Calm</button>
+    </div>
+  </div>
+
+  <h3>Health (cycle all)</h3>
+  <div class="control-group">
+    <div class="btn-row">
+      <button class="btn" onclick="setAllHealth('empty')">Empty</button>
+      <button class="btn" onclick="setAllHealth('blue')">Unsaved</button>
+      <button class="btn" onclick="setAllHealth('green')">Clean</button>
+      <button class="btn" onclick="setAllHealth('amber')">Warn</button>
+      <button class="btn" onclick="setAllHealth('red')">Error</button>
+      <button class="btn" onclick="resetHealth()">Reset</button>
+    </div>
+  </div>
+
+  <h3>Tokens</h3>
+  <div class="control-group" style="border-bottom:none; padding-bottom:0;">
+    <label>Corner radius <span class="control-value" id="radius-val">default</span></label>
+    <input type="range" min="0" max="24" value="12" id="radius-slider">
+    <label style="margin-top:10px;">LED size <span class="control-value" id="led-val">14px</span></label>
+    <input type="range" min="10" max="40" value="14" id="led-slider">
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="btn active" id="btn-conn" onclick="toggleConnections()">Connections</button>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot empty"></div> Empty</div>
+  <div class="legend-item"><div class="legend-dot blue"></div> Unsaved</div>
+  <div class="legend-item"><div class="legend-dot green"></div> Clean</div>
+  <div class="legend-item"><div class="legend-dot amber"></div> Warn</div>
+  <div class="legend-item"><div class="legend-dot red"></div> Error</div>
+</div>
+
+<script>
+  const canvas = document.getElementById('canvas');
+
+  // ── Material / palette / energy switches ──
+  function setMaterial(m) {
+    canvas.dataset.material = m;
+    ['glass','terminal','matte'].forEach(x =>
+      document.getElementById('m-' + x).classList.toggle('active', x === m));
+    document.getElementById('palette-group').classList.toggle('hidden', m !== 'matte');
+    clearTokenOverrides();
+    drawConnections();
+  }
+  function setPalette(p) {
+    canvas.dataset.palette = p;
+    ['obsidian','parchment'].forEach(x =>
+      document.getElementById('p-' + x).classList.toggle('active', x === p));
+  }
+  function setEnergy(en) {
+    canvas.dataset.energy = en;
+    ['live','calm'].forEach(x =>
+      document.getElementById('e-' + x).classList.toggle('active', x === en));
+  }
+
+  // ── Health ──
+  const original = {};
+  document.querySelectorAll('.node').forEach((n, i) => { original[i] = n.dataset.health; });
+  function setAllHealth(s) { document.querySelectorAll('.node').forEach(n => n.dataset.health = s); }
+  function resetHealth() { document.querySelectorAll('.node').forEach((n, i) => n.dataset.health = original[i]); }
+
+  // ── Token sliders (inline on canvas → beats material defaults) ──
+  function clearTokenOverrides() {
+    canvas.style.removeProperty('--radius');
+    document.getElementById('radius-val').textContent = 'default';
+  }
+  document.getElementById('radius-slider').addEventListener('input', e => {
+    canvas.style.setProperty('--radius', e.target.value + 'px');
+    document.getElementById('radius-val').textContent = e.target.value + 'px';
+  });
+  document.getElementById('led-slider').addEventListener('input', e => {
+    canvas.style.setProperty('--led-size', e.target.value + 'px');
+    document.getElementById('led-val').textContent = e.target.value + 'px';
+  });
+
+  // ── Connections ──
+  const links = [[0,1],[1,2],[0,3],[3,4],[2,5],[4,5]];
+  let connOn = true;
+  const nodes = [...document.querySelectorAll('.node')];
+  function center(n) { return { x: n.offsetLeft + n.offsetWidth/2, y: n.offsetTop + n.offsetHeight/2 }; }
+  function drawConnections() {
+    const svg = document.getElementById('connections');
+    svg.innerHTML = '';
+    if (!connOn) return;
+    links.forEach(([a, b]) => {
+      const p = center(nodes[a]), q = center(nodes[b]);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', p.x); line.setAttribute('y1', p.y);
+      line.setAttribute('x2', q.x); line.setAttribute('y2', q.y);
+      svg.appendChild(line);
+    });
+  }
+  function toggleConnections() {
+    connOn = !connOn; drawConnections();
+    document.getElementById('btn-conn').classList.toggle('active', connOn);
+  }
+  drawConnections();
+
+  // ── Drag ──
+  let drag = null, off = { x: 0, y: 0 };
+  nodes.forEach(n => n.addEventListener('mousedown', e => {
+    drag = n; off.x = e.clientX - n.offsetLeft; off.y = e.clientY - n.offsetTop; n.style.zIndex = 20;
+  }));
+  document.addEventListener('mousemove', e => {
+    if (!drag) return;
+    drag.style.left = (e.clientX - off.x) + 'px';
+    drag.style.top = (e.clientY - off.y) + 'px';
+    drawConnections();
+  });
+  document.addEventListener('mouseup', () => { if (drag) { drag.style.zIndex = ''; drag = null; } });
+</script>
+</body>
+</html>
