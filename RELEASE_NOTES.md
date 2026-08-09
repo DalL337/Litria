@@ -1,5 +1,80 @@
 # Release Notes
 
+## v1.0.0 — First public release
+
+**Date:** 2026-08-09 (PRs #111–#247)
+
+The first build of Litria published outside the workshop. Litria is a desktop
+IDE that lays your project out as a canvas of connected pieces: files are nodes,
+folders are groups you can see and move, and imports are wires drawn from the
+code itself.
+
+Two long arcs land together here and define how the canvas now behaves —
+**wire routing** that treats the space between nodes as real, and **group
+physicality** that makes folders exist on the canvas instead of implying them.
+
+> **Windows only for this release.** macOS and Linux builds follow. Linux parity
+> has been verified on Fedora 44; the macOS build is pending hardware access.
+> Artifacts are unsigned, so SmartScreen will warn on first run.
+
+---
+
+### What changed
+
+**Wires that respect the space between things (ADR-025)**
+- Wires route **orthogonally around obstacles** instead of passing under nodes. Routing is a single canvas-wide pass, so wires can be spaced against each other rather than each solving its own path in isolation.
+- **Continuous seams**: a wire never under-passes an adjacent node — it follows the corridor between them. Where several wires share a corridor they separate into lanes.
+- Terminals distribute along a shared face so wires converging on one node no longer stack on a single point.
+- Wires crossing a group border enter perpendicular to it, aimed at their node. Wires between two members of the same group route freely inside it.
+- Wires re-anchor to a collapsed group's pill instead of vanishing, and quiet wires hop over loud ones at crossings.
+- Routes are stable by construction: an unrelated change never re-flaps a settled wire.
+
+**Folders and groups are physically real**
+- **Empty folders exist on the canvas.** Creating a group creates a real directory on disk; deleting one deletes it (with confirmation). No ghost groups that exist only in the app's head.
+- Group creation is **name-first**: a preview box appears, you name it, and parentage is decided by where the box sits.
+- Collapsing a group hides its entire subtree, and dragging one carries every descendant with it.
+- Projects opened from an earlier version have their ghost groups **rectified on open** — folders are created to back them, with a one-line notice.
+- Group status LEDs aggregate honestly from every descendant, including collapsed ones.
+
+**Editor**
+- **Split editor panes** with per-tab assignment and node → pane drag.
+- Monaco JSON schema service: `package.json` and `tsconfig.json` validate offline, comments and trailing commas allowed where the format permits.
+
+**Project setup & language servers**
+- **Python project creation** (ADR-020): venv/uv engines, dependency install, and a seeded canvas.
+- **Language-server download manager** (ADR-005): consent-gated installs with progress, cancellation, integrity checks, and uninstall.
+- Bundled servers refreshed — pyright 1.1.411, typescript-language-server 5.3.0, TypeScript 5.9.3.
+- Scaffold runs are **age-gated** against supply-chain risk (ADR-021), with the package npm actually resolves checked rather than the shorthand you typed.
+
+**Preferences, appearance & shell**
+- **Preferences system** (ADR-019): a real settings surface with global and per-project scopes, backed by a central registry that a build guard enforces.
+- Theme, accent, and material pickers with live glass parameters.
+- **Splash screen** (ADR-024) and a launcher that remembers recent projects.
+- **Build trace logs** (#212): capture a build's output to a viewable, exportable log — the first feature driven directly by canary feedback.
+
+**Reliability & safety**
+- All filesystem writes flow through one **write manager** with journaled undo and a cross-volume fallback.
+- Reserved Windows filenames are refused at validation rather than at the syscall.
+- Content-Security-Policy hardened (ADR-023); the security audit's findings are closed.
+- Terminal drawer can hide instead of ending your shell session.
+
+**Engineering**
+- **Five build guards** now enforce architecture, app-shell boundaries, protected UI zones, domain contracts, and settings-key discipline. They are the enforcement of record — see `docs/Orchestration.md`.
+- 1037 JavaScript domain tests and 232 Rust tests.
+- Twenty-five ADRs documenting the decisions behind the above, all in-repo.
+
+---
+
+### What you may need to do
+
+**Nothing.** Existing project databases migrate in place (v1→v3, idempotent).
+
+If you have used a pre-release build, the first open of each project **creates
+real folders** for any groups that previously existed only on the canvas, and
+tells you it did. Groups that already matched a folder are untouched.
+
+---
+
 ## v1.0.0-8 — Crash capture, terminal overhaul & onboarding paths
 
 **Date:** 2026-07-06/07, stamped 2026-07-09 (current development build; PRs #101–#110)
