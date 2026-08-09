@@ -17,8 +17,12 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Existing tag to build and attach artifacts to (e.g. v1.0.0)"
+      ref:
+        description: "Ref to BUILD (tag, branch or SHA). e.g. v1.0.0 or main"
+        required: true
+        type: string
+      release_tag:
+        description: "Release to ATTACH artifacts to. e.g. v1.0.0"
         required: true
         type: string
   push:
@@ -49,10 +53,14 @@ jobs:
             label: windows-x86_64
 
     steps:
-      - name: Checkout ${{ inputs.tag || github.ref_name }}
+      # Build ref and release tag are separate on purpose: a published tag can
+      # need artifacts built from a later commit (e.g. a CI-only or test-only
+      # fix that does not change shipped behaviour). On a tag push both are the
+      # same thing.
+      - name: Checkout ${{ inputs.ref || github.ref_name }}
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ inputs.ref || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -97,15 +105,15 @@ jobs:
       - name: JS domain tests
         run: npm run test:domains
 
-      # First time this suite has ever run outside Windows. The Rust backend
-      # carries platform-conditional code (shell selection, process cleanup,
-      # filesystem sync) that has only been exercised on one OS until now.
-      - name: Rust tests
-        working-directory: src-tauri
-        run: cargo test
-
-      # ConPTY is a Windows-only sideload (tauri.windows.conf.json bundles it;
-      # the other platforms never reference it), so it is staged only there.
+      # Staging MUST precede cargo test: tauri-build runs as this crate's build
+      # script and validates the resource paths declared in tauri.conf.json, so
+      # `cargo test` fails with "failed to run custom build command" when the
+      # runtimes are not staged yet. Windows trips it first because
+      # tauri.windows.conf.json names explicit FILES (conpty.dll,
+      # OpenConsole.exe) rather than directories.
+      #
+      # ConPTY is a Windows-only sideload, so only that platform runs the
+      # combined script; bundle-conpty.mjs has no platform guard of its own.
       - name: Stage bundled runtimes (Windows)
         if: runner.os == 'Windows'
         run: npm run bundle
@@ -115,6 +123,13 @@ jobs:
         run: |
           npm run bundle:node
           npm run bundle:servers
+
+      # First time this suite has ever run outside Windows. The Rust backend
+      # carries platform-conditional code (shell selection, process cleanup,
+      # filesystem sync) that has only been exercised on one OS until now.
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
 
       - name: Build installers
         run: npm run tauri -- build
@@ -142,5 +157,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ inputs.tag || github.ref_name }}" \
+          gh release upload "${{ inputs.release_tag || github.ref_name }}" \
             dist-artifacts/* --clobber --repo "${{ github.repository }}"

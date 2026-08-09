@@ -654,7 +654,13 @@ HKEY_CURRENT_USER\\Software\\Python\\PythonCore\\3.13\\InstallPath
         assert_eq!(parse_python_version_output("zsh: not found"), None);
     }
 
+    // Windows-only: `normalize_path_key` folds case and slashes ONLY on
+    // Windows, because Windows paths are case-insensitive and Unix paths are
+    // not. These two assert that Windows-specific behaviour with Windows path
+    // literals, so they cannot pass elsewhere — and until CI ran on macOS
+    // (2026-08-09) nothing revealed that they were ungated.
     #[test]
+    #[cfg(windows)]
     fn merge_dedups_by_normalized_path_first_source_wins() {
         let report = merge_and_classify(vec![
             entry("C:\\Py\\python.exe", Some("3.13.5"), "uv"),
@@ -665,7 +671,24 @@ HKEY_CURRENT_USER\\Software\\Python\\PythonCore\\3.13\\InstallPath
         assert_eq!(report.interpreters[0].source, "uv");
     }
 
+    /// The Unix half of the same contract: case is SIGNIFICANT off Windows, so
+    /// two paths differing only in case are two different interpreters. Pins
+    /// the platform split that the gated test above only covers one side of.
     #[test]
+    #[cfg(not(windows))]
+    fn merge_keeps_case_distinct_paths_separate_on_unix() {
+        let report = merge_and_classify(vec![
+            entry("/usr/bin/python3", Some("3.13.5"), "uv"),
+            entry("/usr/bin/PYTHON3", Some("3.13"), "registry"),
+            entry("/usr/bin/python3", Some("3.13"), "path"),
+        ]);
+        // First two are distinct paths; the third repeats the first and dedups.
+        assert_eq!(report.interpreters.len(), 2);
+        assert_eq!(report.interpreters[0].source, "uv");
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn merge_excludes_store_alias_from_path_but_trusts_metadata_sources() {
         let report = merge_and_classify(vec![
             entry(
