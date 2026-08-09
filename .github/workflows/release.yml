@@ -45,10 +45,17 @@ jobs:
           # so building on an older base widens the range of distros it runs on.
           - os: ubuntu-22.04
             label: linux-x86_64
-          - os: macos-13
-            label: macos-x86_64
           - os: macos-14
             label: macos-aarch64
+          # Intel Mac is CROSS-COMPILED from the Apple Silicon runner rather
+          # than built on a macos-13 box. GitHub is retiring the Intel runner
+          # pool through 2026, and a macos-13 job here queued 59 minutes
+          # without ever being allocated one (0 steps run). Apple's toolchain
+          # targets both architectures and bundle-node.mjs already honours
+          # TAURI_TARGET_TRIPLE, so the cross build needs no scarce hardware.
+          - os: macos-14
+            label: macos-x86_64
+            rust_target: x86_64-apple-darwin
           - os: windows-latest
             label: windows-x86_64
 
@@ -91,6 +98,10 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add cross-compilation target
+        if: matrix.rust_target != ''
+        run: rustup target add ${{ matrix.rust_target }}
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
@@ -118,8 +129,14 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run bundle
 
+      # TAURI_TARGET_TRIPLE makes bundle-node.mjs fetch Node for the TARGET
+      # architecture instead of the runner's -- otherwise the Intel build would
+      # ship an arm64 Node. Unset on native jobs, where the script falls back to
+      # platform detection (an empty env var is falsy in its check).
       - name: Stage bundled runtimes (macOS / Linux)
         if: runner.os != 'Windows'
+        env:
+          TAURI_TARGET_TRIPLE: ${{ matrix.rust_target }}
         run: |
           npm run bundle:node
           npm run bundle:servers
@@ -132,16 +149,24 @@ jobs:
         run: cargo test
 
       - name: Build installers
-        run: npm run tauri -- build
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            npm run tauri -- build --target "${{ matrix.rust_target }}"
+          else
+            npm run tauri -- build
+          fi
 
       - name: Collect artifacts
         shell: bash
         run: |
           mkdir -p dist-artifacts
-          find src-tauri/target/release/bundle \
+          # A --target build lands in target/<triple>/release/bundle/; a native
+          # one in target/release/bundle/. Match both rather than hardcoding.
+          find src-tauri/target -path '*/release/bundle/*' -type f \
             \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \
                -o -name '*.rpm' -o -name '*-setup.exe' -o -name '*.msi' \) \
-            -type f -exec cp {} dist-artifacts/ \;
+            -exec cp {} dist-artifacts/ \;
           echo "--- collected ---"
           ls -la dist-artifacts/
 
