@@ -20,7 +20,7 @@ physicality** that makes folders exist on the canvas instead of implying them.
 > On macOS, strip the download quarantine with
 > `xattr -dr com.apple.quarantine /Applications/litria.app`.
 >
-> The Windows build is the one that has been used in anger. **macOS and Linux
+> Windows is the build that gets used day to day. **macOS and Linux
 > compile cleanly and pass the full suite in CI, but no human has launched them
 > yet** — this release is the first time those artifacts have existed. Treat
 > them as working-but-unproven.
