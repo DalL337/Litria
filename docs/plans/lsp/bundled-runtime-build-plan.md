@@ -492,9 +492,9 @@ use tauri::AppHandle;
 
 /// Location where extracted bundled runtimes live.
 /// Platform-specific:
-///   Windows: %LOCALAPPDATA%/com.litria.app/runtimes/
-///   macOS:   ~/Library/Application Support/com.litria.app/runtimes/
-///   Linux:   ~/.local/share/com.litria.app/runtimes/
+///   Windows: %LOCALAPPDATA%/com.litria.ide/runtimes/
+///   macOS:   ~/Library/Application Support/com.litria.ide/runtimes/
+///   Linux:   ~/.local/share/com.litria.ide/runtimes/
 fn runtimes_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|p| p.join("runtimes"))
 }

@@ -70,7 +70,7 @@ One JSON file per crash: `~/.litria/logs/crashes/crash-<UTC timestamp>-<layer>.j
 Location rationale:
 - **`~/.litria/` is the emerging "Litria home"** — a per-user data directory created by the
   app (not the installer), distinct from the install dir, from internal app-data
-  (`%LOCALAPPDATA%/com.litria.app/`), and from per-project `<project>/.litria/`. It survives
+  (`%LOCALAPPDATA%/com.litria.ide/`), and from per-project `<project>/.litria/`. It survives
   uninstall/reinstall — exactly what you want for crash evidence from a broken install. The
   extension design already puts its central store at `~/.litria/extensions/`; logs slot in
   beside it. (Naming rhyme with per-project `.litria/` is deliberate — npm/cargo/git use the

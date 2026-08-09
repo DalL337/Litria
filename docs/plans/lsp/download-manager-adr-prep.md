@@ -43,7 +43,7 @@ Recommendation on form: **revise ADR-005 in place and move it to Accepted** (it 
 | C4 | Slice structure: 8 (PRD) vs 7 (build plan) | **Build plan (7) is authoritative** — it's newer and partially executed. Mark the PRD's slice section as superseded by the build plan. |
 | C5 | Installer size target: ≤70 MB (PRD, parent plan) vs ≤120 MB (ADR-004, bundled-runtime plan) | **120 MB** — the 70 MB criteria predate bundling Node. Stale numbers should be edited when the ADR lands. |
 | C6 | Draft's internal args mismatch: generic block says `["--stdio"]`, Go example says `["serve"]` | Non-issue to flag in schema docs: `args` is per-server data, not a convention. (For the record: modern gopls speaks stdio by default; the registry entry should pin whatever launch args we conformance-test.) |
-| C7 | Managed dir: `~/.litria/servers/<language>/` (ADR-005 + all doc comments) vs `app_data_dir()` precedent (code) | **`app_data_dir()/servers/<server_id>/<version>/`** (Windows: `%LOCALAPPDATA%/com.litria.app/servers/...`). Consistent with `runtimes/`, avoids a second config root, and per-user/no-elevation either way. Doc comments in `resolver.rs`/`packs/mod.rs` updated when implemented. |
+| C7 | Managed dir: `~/.litria/servers/<language>/` (ADR-005 + all doc comments) vs `app_data_dir()` precedent (code) | **`app_data_dir()/servers/<server_id>/<version>/`** (Windows: `%LOCALAPPDATA%/com.litria.ide/servers/...`). Consistent with `runtimes/`, avoids a second config root, and per-user/no-elevation either way. Doc comments in `resolver.rs`/`packs/mod.rs` updated when implemented. |
 
 ---
 

@@ -11,13 +11,25 @@ fn app_db_lock() -> &'static Mutex<Option<Connection>> {
     APP_DB.get_or_init(|| Mutex::new(None))
 }
 
+/// The app-data folder name. MUST stay identical to `identifier` in
+/// `src-tauri/tauri.conf.json`.
+///
+/// Two resolvers reach app data: this one (crash state, preferences, managed
+/// language servers, the app DB) and Tauri's own `app.path().app_data_dir()`,
+/// which `bundled_runtime.rs` uses for staged Node. Tauri derives its path from
+/// the config identifier; this one is a literal. They agree only while the two
+/// strings match — change one without the other and the app silently keeps
+/// state in two directories. Kept as a single constant so the four platform
+/// branches below cannot drift apart independently.
+pub(crate) const APP_DATA_DIR_NAME: &str = "com.litria.ide";
+
 /// Platform-appropriate app data directory for Litria.
 /// Also used by the crash system for its internal state (markers/mirrors).
 pub(crate) fn app_data_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
         std::env::var("LOCALAPPDATA")
-            .map(|p| PathBuf::from(p).join("com.litria.app"))
+            .map(|p| PathBuf::from(p).join(APP_DATA_DIR_NAME))
             .map_err(|_| "Cannot determine LOCALAPPDATA.".to_string())
     }
     #[cfg(target_os = "macos")]
@@ -27,27 +39,19 @@ pub(crate) fn app_data_dir() -> Result<PathBuf, String> {
                 PathBuf::from(p)
                     .join("Library")
                     .join("Application Support")
-                    .join("com.litria.app")
+                    .join(APP_DATA_DIR_NAME)
             })
             .map_err(|_| "Cannot determine HOME.".to_string())
     }
     #[cfg(target_os = "linux")]
     {
-        std::env::var("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                PathBuf::from(home).join(".local").join("share")
-            })
-            .join("com.litria.app");
-        // Re-do to return Result
         Ok(std::env::var("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
                 PathBuf::from(home).join(".local").join("share")
             })
-            .join("com.litria.app"))
+            .join(APP_DATA_DIR_NAME))
     }
 }
 

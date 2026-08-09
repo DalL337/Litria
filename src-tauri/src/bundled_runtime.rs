@@ -23,9 +23,9 @@ use crate::lsp::packs::versions;
 /// Where extracted bundled runtimes live.
 ///
 /// Platform-specific:
-///   Windows: `%LOCALAPPDATA%/com.litria.app/runtimes/node/`
-///   macOS:   `~/Library/Application Support/com.litria.app/runtimes/node/`
-///   Linux:   `~/.local/share/com.litria.app/runtimes/node/`
+///   Windows: `%LOCALAPPDATA%/com.litria.ide/runtimes/node/`
+///   macOS:   `~/Library/Application Support/com.litria.ide/runtimes/node/`
+///   Linux:   `~/.local/share/com.litria.ide/runtimes/node/`
 pub(crate) fn extracted_node_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|p| p.join("runtimes").join("node"))
 }
