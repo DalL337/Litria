@@ -20,6 +20,34 @@ big picture inside a file tree.
 
 ---
 
+## Download
+
+### **[⬇ Get the latest release](https://github.com/DalL337/Litria/releases/latest)**
+
+| Platform | What to grab |
+|---|---|
+| **Windows** x64 | `litria_<version>_x64-setup.exe` — recommended. `.msi` also available for managed installs. |
+| **macOS** Apple Silicon | `litria_<version>_aarch64.dmg` |
+| **Linux** x86_64 | `litria_<version>_amd64.AppImage` (portable, no root), or `.deb` / `.rpm` |
+
+Builds are **unsigned**, so your OS will object the first time:
+
+- **Windows** — SmartScreen warns: *More info → Run anyway*.
+- **macOS** — unsigned and un-notarized, so macOS often claims the app is *"damaged"*. It isn't. After dragging Litria to Applications:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/litria.app
+  ```
+  That strips the download-quarantine flag. It does not disable Gatekeeper.
+- **Linux (AppImage)** — `chmod +x litria_<version>_amd64.AppImage` then run it.
+
+> **Windows is the build that gets used daily.** The macOS and Linux builds compile
+> and pass the full test suite in CI, but have not yet been launched by a human.
+> They should work — please tell us when they don't.
+
+Prefer to build it yourself? Jump to [Getting into it](#getting-into-it).
+
+---
+
 ## What's working in this beta
 
 - Infinite canvas with puzzle-piece architecture
@@ -50,8 +78,9 @@ This is a real beta. Things will break. Here's what matters most right now:
 4. **Contribute:** read [CONTRIBUTING.md](CONTRIBUTING.md). The architecture 
    is documented and guarded.
 
-Roadmap feedback is welcome in [Discussions](#). We want to know what you'd 
-build with this.
+Roadmap feedback is welcome in
+[Discussions](https://github.com/DalL337/Litria/discussions). We want to know
+what you'd build with this.
 
 ---
 
