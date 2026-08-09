@@ -6,16 +6,31 @@ version bumps, bundling, release builds. Moved here from AGENTS.md §8
 
 ## Rule 1 — Versioning Scheme
 
-One version string kept in sync across three files, updated in the same
+One version string kept in sync across **six** locations, updated in the same
 commit on every bump:
 
-- `version` in `tauri.conf.json`
 - `version` in `package.json`
+- `version` in `package-lock.json` — **two occurrences** (root and `packages[""]`)
+- `version` in `src-tauri/tauri.conf.json`
 - `version` in `src-tauri/Cargo.toml`
+- `version` in `src-tauri/Cargo.lock` (the `litria` package entry)
+- the `**Version**:` banner in `docs/CAPABILITIES.md`
+
+> Corrected 2026-08-09: this rule previously named only the three hand-edited
+> files. The lockfiles and the CAPABILITIES banner carry the version too, and a
+> bump that follows the old list literally ships with three locations stale.
+> Verify with a repo-wide search for the OLD version string before committing —
+> zero hits outside `.research/` is the gate.
 
 Format: `major.minor.patch-N` where `N` is the numeric MVP iteration
 (e.g. `1.0.0-8`). Valid semver, MSI-compatible — Tauri derives the Windows
 product version from it directly; no separate `productVersion` override.
+
+**Bare `1.0.0` was reserved for the square-one public flip** (owner ruling
+2026-08-01: the version milestone and the identity firewall land together) and
+was spent on that flip, 2026-08-09. The `-N` suffix resumes for iterations after
+a release: the next development series is `1.0.1-1`, `1.0.1-2`, … with the bare
+patch/minor reserved for what actually ships.
 
 Version bumps land last: merge code branches first, push docs/plans, bump
 after release scope is locked (see AGENTS.md git policy §7.5).
