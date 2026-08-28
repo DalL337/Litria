@@ -291,9 +291,119 @@ fn download_to(
 // Extraction (verify happened FIRST — callers enforce the order)
 // ---------------------------------------------------------------------------
 
+/// Ceiling on what one artifact may expand to. `MAX_ARTIFACT_BYTES` caps the
+/// *compressed* download and bounds nothing about disk: deflate reaches ~1000:1
+/// on crafted input, so a well-behaved 10 MiB download can still ask for
+/// hundreds of GiB on extraction. clangd, the largest real artifact, expands to
+/// a few hundred MiB, so this leaves ample headroom.
+const MAX_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Ceiling on archive entries. A "many tiny files" archive exhausts inodes and
+/// directory space long before it troubles a byte budget.
+const MAX_ARCHIVE_ENTRIES: usize = 50_000;
+
+/// A reader that fails once it has produced more than `limit` bytes.
+///
+/// Deliberately not `Read::take`, which reports a clean EOF at the limit: gzip
+/// and tar would read that as a truncated-but-complete stream and we would
+/// install a silently half-extracted server. An error is the only honest
+/// outcome, and it propagates to the caller that removes the partial directory.
+struct BoundedRead<R> {
+    inner: R,
+    limit: u64,
+    seen: u64,
+}
+
+impl<R: Read> BoundedRead<R> {
+    fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            limit,
+            seen: 0,
+        }
+    }
+}
+
+impl<R: Read> Read for BoundedRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.seen += n as u64;
+        if self.seen > self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "archive expands past the {} MiB limit",
+                    self.limit / (1024 * 1024)
+                ),
+            ));
+        }
+        Ok(n)
+    }
+}
+
+/// Decompress every zip entry to a sink — no disk writes — purely to learn what
+/// the archive ACTUALLY expands to before a single byte lands.
+///
+/// The entries' declared uncompressed sizes cannot be used for this: zip 2.4.2
+/// bounds an entry reader with `.take(compressed_size)` (`read.rs:347`), so the
+/// declared uncompressed size is never enforced during extraction and a crafted
+/// archive is free to under-report it.
+///
+/// Measuring first, then calling the crate's own `extract`, keeps zip-slip
+/// protection, symlink handling, and the unix-mode pass exactly as audited
+/// (2026-07-16) rather than re-implementing them around a byte counter. The
+/// cost is decompressing twice; for a legitimate artifact that is well under a
+/// second, and a bomb is abandoned as soon as it crosses the budget.
+fn ensure_zip_expansion_is_bounded(archive: &Path) -> Result<(), String> {
+    ensure_zip_expansion_within(archive, MAX_EXPANDED_BYTES, MAX_ARCHIVE_ENTRIES)
+}
+
+/// Limits are parameters so tests can prove the refusal with a small archive
+/// instead of manufacturing a real gigabyte.
+fn ensure_zip_expansion_within(
+    archive: &Path,
+    max_bytes: u64,
+    max_entries: usize,
+) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| format!("opening archive: {e}"))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("reading zip: {e}"))?;
+
+    if zip.len() > max_entries {
+        return Err(format!(
+            "archive declares {} entries, over the {max_entries} limit — refusing to extract",
+            zip.len()
+        ));
+    }
+
+    let mut total: u64 = 0;
+    for i in 0..zip.len() {
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| format!("reading zip entry {i}: {e}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        // `max_bytes - total` cannot underflow: an entry never contributes more
+        // than the budget left, so `total` tops out at `max_bytes` exactly.
+        let mut bounded = BoundedRead::new(&mut entry, max_bytes - total);
+        let written = std::io::copy(&mut bounded, &mut std::io::sink()).map_err(|_| {
+            format!(
+                "archive expands past the {} MiB limit — refusing to extract",
+                max_bytes / (1024 * 1024)
+            )
+        })?;
+        total += written;
+    }
+    Ok(())
+}
+
 /// Extract an archive into `dest_dir` based on the URL/file extension:
 /// `.zip` (Windows + clangd all-platform), single-file `.gz`
 /// (rust-analyzer unix), `.tar.gz`/`.tgz` (future entries).
+///
+/// Every path is bounded against decompression bombs. On refusal the error
+/// propagates to `install_server`, whose `cleanup(Some(&version_dir))` removes
+/// the partially written directory.
 fn extract_archive(
     archive: &Path,
     url: &str,
@@ -305,12 +415,24 @@ fn extract_archive(
 
     let lower = url.to_ascii_lowercase();
     if lower.ends_with(".zip") {
+        // Measure before writing (see above — declared sizes are attacker
+        // controlled), then extract through the crate's audited path unchanged.
+        ensure_zip_expansion_is_bounded(archive)?;
         let file = std::fs::File::open(archive).map_err(|e| format!("opening archive: {e}"))?;
         let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("reading zip: {e}"))?;
         zip.extract(dest_dir).map_err(|e| format!("extracting zip: {e}"))?;
     } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        // Streaming formats need no measure pass: bounding the decompressed
+        // stream bounds what `unpack` can ever write.
+        //
+        // Byte-bounded only. A tar of millions of empty files stays small in
+        // bytes while being large in entries; `unpack()` gives no entry hook
+        // without hand-rolling per-entry extraction, which would put this path's
+        // traversal safety back in our hands. No current artifact uses tar (zip
+        // for Windows + clangd, single .gz for rust-analyzer unix), so the
+        // trade holds until one does.
         let file = std::fs::File::open(archive).map_err(|e| format!("opening archive: {e}"))?;
-        let tar = flate2::read::GzDecoder::new(file);
+        let tar = BoundedRead::new(flate2::read::GzDecoder::new(file), MAX_EXPANDED_BYTES);
         tar::Archive::new(tar)
             .unpack(dest_dir)
             .map_err(|e| format!("extracting tar.gz: {e}"))?;
@@ -318,7 +440,8 @@ fn extract_archive(
         // Single compressed binary (rust-analyzer's unix artifacts): the
         // decompressed file IS the server, named after the pack command.
         let file = std::fs::File::open(archive).map_err(|e| format!("opening archive: {e}"))?;
-        let mut decoder = flate2::read::GzDecoder::new(file);
+        let mut decoder =
+            BoundedRead::new(flate2::read::GzDecoder::new(file), MAX_EXPANDED_BYTES);
         let out_path = dest_dir.join(command);
         let mut out =
             std::fs::File::create(&out_path).map_err(|e| format!("creating binary: {e}"))?;
@@ -901,6 +1024,77 @@ mod tests {
             download_agent().config().https_only(),
             "artifact downloads must refuse any non-https hop, redirects included"
         );
+    }
+
+    #[test]
+    fn bounded_read_allows_exactly_the_limit_and_fails_past_it() {
+        let data = vec![7u8; 100];
+        let mut ok = BoundedRead::new(&data[..], 100);
+        assert_eq!(
+            std::io::copy(&mut ok, &mut std::io::sink()).unwrap(),
+            100,
+            "a stream exactly at the limit is legitimate and must pass"
+        );
+
+        let mut over = BoundedRead::new(&data[..], 99);
+        let err = std::io::copy(&mut over, &mut std::io::sink()).unwrap_err();
+        // Must be an error, never a silent EOF: gzip and tar would read a
+        // truncated-but-clean stream as a successful extraction.
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// Builds a real (small) decompression bomb: highly compressible input that
+    /// expands far past the budget it is measured against.
+    #[test]
+    fn zip_guard_refuses_an_archive_that_expands_past_the_budget() {
+        let root = temp_dir("zipbomb");
+        let archive = root.join("bomb.zip");
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file("payload.bin", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        // 4 MiB of zeros deflates to a few KiB — the ratio is the whole point.
+        writer.write_all(&vec![0u8; 4 * 1024 * 1024]).unwrap();
+        writer.finish().unwrap();
+
+        let compressed = std::fs::metadata(&archive).unwrap().len();
+        assert!(
+            compressed < 64 * 1024,
+            "fixture must actually be a bomb, compressed to {compressed} bytes"
+        );
+
+        // The declared size is not what saves us — the guard measures real
+        // output — so a budget below the true expansion must refuse.
+        let err = ensure_zip_expansion_within(&archive, 1024 * 1024, MAX_ARCHIVE_ENTRIES)
+            .expect_err("4 MiB of output must not pass a 1 MiB budget");
+        assert!(err.contains("expands past"), "got {err}");
+
+        // Same archive, honest budget: allowed.
+        assert!(ensure_zip_expansion_within(&archive, 8 * 1024 * 1024, MAX_ARCHIVE_ENTRIES).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn zip_guard_refuses_too_many_entries() {
+        let root = temp_dir("zipcount");
+        let archive = root.join("many.zip");
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        for i in 0..10 {
+            writer
+                .start_file(format!("f{i}.txt"), zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"x").unwrap();
+        }
+        writer.finish().unwrap();
+
+        // Tiny in bytes, over budget in entries — the case a byte cap misses.
+        let err = ensure_zip_expansion_within(&archive, MAX_EXPANDED_BYTES, 5)
+            .expect_err("10 entries must not pass a 5-entry limit");
+        assert!(err.contains("entries"), "got {err}");
+        assert!(ensure_zip_expansion_within(&archive, MAX_EXPANDED_BYTES, 50).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
