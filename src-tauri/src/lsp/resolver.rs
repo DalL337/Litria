@@ -173,11 +173,25 @@ fn probe_global(pack: &LanguagePack) -> Option<ResolvedCommand> {
         return None;
     }
 
-    // For global-tier resolution, the executable is just the command name.
-    // The transport layer's existing Windows .cmd→node resolution and Unix
-    // direct-exec logic handles the rest.
+    // Global tier hands back the ABSOLUTE file the probe just proved â never the
+    // bare name. The server is spawned with cwd = the user's project root, and
+    // Windows command lookup searches that directory BEFORE PATH: a bare name
+    // would let a `rust-analyzer.exe`/`.bat`/`.cmd` committed to an untrusted
+    // repository win over the executable this probe verified, which is remote
+    // code execution from merely opening a project (CWE-426, external scan
+    // 2026-08-27). Resolving here keeps probe and spawn pointed at one file.
+    //
+    // Unix needs no equivalent: `execvp` searches PATH only and never the
+    // working directory, so the bare name cannot be shadowed by project
+    // contents. Resolution failure falls through to the managed tier rather
+    // than spawning something unproven â an install pill is the safe failure.
+    #[cfg(windows)]
+    let executable = absolute_path_on_path(command)?;
+    #[cfg(not(windows))]
+    let executable = PathBuf::from(command);
+
     Some(ResolvedCommand {
-        executable: PathBuf::from(command),
+        executable,
         prefix_args: vec![],
         tier: ResolutionTier::Global,
     })
@@ -346,6 +360,35 @@ fn probe_bundled(pack: &LanguagePack, app: &AppHandle) -> Option<ResolvedCommand
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Windows: resolve a PATH command name to the absolute file that a launch
+/// from THIS process's working directory would pick. `where` lists candidates
+/// in search order, so the first line is that file.
+///
+/// This exists so the global tier can spawn an exact path instead of a bare
+/// name (see `probe_global`). It is deliberately called from Litria's own cwd,
+/// never the project root, so an untrusted project cannot influence the answer.
+#[cfg(windows)]
+fn absolute_path_on_path(command: &str) -> Option<PathBuf> {
+    let output = Command::new("where")
+        .arg(command)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let first = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    if first.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(first);
+    path.is_file().then_some(path)
+}
+
 /// Return true if the given command name can be found by the OS.
 ///
 /// On Windows: `where <command>` (exits 0 if found).
@@ -422,8 +465,33 @@ mod tests {
             let resolved = resolved.unwrap();
             assert_eq!(resolved.tier, ResolutionTier::Global);
             assert!(resolved.prefix_args.is_empty());
+            // Regression (CWE-426, external scan 2026-08-27): a bare command
+            // name here is spawned with cwd = the untrusted project root, and
+            // Windows resolves it against that directory first. The global
+            // tier must therefore commit to an absolute file.
+            #[cfg(windows)]
+            assert!(
+                resolved.executable.is_absolute(),
+                "global tier must resolve to an absolute path, got {:?}",
+                resolved.executable
+            );
         }
         // If not installed, that's fine — the test validates logic, not dev env.
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn absolute_path_on_path_resolves_node_to_a_real_file() {
+        // Node is a dev prerequisite, so this must resolve in any dev env.
+        let resolved = absolute_path_on_path("node").expect("node must be on PATH");
+        assert!(resolved.is_absolute(), "got {resolved:?}");
+        assert!(resolved.is_file(), "got {resolved:?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn absolute_path_on_path_returns_none_for_nonexistent() {
+        assert!(absolute_path_on_path("__litria_nonexistent_command_42__").is_none());
     }
 
     #[test]

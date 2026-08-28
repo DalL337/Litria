@@ -163,8 +163,16 @@ pub(crate) fn spawn_server(
         ResolutionTier::Global => {
             // Global tier: preserve existing Windows .cmd resolution to avoid
             // cmd.exe buffering in the stdio pipe chain.
+            //
+            // Both arms spawn `resolved.executable` — the resolver owns which
+            // file runs. On Unix that is normally the bare command name (execvp
+            // searches PATH, never the cwd, so it cannot be shadowed by project
+            // contents), but for the GOPATH fallback it is an absolute path to a
+            // gopls that is deliberately NOT on PATH — which the old
+            // `Command::new(pack.command)` here threw away, guaranteeing a spawn
+            // failure for exactly the case `probe_gopath_bin` exists to serve.
             #[cfg(not(windows))]
-            { Command::new(pack.command) }
+            { Command::new(&resolved.executable) }
             #[cfg(windows)]
             {
                 match resolve_cmd_to_node(pack.command) {
@@ -174,10 +182,18 @@ pub(crate) fn spawn_server(
                         c
                     }
                     None => {
-                        // Fallback: try cmd /C for non-npm executables
-                        let mut c = Command::new("cmd");
-                        c.arg("/C").arg(pack.command);
-                        c
+                        // Native servers (rust-analyzer, clangd, gopls). This
+                        // was `cmd /C <bare name>`, which let cmd.exe resolve
+                        // the name against the CHILD's working directory — the
+                        // untrusted project root, searched ahead of PATH — so a
+                        // `rust-analyzer.bat` committed to a repo would run
+                        // instead of the probed binary (CWE-426, external scan
+                        // 2026-08-27). `resolved.executable` is the absolute
+                        // file `probe_global` proved, so spawn exactly that.
+                        // std::process runs a `.cmd`/`.bat` target itself, with
+                        // correct argument escaping since Rust 1.77.2, so shims
+                        // keep working without our own cmd /C.
+                        Command::new(&resolved.executable)
                     }
                 }
             }
@@ -584,6 +600,68 @@ mod tests {
     // -- .cmd → node resolver traversal guard (audit #4, Windows-only) --
 
     #[cfg(windows)]
+    /// Demonstrates the exact OS behavior CWE-426 depended on, and that the
+    /// fix closes it. Spawning a BARE name with cwd set to an untrusted
+    /// project root runs the project's file; spawning the resolver's ABSOLUTE
+    /// path from that same cwd does not. If someone ever reverts the global
+    /// tier to `cmd /C <bare name>`, the first half of this test is what the
+    /// attacker gets.
+    #[cfg(windows)]
+    #[test]
+    fn absolute_spawn_ignores_a_shadowing_binary_in_the_project_root() {
+        use std::process::Command;
+
+        let base = std::env::temp_dir().join(format!("litria_hijack_{}", std::process::id()));
+        let hostile = base.join("hostile_project");
+        let trusted = base.join("trusted_bin");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&hostile).unwrap();
+        std::fs::create_dir_all(&trusted).unwrap();
+
+        // Same stem in both places - this is the shadowing setup.
+        let stem = "litria_probe_server";
+        std::fs::write(hostile.join(format!("{stem}.bat")), "@echo HIJACKED
+").unwrap();
+        let trusted_bat = trusted.join(format!("{stem}.bat"));
+        std::fs::write(&trusted_bat, "@echo TRUSTED
+").unwrap();
+
+        // The vulnerable shape: bare name + untrusted cwd. cmd.exe searches
+        // the working directory before PATH, so the repo's file wins.
+        //
+        // `env_remove` mirrors what `spawn_server` actually hands the child.
+        // cmd.exe honours `NoDefaultCurrentDirectoryInExePath` by skipping the
+        // cwd search, and some shells (Git Bash among them) set it - which
+        // silently shields a developer running the tests. But `spawn_server`
+        // calls `env_clear()` and re-adds only four variables, so the real LSP
+        // child never inherits it: the hardening that builds a clean
+        // environment is precisely what strips this protection. Removing it
+        // here makes the test reproduce the app, not the dev shell.
+        let vulnerable = Command::new("cmd")
+            .arg("/C")
+            .arg(stem)
+            .current_dir(&hostile)
+            .env_remove("NoDefaultCurrentDirectoryInExePath")
+            .output()
+            .expect("cmd spawn");
+        assert!(
+            String::from_utf8_lossy(&vulnerable.stdout).contains("HIJACKED"),
+            "precondition: a bare-name launch must pick up the project's file,              otherwise this test is not exercising the hazard it guards"
+        );
+
+        // The fixed shape: the absolute file the probe proved, same cwd.
+        let safe = Command::new(&trusted_bat)
+            .current_dir(&hostile)
+            .env_remove("NoDefaultCurrentDirectoryInExePath")
+            .output()
+            .expect("absolute spawn");
+        let out = String::from_utf8_lossy(&safe.stdout);
+        assert!(out.contains("TRUSTED"), "expected TRUSTED, got {out:?}");
+        assert!(!out.contains("HIJACKED"), "absolute path was still shadowed");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn cmd_resolver_rejects_traversal_outside_dp0() {
         use std::fs;
