@@ -111,7 +111,28 @@ pub(crate) fn validate_project_name(name: &str) -> Result<&str, CommandError> {
             "Project name cannot be a relative path segment.",
         ));
     }
-    const FORBIDDEN: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    // Two classes here, both refused:
+    //
+    // * Path/Win32 illegal characters, which would escape the chosen location
+    //   or fail outright as a folder segment.
+    // * cmd.exe metacharacters. The name is not only a directory -- the
+    //   scaffold runner passes it as an argument to `cmd /C <pm> create ...`
+    //   on the Windows global package-manager path, and cmd re-parses the
+    //   whole command line. Verified live 2026-08-27: `cmd /C show demo&marker`
+    //   prints `ARG=[demo]` and then executes marker.bat, i.e. the name
+    //   terminates the package-manager command and starts another program
+    //   (CWE-78, external scan). `%` and `!` expand variables, `^` escapes,
+    //   `()` group. Rust's own quoting does not save us here: it quotes an
+    //   argument only when it contains whitespace or quotes, and cmd.exe does
+    //   not follow MSVCRT parsing rules anyway.
+    //
+    // This is the blocklist half of the fix, and it is sufficient for the one
+    // user-controlled value in that argv. The structural half -- resolving the
+    // package-manager shim to an absolute path so cmd.exe never re-parses at
+    // all, the way lsp/resolver.rs now does -- is the better long-term shape.
+    const FORBIDDEN: &[char] = &[
+        '/', '\\', ':', '*', '?', '"', '<', '>', '|', '&', '^', '(', ')', '%', '!',
+    ];
     if trimmed.chars().any(|c| FORBIDDEN.contains(&c) || c.is_control()) {
         return Err(CommandError::invalid_path(
             "blank_project.name.invalid",
@@ -290,6 +311,34 @@ mod tests {
         // Names that merely CONTAIN a reserved word are fine.
         assert!(validate_project_name("console").is_ok());
         assert!(validate_project_name("communal").is_ok());
+    }
+
+    #[test]
+    fn name_validation_rejects_cmd_metacharacters() {
+        // The name reaches `cmd /C <pm> create ...` as an argument on the
+        // Windows global package-manager path, and cmd re-parses the line.
+        // `demo&calc` is the report's own proof-of-concept (CWE-78).
+        assert!(validate_project_name("demo&calc").is_err());
+        assert!(validate_project_name("demo&calc&").is_err());
+        // Every other cmd construct that can alter parsing.
+        for name in [
+            "a^b",      // escape
+            "a(b)",     // grouping
+            "a%PATH%b", // variable expansion
+            "a!DELAYED!b",
+        ] {
+            assert!(
+                validate_project_name(name).is_err(),
+                "{name} must be refused as a cmd metacharacter carrier"
+            );
+        }
+        // Ordinary names stay valid — the tightening must not eat real ones.
+        for name in ["my-app", "my_app", "My App 2", "app.v2", "café", "проект"] {
+            assert!(
+                validate_project_name(name).is_ok(),
+                "{name} is an ordinary folder name and must remain valid"
+            );
+        }
     }
 
     /// Unconditional temp-dir cleanup — assert failures must not leak
