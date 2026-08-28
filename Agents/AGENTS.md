@@ -139,9 +139,22 @@ Each coherent unit of work gets its own new branch, opened from `main`.
    the current branch is anything other than `main` and the user has not
    explicitly said "use the current branch," **stop and ask** before staging.
 
-4. **Branches are short-lived.** Open PR → review → merge → delete the branch.
-   Once a branch's PR has merged, that branch is done — start a new branch off
-   the freshly-updated `main` for the next unit of work.
+4. **Branches are retained after merge.** Open PR → review → merge → **leave
+   the branch in place**, locally and on the remote. (Owner directive,
+   2026-08-27; this rule previously ended in "delete the branch".) A merged
+   branch is cheap and keeps the shipped unit addressable by name.
+
+   **Retention removes a guardrail, so the rule it used to enforce now has to
+   stand on its own: a merged branch is CLOSED for new work.** Deletion made
+   reuse physically impossible. Now the branch is still sitting there — very
+   possibly still checked out, since merging no longer forces a switch — and
+   nothing but this rule stops the next commit landing on it. That commit is
+   precisely the orphan described in "Why this rule exists" below: it never
+   reaches `main`, and `main` may break because the merged code references it.
+
+   Before staging anything, confirm the current branch has not already
+   shipped: `gh pr list --state merged --head "$(git branch --show-current)"`.
+   Any output means stop and branch off a freshly-pulled `main`.
 
 5. **Allowed exceptions** (where reusing the existing branch is correct):
    - In-review PR feedback: changes requested by reviewers go on the same
@@ -191,7 +204,10 @@ Group changes by intent:
 - Confirm branch context (`git branch --show-current`).
 - **Verify the branch is appropriate for this work.** If the current branch
   was used for a previously-merged or unrelated unit, stop and create a new
-  branch off `main` per §7.1.
+  branch off `main` per §7.1. Since merged branches are now retained (§7.1
+  rule 4), "it already shipped" is no longer visible from the branch simply
+  existing — check it:
+  `gh pr list --state merged --head "$(git branch --show-current)"`.
 - Review staged files (`git status --short`).
 - Ensure commit scope matches file set — and after committing, verify the
   files-changed count in the commit output (verification-policy Rule 3).
