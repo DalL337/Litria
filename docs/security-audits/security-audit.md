@@ -1,9 +1,11 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-08-27 — external automated scan (CodeRabbit), issues
-> 15–21. Sink-reachability pass, `src-tauri/` only; see that section's scope
-> note for what it does not cover. HEAD `0210780`.
+> **Last reviewed**: 2026-08-28 — external-scan remediation round 2 (PR #3):
+> review-of-the-review corrections to issues 17 and 20, plus refreshed npm and
+> cargo scans. Preceded by the 2026-08-27 external automated scan (CodeRabbit),
+> issues 15–21 — a sink-reachability pass over `src-tauri/` only; see that
+> section's scope note for what it does not cover.
 > **Last whole-repo pass**: 2026-07-16
 > **Scope (whole-repo pass)**: Tauri config/CSP, IPC command surface, ADR-005
 > download manager (pins/SHA/extraction), ADR-021 scaffold runner, ADR-020
@@ -15,12 +17,16 @@
 
 ## Dependency Supply Chain
 
-### npm (312 deps: 100 prod / 211 dev / 86 optional)
-- [ ] **1 low** — last scanned 2026-07-16 (HEAD `72c18fe`). `@babel/core`
-  `<=7.29.0` arbitrary file read via `sourceMappingURL` (GHSA-4x5r-pxfx-6jf8,
-  CVSS 3.2, CWE-22/200). **Dev dependency**, `fixAvailable: true`. Non-material
-  to the shipped app; clear with `npm audit fix` at convenience.
-- History: 2026-03-28 scanned 0 vulns across 263 packages.
+### npm (234 packages audited)
+- [x] **0 vulnerabilities — rescanned 2026-08-28.** Production-only
+  (`npm audit --omit=dev`) was already 0; the full tree carried **1 high**,
+  `nanoid <3.3.18` (GHSA-2v37-7h3g-55p8 — custom generators loop indefinitely
+  when size is zero). Dev-only and non-material to the shipped app, but High and
+  a one-line lockfile fix, so it was cleared rather than tracked: `npm audit fix`
+  moved nanoid to 3.3.18 (3 lines of `package-lock.json`, `package.json`
+  untouched; 1037 JS tests + 5 guards re-run green). **npm audit = 0.**
+- History: 2026-07-16 carried 1 low (`@babel/core` GHSA-4x5r-pxfx-6jf8), cleared
+  by `npm audit fix` in PR #152. 2026-03-28 scanned 0 vulns across 263 packages.
 
 ### Cargo (552 crate dependencies)
 - [ ] **2 HIGH vulnerabilities (NEW 2026-07-16)** — `quick-xml 0.38.4`:
@@ -33,7 +39,13 @@
     ships a plist bump. Runtime reachability is low (plist parses Apple XML plists,
     macOS-centric; the codegen path runs at build time), but advisory severity is
     High. **Unblocks on:** Tauri/plist upstream release. Re-check each Tauri bump.
-- [ ] **21 upstream warnings** (was 18) — unmaintained/unsound transitive deps.
+  - **Rescanned 2026-08-28: unchanged.** Both advisories still present, still
+    `plist`-blocked. `cargo audit` reports "2 vulnerabilities found".
+- [ ] **22 upstream warnings** (was 21 at 2026-07-16, 18 before that) —
+  unmaintained/unsound transitive deps. **New at the 2026-08-28 rescan:**
+  `fxhash` unmaintained (RUSTSEC-2025-0057), transitive via the Tauri/GTK tree.
+  All still blocked upstream; the list below is the 2026-07-16 breakdown.
+- [ ] *(2026-07-16 breakdown)* 21 upstream warnings — unmaintained/unsound deps.
   Unchanged-and-blocked GTK3 (`atk/gdk/gtk*` RUSTSEC-2024-041x), `unic-*`,
   `glib 0.18.5` (RUSTSEC-2024-0429). **New since 2026-03-28:** `anyhow 1.0.100`
   unsound (RUSTSEC-2026-0190), `rand 0.7.3`+`0.8.5` unsound (RUSTSEC-2026-0097,
@@ -97,13 +109,16 @@ the finding was first raised.
 
 - [x] **#15** — `https_only(true)` agent for artifact downloads, so a redirect
   cannot step down to cleartext. *(2026-08-27)* — ✅ **`f898055`, branch
-  `security/scan-hardening-2026-08-27`, pending PR.**
+  `security/scan-hardening-2026-08-27`, merged PR #1.**
 - [x] **#17** — Global LSP tier resolves to an absolute path; both transport arms
-  spawn it. *(2026-08-27)* — ✅ **`271139c` (+ `0fb6e80` diagnostic log), pending PR.**
+  spawn it. *(2026-08-27)* — ✅ **`271139c` (+ `0fb6e80` log), merged PR #1; scope
+  corrected to Unix in PR #3 — see the ISSUE 17 erratum.**
 - [x] **#18** — cmd metacharacters (`& ^ ( ) % !`) added to the shared
-  `validate_project_name` blocklist. *(2026-08-27)* — ✅ **`f13ae4e`, pending PR.**
-- [x] **#20** — Bound archive expansion (1 GiB / 50k entries), measured not
-  declared. *(2026-08-27)* — ✅ **`630bba8`, pending PR.**
+  `validate_project_name` blocklist. *(2026-08-27)* — ✅ **`f13ae4e`, merged PR #1.**
+- [x] **#20** — Bound archive expansion to 1 GiB of real (measured, not
+  declared) output. Entry count capped at 50k for BOTH zip and tar.gz — the tar
+  count pass was added in PR #3 after review flagged that the original fix left
+  it documented-but-unenforced. *(2026-08-27)* — ✅ **`630bba8` + PR #3.**
 - [ ] **#18b** — *Structural half of #18*: resolve the package-manager shim to an
   absolute path so cmd.exe never re-parses the argv (mirrors #17). Proven to work;
   blocklist holds the line until then. *(2026-08-27)*
@@ -539,9 +554,29 @@ trust-the-workspace class that has produced repeated CVEs in other IDEs.
 
 Confirmed by live demonstration, not inference (journal has the transcript).
 
-**Fixed** — `probe_global` resolves to the absolute file `where` reports and both
-transport arms spawn `resolved.executable`; resolution failure falls through to
-the managed tier (an install pill is the safe failure) and is logged.
+**Fixed** — `probe_global` resolves to the absolute file `where`/`which` reports
+and both transport arms spawn `resolved.executable`; resolution failure falls
+through to the managed tier (an install pill is the safe failure) and is logged.
+
+> **Erratum (2026-08-28 — corrected scope).** The first fix was Windows-only, on
+> the stated grounds that "Unix `execvp` searches PATH only and never the working
+> directory." That was **wrong**, and the external review caught it. PATH is
+> forwarded to the child, and a PATH containing `.` or an empty entry — which
+> POSIX defines *as* the current directory — is consulted after the child has
+> chdir'd into the project root. A misconfigured PATH reproduces the entire bug
+> on Unix. Resolution is now absolute on **both** platforms, `which`'s answer is
+> canonicalized when relative (a `.` in PATH makes `which` reply with a relative
+> path, which would otherwise be re-resolved against the project root and defeat
+> the fix), and `resolve_node` — which the bundled tier spawns with the same cwd
+> — got the same treatment. Exploitability remains Difficult: it needs a
+> user-misconfigured PATH.
+>
+> **Verified negative, recorded so nobody hardens it speculatively:** Rust's
+> `Command::new(<bare name>)` does **not** search the child's `current_dir` on
+> Windows (tested 2026-08-28 with the parent cwd held separate — the naive test
+> that keeps them together gives a false positive). Only cmd.exe searches its
+> cwd. That is precisely why the defect required the `cmd /C` shape, and why the
+> bundled tier's bare `node` was never a Windows exposure.
 
 Two things the fix surfaced, both worth keeping:
 
@@ -644,8 +679,28 @@ measure real expansion, then calls `zip.extract()` unchanged, deliberately
 keeping zip-slip protection, symlink handling, and the unix-mode pass as
 audited rather than re-implementing them around a byte counter.
 
-**Known gap**: the tar path is byte-bounded only; entry-count would require
-hand-rolled per-entry unpacking. No current artifact uses tar.
+> **Addendum (2026-08-28 — the "known gap" is closed).** The original fix left
+> tar byte-bounded only and *documented* the missing entry cap, reasoning that
+> `unpack()` offers no entry hook and no current artifact uses tar. External
+> review pushed back, correctly: documenting is not fixing, and the cap is
+> cheap. `ensure_tar_entries_are_bounded` now walks `entries()` in a counting
+> pass before `unpack()` — the same measure-then-extract shape as zip, so
+> `unpack`'s traversal safety is untouched — and the stream stays wrapped in
+> `BoundedRead` so a bomb aborts during counting rather than being tallied
+> patiently to completion. **50k entries now applies to zip and tar alike.**
+>
+> **Residual, accepted with evidence:** `ZipArchive::new` pre-allocates central-
+> directory storage before any of our limits can run, so a crafted archive could
+> in principle force a large allocation. Rated Low, not Major, on inspection of
+> zip 2.4.2: it distrusts a declared count exceeding `directory_start` and
+> allocates zero instead (`read.rs:692-696`), and separately rejects an oversized
+> central directory against `isize::MAX`. Reaching a damaging allocation needs an
+> actual ~512 MiB archive (the download cap) declaring a matching entry count,
+> via the consent-gated custom-URL path, and the outcome is an allocation failure
+> rather than code execution. The reviewer's suggested fix — cap entries *before*
+> parser allocation — is not implementable through the crate's public API: the
+> entry count is not knowable without parsing the central directory, which is
+> exactly what `ZipArchive::new` does. Revisit if zip exposes a pre-parse limit.
 
 ### ISSUE 21: LSP session key is not bound to the canonical project root — OPEN
 
@@ -693,8 +748,9 @@ which in a local IDE means an XSS in Litria's own UI first.
 | 21 | LSP session key not bound to canonical root | Low | Open |
 | dep | quick-xml 0.38.4 — 2× RUSTSEC (7.5) | High (advisory) | Blocked upstream |
 
-‡ On branch `security/scan-hardening-2026-08-27`, **pending PR** — not yet on
-`main`. Update these to PR numbers on merge.
+‡ Merged to `main` via **PR #1** (2026-08-28). Follow-up corrections to #17
+(Unix scope) and #20 (tar entry cap) landed in **PR #3**; see the ISSUE 17
+erratum and the #20 checklist line.
 
 **Fixed & merged to `main`**: **ALL 13** (issues 1, 2, 4–14) via PRs #144 (S1),
 #145 (S2), #146 (S3), #147 (S5), #149 (S4), #150 (S6, ADR-022), #151 (S7,
@@ -730,3 +786,4 @@ the low `@babel/core` dev-dep advisory remain (npm `audit fix` clears babel).
 | 2026-07-17 | Remediation execution (build-plan S4–S6) | LSP domain hygiene, Tauri capability surface, open-file boundary | 4 more findings fixed + merged: #8/#9 (PR #147, S5 — env allowlist + adapter error sanitization), #2 (PR #149, S4 — removed unused `opener:default` + posture test), #1 (PR #150, S6, ADR-022 — Rust-owned open-file dialog, `read_external_file` removed). **12 of 13 findings fixed; only #10 (CSP, S7) remains** + the blocked-upstream quick-xml dep. Merge-integration note: #142 (Slice-7, old branch) merged textually clean but needed a tuple-session-key fix on `main` (`db5c521`) to compile. |
 | 2026-07-17 | Remediation execution (build-plan S7 — final) | Content-Security-Policy | #10 fixed + merged (PR #151, ADR-023): `csp: null` → strict production CSP (`script-src 'self'`, no unsafe-inline/eval — Tauri auto-nonces first-party; `object-src`/`frame-src 'none'`; `worker-src 'self' blob'` for Monaco; `connect-src ipc:`) + dev-only permissive `devCsp` for Vite HMR. Posture test blocks regression to null / unsafe script-src. Verified on a **production build** (`--no-bundle`; strict csp is prod-only): 0 CSP violations across boot/React/IPC/launcher/canvas/discovery/terminal (CDP), and Monaco editor mounted + rendered + hover with 0 violations on an owner-driven file open (live CDP capture). **ALL 13 findings now fixed + merged; only the blocked-upstream quick-xml dep remains.** |
 | 2026-08-27 | External automated scan (CodeRabbit) + same-session remediation | Sink-reachability pass over `src-tauri/`; renderer, dependencies, and logic flaws NOT covered | 7 new issues (15-21), 0 false positives, 0 in 42.6k lines of frontend JS. 3 were ground the whole-repo pass missed (15, 17, 20). **#17 was the significant one** - opening an untrusted repo containing `rust-analyzer.bat` executed it (Windows cwd-before-PATH); confirmed by live demonstration, and the fix surfaced that `env_clear()` had been stripping `NoDefaultCurrentDirectoryInExePath`, plus a latent bug where the Unix arm discarded the GOPATH fallback's absolute path. 4 fixed on branch (15/17/18/20), 1 re-affirmed accepted (16), 2 open (19/21, both hostile-renderer-gated). Design finding recorded under #20: zip's declared uncompressed size is unusable as a bomb guard (`.take(compressed_size)`), so the guard measures real expansion. Full triage: `.research/2026-08-27-coderabbit-security-scan-triage.md`. |
+| 2026-08-28 | External review of the remediation itself (CodeRabbit on PR #1, posted post-merge) + refreshed dependency scans | LSP resolution across platforms, archive entry limits, npm + cargo advisories | Review raised 3 Major code findings; 2 valid and fixed in PR #3. **#17 scope was wrong** — the claim "Unix execvp never searches the cwd" ignored that PATH may hold `.` or an empty entry, which POSIX defines as the cwd and which is consulted after the child chdir's into the project root; resolution is now absolute on both platforms (plus canonicalization of a relative `which` answer, and the same fix for `resolve_node`, which the bundled tier spawns with the same cwd). **#20's documented tar entry-count gap closed** with a counting pass. Third finding (zip pre-parse allocation) verified against zip 2.4.2 and recorded as an accepted Low with evidence — its suggested fix is not implementable via the crate's public API. Verified negative also recorded: Rust's `Command::new(<bare name>)` does NOT search the child's `current_dir` on Windows, so the bundled `node` spawn was never exposed there. Scans: npm 1 high (`nanoid`) found and cleared to **0**; cargo unchanged at 2 blocked-upstream HIGH, warnings 21 → 22 (`fxhash` newly unmaintained). |

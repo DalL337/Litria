@@ -87,9 +87,17 @@ pub(crate) fn resolve_node(app: &AppHandle) -> Option<PathBuf> {
     // Tier 1: System PATH — with version check
     if probe_command_exists("node") {
         if probe_node_version_ok() {
-            return Some(PathBuf::from("node"));
+            // Absolute, for the same reason as `probe_global`: the bundled tier
+            // spawns this with cwd = the project root, and on Unix a PATH
+            // carrying `.` or an empty entry resolves a bare name against that
+            // directory. If node cannot be named, fall through to the bundled
+            // runtime rather than spawning a bare name.
+            if let Some(path) = absolute_path_on_path("node") {
+                return Some(path);
+            }
         }
-        // Global node exists but version too old — try bundled.
+        // Global node exists but is too old, or could not be resolved to a
+        // concrete file — try bundled.
     }
 
     // Tier 2: Extracted bundled node
@@ -181,29 +189,37 @@ fn probe_global(pack: &LanguagePack) -> Option<ResolvedCommand> {
     // code execution from merely opening a project (CWE-426, external scan
     // 2026-08-27). Resolving here keeps probe and spawn pointed at one file.
     //
-    // Unix needs no equivalent: `execvp` searches PATH only and never the
-    // working directory, so the bare name cannot be shadowed by project
-    // contents. Resolution failure falls through to the managed tier rather
-    // than spawning something unproven â an install pill is the safe failure.
-    #[cfg(windows)]
+    // Unix needs the same treatment, contrary to what this comment asserted
+    // until 2026-08-28. `execvp` searches PATH and not the cwd -- but PATH
+    // itself may contain `.` or an empty entry, which POSIX defines AS the
+    // current directory, and that lookup happens after the child has already
+    // chdir'd into the project root. A misconfigured PATH therefore reproduces
+    // the entire bug on Unix. (External review caught the overstatement; the
+    // resolver helper canonicalizes a relative answer for the same reason.)
+    //
+    // Windows note, verified 2026-08-28 so nobody "hardens" it speculatively:
+    // Rust's `Command::new(<bare name>)` does NOT search the child's
+    // `current_dir` -- only cmd.exe does. That is why the original defect
+    // needed the `cmd /C` shape, and why the bundled tier's node spawn was
+    // never exposed here on Windows.
+    //
+    // Resolution failure falls through to the managed tier rather than spawning
+    // something unproven -- an install pill is the safe failure.
     let executable = match absolute_path_on_path(command) {
         Some(path) => path,
         None => {
-            // The command ran fine under the probe but `where` cannot name the
-            // file it ran. Falling through is the correct outcome — we never
-            // spawn something unproven — but from the UI it is indistinguishable
-            // from "no server installed", and the user is then offered an
-            // install for a server they already have. Name the case in the log
-            // so it diagnoses itself instead of looking like a detection miss.
+            // The command ran fine under the probe but the OS cannot name the
+            // file it ran. Falling through is the correct outcome -- we never
+            // spawn something unproven -- but from the UI it is
+            // indistinguishable from "no server installed", and the user is
+            // then offered an install for a server they already have. Name the
+            // case in the log so it diagnoses itself, not as a detection miss.
             eprintln!(
-                "[lsp resolver] '{command}' passed its probe but could not be \
-                 resolved to an absolute path — skipping the global tier"
+                "[lsp resolver] '{command}' passed its probe but could not be resolved to an absolute path -- skipping the global tier"
             );
             return None;
         }
     };
-    #[cfg(not(windows))]
-    let executable = PathBuf::from(command);
 
     Some(ResolvedCommand {
         executable,
@@ -375,20 +391,24 @@ fn probe_bundled(pack: &LanguagePack, app: &AppHandle) -> Option<ResolvedCommand
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Windows: resolve a PATH command name to the absolute file that a launch
-/// from THIS process's working directory would pick. `where` lists candidates
-/// in search order, so the first line is that file.
+/// Resolve a PATH command name to the absolute file that a launch from THIS
+/// process's working directory would pick. `where`/`which` list candidates in
+/// search order, so the first line is that file.
 ///
-/// This exists so the global tier can spawn an exact path instead of a bare
-/// name (see `probe_global`). It is deliberately called from Litria's own cwd,
-/// never the project root, so an untrusted project cannot influence the answer.
-#[cfg(windows)]
+/// This exists so a tier can spawn an exact path instead of a bare name (see
+/// `probe_global` and `resolve_node`). It is deliberately invoked from Litria's
+/// own cwd, never the project root, so an untrusted project cannot influence
+/// the answer.
 fn absolute_path_on_path(command: &str) -> Option<PathBuf> {
+    #[cfg(windows)]
     let output = Command::new("where")
         .arg(command)
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
+    #[cfg(not(windows))]
+    let output = Command::new("which").arg(command).output().ok()?;
+
     if !output.status.success() {
         return None;
     }
@@ -401,6 +421,17 @@ fn absolute_path_on_path(command: &str) -> Option<PathBuf> {
         return None;
     }
     let path = PathBuf::from(first);
+
+    // A PATH holding `.` or an empty entry makes `which` answer with a RELATIVE
+    // path. Handing that to the spawn would be worse than useless: it gets
+    // re-resolved against the CHILD's cwd — the project root — reintroducing
+    // exactly the shadowing this function exists to prevent. Canonicalize while
+    // our own cwd is still the frame of reference.
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::fs::canonicalize(&path).ok()?
+    };
     path.is_file().then_some(path)
 }
 
@@ -481,10 +512,10 @@ mod tests {
             assert_eq!(resolved.tier, ResolutionTier::Global);
             assert!(resolved.prefix_args.is_empty());
             // Regression (CWE-426, external scan 2026-08-27): a bare command
-            // name here is spawned with cwd = the untrusted project root, and
-            // Windows resolves it against that directory first. The global
-            // tier must therefore commit to an absolute file.
-            #[cfg(windows)]
+            // name here is spawned with cwd = the untrusted project root.
+            // Windows resolves it against that directory via cmd.exe; on Unix a
+            // PATH holding `.` or an empty entry does the same through execvp.
+            // The global tier must commit to an absolute file on BOTH.
             assert!(
                 resolved.executable.is_absolute(),
                 "global tier must resolve to an absolute path, got {:?}",
@@ -494,7 +525,6 @@ mod tests {
         // If not installed, that's fine — the test validates logic, not dev env.
     }
 
-    #[cfg(windows)]
     #[test]
     fn absolute_path_on_path_resolves_node_to_a_real_file() {
         // Node is a dev prerequisite, so this must resolve in any dev env.
@@ -503,7 +533,19 @@ mod tests {
         assert!(resolved.is_file(), "got {resolved:?}");
     }
 
-    #[cfg(windows)]
+    /// The bundled tier spawns this with cwd = the project root, so a bare
+    /// "node" is shadowable on Unix exactly as the global tier was.
+    #[test]
+    fn resolved_node_is_never_a_bare_name() {
+        if let Some(node) = absolute_path_on_path("node") {
+            assert!(node.is_absolute(), "got {node:?}");
+            assert!(
+                node.components().count() > 1,
+                "a single-component path is a bare name: {node:?}"
+            );
+        }
+    }
+
     #[test]
     fn absolute_path_on_path_returns_none_for_nonexistent() {
         assert!(absolute_path_on_path("__litria_nonexistent_command_42__").is_none());

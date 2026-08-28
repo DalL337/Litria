@@ -397,6 +397,45 @@ fn ensure_zip_expansion_within(
     Ok(())
 }
 
+/// Walk a `.tar.gz`'s entries without unpacking, purely to bound the count.
+///
+/// The stream stays wrapped in `BoundedRead`, so a bomb aborts here too rather
+/// than being counted patiently to completion.
+fn ensure_tar_entries_are_bounded(archive: &Path) -> Result<(), String> {
+    ensure_tar_entries_within(archive, MAX_EXPANDED_BYTES, MAX_ARCHIVE_ENTRIES)
+}
+
+/// Limits are parameters for the same reason as the zip guard: a test can prove
+/// the refusal with a handful of entries instead of building 50,001 real ones.
+fn ensure_tar_entries_within(
+    archive: &Path,
+    max_bytes: u64,
+    max_entries: usize,
+) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| format!("opening archive: {e}"))?;
+    let stream = BoundedRead::new(flate2::read::GzDecoder::new(file), max_bytes);
+    let mut counter = tar::Archive::new(stream);
+    let entries = counter
+        .entries()
+        .map_err(|e| format!("reading tar entries: {e}"))?;
+
+    let mut seen = 0usize;
+    for entry in entries {
+        // Each item must be resolved for the iterator to advance to the next
+        // header; a read error here is a malformed or over-budget archive.
+        entry.map_err(|e| {
+            format!("reading tar entry {seen}: {e} — refusing to extract")
+        })?;
+        seen += 1;
+        if seen > max_entries {
+            return Err(format!(
+                "archive contains more than {max_entries} entries — refusing to extract"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Extract an archive into `dest_dir` based on the URL/file extension:
 /// `.zip` (Windows + clangd all-platform), single-file `.gz`
 /// (rust-analyzer unix), `.tar.gz`/`.tgz` (future entries).
@@ -422,15 +461,14 @@ fn extract_archive(
         let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("reading zip: {e}"))?;
         zip.extract(dest_dir).map_err(|e| format!("extracting zip: {e}"))?;
     } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        // Streaming formats need no measure pass: bounding the decompressed
-        // stream bounds what `unpack` can ever write.
-        //
-        // Byte-bounded only. A tar of millions of empty files stays small in
-        // bytes while being large in entries; `unpack()` gives no entry hook
-        // without hand-rolling per-entry extraction, which would put this path's
-        // traversal safety back in our hands. No current artifact uses tar (zip
-        // for Windows + clangd, single .gz for rust-analyzer unix), so the
-        // trade holds until one does.
+        // Bounding the decompressed stream bounds the BYTES `unpack` can write,
+        // but not the entry count: a tar of millions of empty files stays tiny
+        // in bytes while exhausting inodes and directory space. `unpack()`
+        // exposes no entry hook, so count in a separate pass first — the same
+        // measure-then-extract shape the zip path uses, and for the same reason:
+        // it keeps `unpack`'s traversal safety instead of hand-rolling
+        // per-entry extraction around a counter.
+        ensure_tar_entries_are_bounded(archive)?;
         let file = std::fs::File::open(archive).map_err(|e| format!("opening archive: {e}"))?;
         let tar = BoundedRead::new(flate2::read::GzDecoder::new(file), MAX_EXPANDED_BYTES);
         tar::Archive::new(tar)
@@ -1072,6 +1110,70 @@ mod tests {
 
         // Same archive, honest budget: allowed.
         assert!(ensure_zip_expansion_within(&archive, 8 * 1024 * 1024, MAX_ARCHIVE_ENTRIES).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Builds a real `.tar.gz` whose entries are empty — tiny in bytes, large
+    /// in count. This is precisely the archive a byte budget alone waves
+    /// through, and the gap the 2026-08-27 review flagged as documented-but-
+    /// unfixed.
+    #[test]
+    fn tar_guard_refuses_too_many_entries() {
+        let root = temp_dir("tarcount");
+        let archive = root.join("many.tar.gz");
+
+        let file = std::fs::File::create(&archive).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for i in 0..10 {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, format!("empty{i}.txt"), std::io::empty())
+                .unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let bytes = std::fs::metadata(&archive).unwrap().len();
+        assert!(
+            bytes < 4096,
+            "fixture must be small in bytes to exercise the count path, got {bytes}"
+        );
+
+        let err = ensure_tar_entries_within(&archive, MAX_EXPANDED_BYTES, 5)
+            .expect_err("10 entries must not pass a 5-entry limit");
+        assert!(err.contains("entries"), "got {err}");
+
+        // Same archive under an honest limit is fine.
+        assert!(ensure_tar_entries_within(&archive, MAX_EXPANDED_BYTES, 50).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The count pass must not break the normal path.
+    #[test]
+    fn tar_gz_still_extracts_a_well_formed_archive() {
+        let root = temp_dir("tarok");
+        let archive = root.join("server.tar.gz");
+
+        let file = std::fs::File::create(&archive).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        let payload = b"fake-gopls";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "gopls", &payload[..])
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let dest = root.join("out");
+        extract_archive(&archive, "https://x/server.tar.gz", &dest, "gopls").unwrap();
+        let found = find_binary(&dest, "gopls").unwrap();
+        assert_eq!(std::fs::read(found).unwrap(), payload);
         let _ = std::fs::remove_dir_all(&root);
     }
 
