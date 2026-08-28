@@ -186,7 +186,22 @@ fn probe_global(pack: &LanguagePack) -> Option<ResolvedCommand> {
     // contents. Resolution failure falls through to the managed tier rather
     // than spawning something unproven â an install pill is the safe failure.
     #[cfg(windows)]
-    let executable = absolute_path_on_path(command)?;
+    let executable = match absolute_path_on_path(command) {
+        Some(path) => path,
+        None => {
+            // The command ran fine under the probe but `where` cannot name the
+            // file it ran. Falling through is the correct outcome — we never
+            // spawn something unproven — but from the UI it is indistinguishable
+            // from "no server installed", and the user is then offered an
+            // install for a server they already have. Name the case in the log
+            // so it diagnoses itself instead of looking like a detection miss.
+            eprintln!(
+                "[lsp resolver] '{command}' passed its probe but could not be \
+                 resolved to an absolute path — skipping the global tier"
+            );
+            return None;
+        }
+    };
     #[cfg(not(windows))]
     let executable = PathBuf::from(command);
 
