@@ -58,6 +58,23 @@ fn require_https_custom_url(url: &str) -> CommandResult<()> {
     }
 }
 
+/// The one HTTP client for artifact downloads — never a bare `ureq::get`.
+///
+/// `https_only(true)` is the load-bearing setting. `require_https_custom_url`
+/// above only checks the URL the caller typed; ureq's default config then
+/// follows up to 10 redirects with https-only OFF, so an https endpoint could
+/// bounce the download to cleartext http and walk straight around the check
+/// that audit #14 accepted as the custom-URL mitigation. ureq re-tests the
+/// scheme on every redirect hop (`call_run`), so setting it here refuses a
+/// downgrade anywhere in the chain, not just on the first request.
+///
+/// Residual risk this does NOT cover: a custom URL still has no SHA pin (ADR
+/// §8, by design — the consent UI carries that warning), so an https endpoint
+/// the user chose to trust can still serve whatever it likes.
+fn download_agent() -> ureq::Agent {
+    ureq::Agent::new_with_config(ureq::Agent::config_builder().https_only(true).build())
+}
+
 // ---------------------------------------------------------------------------
 // Receipts (ADR §1)
 // ---------------------------------------------------------------------------
@@ -196,7 +213,8 @@ fn download_to(
     dest: &Path,
     cancel: &AtomicBool,
 ) -> Result<String, String> {
-    let mut response = ureq::get(url)
+    let mut response = download_agent()
+        .get(url)
         .call()
         .map_err(|e| format!("download failed ({e}) — check your connection and retry"))?;
 
@@ -872,6 +890,17 @@ mod tests {
         assert!(require_https_custom_url("ftp://x/y.zip").is_err());
         // Case: uppercase scheme is not the exact https:// prefix — refused.
         assert!(require_https_custom_url("HTTPS://example.com/a.zip").is_err());
+    }
+
+    /// The scheme check on the typed URL is only half the mitigation — without
+    /// this the client would follow a redirect down to cleartext http and the
+    /// audit-#14 https guarantee would be decorative.
+    #[test]
+    fn download_agent_refuses_non_https_redirects() {
+        assert!(
+            download_agent().config().https_only(),
+            "artifact downloads must refuse any non-https hop, redirects included"
+        );
     }
 
     #[test]
