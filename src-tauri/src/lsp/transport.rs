@@ -140,6 +140,46 @@ fn drain_stderr_into_tail<R: Read>(stderr: R, tail: &StderrTail) {
 // Process spawn
 // ---------------------------------------------------------------------------
 
+/// Re-add the Windows system variables a language-server child cannot run
+/// without, after `env_clear()` has taken everything away.
+///
+/// `SystemRoot`, `SystemDrive`, `COMSPEC` and `PATHEXT` are functional
+/// requirements for `cmd.exe` / `node`.
+///
+/// `NoDefaultCurrentDirectoryInExePath` is the security one (audit #17b).
+/// cmd.exe and `SearchPath` consult the CURRENT DIRECTORY before PATH when
+/// resolving a bare command name, and this child's current directory is the
+/// project root — an untrusted repository. That is the #17 hazard; #17 fixed it
+/// at the resolver by committing to absolute paths, and this is the second
+/// layer. It also covers the server's OWN shell-outs, which the resolver cannot
+/// reach.
+///
+/// Setting it RESTORES a mitigation rather than inventing one: some shells set
+/// this variable, `env_clear()` strips it, and the #17 erratum records that the
+/// clean-environment hardening was therefore withholding it from exactly the
+/// child that needed it.
+///
+/// The cost is real but small: a server that shells out to a bare name
+/// expecting the project directory to answer will now miss it. Every server
+/// Litria packs resolves its toolchain on PATH (rust-analyzer → cargo,
+/// gopls → go) or by absolute path (pyright → the interpreter) — and a project
+/// directory answering a bare name IS the attack this closes.
+///
+/// No-op off Windows, where the variable has no meaning.
+fn apply_windows_system_env(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        for key in &["SystemRoot", "SystemDrive", "COMSPEC", "PATHEXT"] {
+            if let Ok(val) = std::env::var(key) {
+                cmd.env(key, val);
+            }
+        }
+        cmd.env("NoDefaultCurrentDirectoryInExePath", "1");
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 /// Spawn the language server process and start the read loop.
 ///
 /// `resolved` is the output of the resolver — it tells us the concrete
@@ -222,14 +262,8 @@ pub(crate) fn spawn_server(
     }
 
     // Build a clean environment from the allowlist.
-    // On Windows, cmd.exe and node require certain system vars to function.
     cmd.env_clear();
-    #[cfg(windows)]
-    for key in &["SystemRoot", "SystemDrive", "COMSPEC", "PATHEXT"] {
-        if let Ok(val) = std::env::var(key) {
-            cmd.env(key, val);
-        }
-    }
+    apply_windows_system_env(&mut cmd);
     for key in &pack.env_allowlist {
         if let Ok(val) = std::env::var(key) {
             cmd.env(key, val);
@@ -660,6 +694,82 @@ mod tests {
         assert!(!out.contains("HIJACKED"), "absolute path was still shadowed");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Audit #17b, mechanism half. The test above proves the resolver's
+    /// absolute path is not shadowed; this proves the second layer works on its
+    /// own — with `NoDefaultCurrentDirectoryInExePath` set, even the vulnerable
+    /// bare-name shape stops finding the project's file. That is what protects
+    /// the language server's own shell-outs, which the resolver never sees.
+    #[cfg(windows)]
+    #[test]
+    fn no_default_current_directory_defeats_the_cwd_search() {
+        use std::process::Command;
+
+        let base = std::env::temp_dir().join(format!("litria_nodefault_{}", std::process::id()));
+        let hostile = base.join("hostile_project");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&hostile).unwrap();
+
+        let stem = "litria_nodefault_probe";
+        std::fs::write(hostile.join(format!("{stem}.bat")), "@echo HIJACKED\r\n").unwrap();
+
+        // Precondition: without the variable the bare name resolves out of the
+        // cwd. If this half ever stops holding, the test below proves nothing.
+        let vulnerable = Command::new("cmd")
+            .arg("/C")
+            .arg(stem)
+            .current_dir(&hostile)
+            .env_remove("NoDefaultCurrentDirectoryInExePath")
+            .output()
+            .expect("cmd spawn");
+        assert!(
+            String::from_utf8_lossy(&vulnerable.stdout).contains("HIJACKED"),
+            "precondition: a bare-name launch must pick up the project's file"
+        );
+
+        // With the variable set — what `apply_windows_system_env` now hands
+        // every LSP child — the same launch finds nothing.
+        let hardened = Command::new("cmd")
+            .arg("/C")
+            .arg(stem)
+            .current_dir(&hostile)
+            .env("NoDefaultCurrentDirectoryInExePath", "1")
+            .output()
+            .expect("cmd spawn");
+        let out = String::from_utf8_lossy(&hardened.stdout);
+        assert!(
+            !out.contains("HIJACKED"),
+            "the cwd search must be off, got {out:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Wiring half: the child environment actually carries the variable. The
+    /// mechanism test above is worthless if `spawn_server` stops setting it.
+    #[cfg(windows)]
+    #[test]
+    fn lsp_child_env_carries_no_default_current_directory() {
+        use std::ffi::OsStr;
+        use std::process::Command;
+
+        let mut cmd = Command::new("cmd");
+        cmd.env_clear();
+        apply_windows_system_env(&mut cmd);
+
+        let has = |name: &str| {
+            cmd.get_envs()
+                .any(|(k, v)| k == OsStr::new(name) && v.is_some())
+        };
+        assert!(
+            has("NoDefaultCurrentDirectoryInExePath"),
+            "audit #17b: the LSP child must be handed this variable"
+        );
+        // The functional vars must survive the same pass — a clean environment
+        // that breaks cmd.exe is not hardening.
+        assert!(has("SystemRoot"));
+        assert!(has("COMSPEC"));
     }
 
     #[test]
