@@ -98,7 +98,7 @@ Every domain file (`*Domain.js`) must:
 - **Cyclic dependencies** — No circular imports between domains
 - **Direct state mutation** — All state changes go through domain commands
 
-These rules are enforced by five automated guards that run in CI:
+These rules are enforced by six automated guards that run in CI:
 
 | Guard | What It Checks |
 |-------|---------------|
@@ -107,8 +107,9 @@ These rules are enforced by five automated guards that run in CI:
 | `protected-zone-guard.mjs` | No shadcn/Radix in protected zones (ADR-008) |
 | `domain-contract-guard.mjs` | Domain factory + commands contract |
 | `settings-key-guard.mjs` | Preference keys only via `PREF_KEYS`; settings registry shape invariants (ADR-019) |
+| `editor-engine-guard.mjs` | Monaco stays sealed in the engine package; also prints the editor-engine contract |
 
-Run all five with: `npm run check:architecture`
+Run all six with: `npm run check:architecture`
 
 ---
 
