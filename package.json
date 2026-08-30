@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/extract-sourcemaps.mjs",
     "preview": "vite preview",
-    "check:architecture": "node scripts/architecture-guard.mjs && node scripts/app-shell-guard.mjs && node scripts/protected-zone-guard.mjs && node scripts/domain-contract-guard.mjs && node scripts/settings-key-guard.mjs",
+    "check:architecture": "node scripts/architecture-guard.mjs && node scripts/app-shell-guard.mjs && node scripts/protected-zone-guard.mjs && node scripts/domain-contract-guard.mjs && node scripts/settings-key-guard.mjs && node scripts/editor-engine-guard.mjs",
     "test:domains": "node --test test/domains/*.test.mjs",
     "coverage": "c8 node --test test/domains/*.test.mjs",
     "measure:drag-latency": "node scripts/measure-drag-latency.mjs docs/plans/interaction-latency-samples.json",

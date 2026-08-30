@@ -269,6 +269,7 @@ marked below.
 | `scripts/domain-contract-guard.mjs` | Every `*Domain.js` in `src/app`, `src/terminal`, `src/scaffold`, `src/project` exports `create*Domain()` or `use*Domain()` and exposes `commands`. |
 | `scripts/protected-zone-guard.mjs` | ADR-008 protected files never import `src/components/ui/` or radix-ui. |
 | `scripts/settings-key-guard.mjs` | ADR-019: a registered preference key appears as a string literal only in `src/preferences/registry.js` — everywhere else imports `PREF_KEYS`; distinctive keys may not be dot-accessed off raw pref blobs; registry entries satisfy shape invariants (unique keys, explicit `projectOverridable`, overridable ⇒ surfaces in the project place, enum defaults legal). |
+| `scripts/editor-engine-guard.mjs` | The editor engine (Monaco) stays sealed in `ENGINE_FILES`: only those files may import the engine's npm packages or the `monacoSetup`/`monacoWorkspace` facades, use engine vocabulary (`MarkerSeverity`, `cm://`, …), or query engine-owned DOM classes (`.monaco-*`). Modules in `INJECTED_COUPLING_FILES` receive engine objects as arguments instead of importing them — allowed, and printed on every run because their union is the editor-engine contract. `TEMP_ALLOWED_DOM_COUPLING` is debt, not a grant. |
 
 Known coverage gaps (doc is stricter than the floor): `src/crash` and `src/scaffold` are
 not in the architecture guard's domain prefixes, and `src/crash` is not in the contract
