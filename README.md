@@ -8,10 +8,13 @@
 
 > Litria is developed by a sole dev, with all application code written by Claude. The ideas, patterns, architecture, and scope are the dev's. Contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Litria gives your project structure a shape. Pieces represent real files. 
-Connections represent real relationships. The canvas is your architecture, and 
-the code inside each piece is exactly what it looks like: genuine, exportable, 
-editable code.
+Litria gives your project structure a shape. **Files are nodes. Folders are real
+groups on disk. Imports are routed wires drawn from the code itself.**
+
+Structure and relationships are first-class here — the canvas is a living
+architecture view, not a side-panel graph generated after the fact. Drag a node
+into a folder group and the file moves on disk. And the code inside each node is
+exactly what it looks like: ordinary, exportable, editable source.
 
 This isn't a no-code tool or a diagram maker. It's a native desktop IDE built 
 for people who think visually and code seriously. Whether you're mapping out a 
@@ -51,14 +54,22 @@ Prefer to build it yourself? Jump to [Getting into it](#getting-into-it).
 
 ## What's working in this beta
 
-- Infinite canvas with puzzle-piece architecture
+- Infinite canvas where every node is a real file on disk
 - Folder groups that mirror your real project structure — nesting, collapse,
   and drag all operate on the whole subtree, and every group is a real
   folder on disk
-- Routed wires: import connections with obstacle avoidance, corridor lanes,
-  and legible separation — wires are first-class citizens, not decoration
-- Monaco editor with full LSP support (Python, TypeScript, JavaScript) and a
-  managed language-server directory for more
+- Routed wires drawn from your real imports — obstacle avoidance, corridor
+  lanes, and legible separation. Wires are first-class citizens, not decoration
+- Monaco editor with full LSP language intelligence: Python and
+  TypeScript/JavaScript bundled and working on first launch;
+  rust-analyzer and clangd installable from the managed
+  server directory; Go via your own toolchain. A server already on your `PATH`
+  always takes precedence over the bundled one
+- Progressive disclosure for large projects: hide nodes you aren't working on,
+  and the imports they carried surface as a count badge on the importing node —
+  click it to bring a file back and rewire it instantly
+- Canvas layout is project state: node positions, scale, and viewport persist
+  with the project rather than resetting between sessions
 - Split editor panes, multi-tab workflows, crash-safe unsaved-work recovery
 - Visual groups, connections, and undo/redo
 - Embedded terminal (with hide-don't-kill) and project scaffolding wizard
@@ -203,16 +214,16 @@ All `Ctrl` shortcuts map to `Cmd` on macOS.
 |----------|--------|
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
-| `Ctrl+0` | Fit all pieces to view |
+| `Ctrl+0` | Fit all nodes to view |
 | `Ctrl+Shift+0` | Fit selection (or all) to view |
 | `Ctrl+P` | Open / close node search |
-| `Ctrl+A` | Select all pieces |
+| `Ctrl+A` | Select all nodes |
 | `Ctrl+\` | Toggle split editor panes |
 | `E` | Toggle edit mode (additive / subtractive) |
 | `H` | Hide / show the canvas HUD |
-| `Ctrl+Click` piece | Toggle piece in selection |
-| `Shift+Click` piece | Extend / modify selection |
-| `Shift+Drag` on empty canvas | Lasso select pieces |
+| `Ctrl+Click` node | Toggle node in selection |
+| `Shift+Click` node | Extend / modify selection |
+| `Shift+Drag` on empty canvas | Lasso select nodes |
 
 ### Editor
 

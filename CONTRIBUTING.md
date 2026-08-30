@@ -1,6 +1,6 @@
 # Contributing to Litria
 
-Litria is a desktop IDE built with Tauri, React, and a canvas-based puzzle-piece workspace. We welcome contributions that make Litria better for the people who use it.
+Litria is a desktop IDE built with Tauri, React, and a canvas-based workspace where files are nodes and folders are real groups on disk. We welcome contributions that make Litria better for the people who use it.
 
 Before you open a PR, read this guide. It will save you time and save reviewers from asking the same questions.
 
