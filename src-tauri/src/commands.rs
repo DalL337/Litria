@@ -328,7 +328,9 @@ pub(crate) fn crash_write_js_record(record: serde_json::Value) -> Option<String>
         .take(24)
         .collect();
     let layer = if safe_layer.is_empty() { "js".to_string() } else { safe_layer };
-    crash::record::write_value(&layer, &record).map(|p| p.to_string_lossy().into_owned())
+    // Budgeted writer (audit #19): this is the one crash-record path a caller
+    // can drive in a loop, and `prune` runs at startup only by design.
+    crash::record::write_js_value(&layer, &record).map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Replace this session's breadcrumb mirror with the renderer's current
