@@ -161,7 +161,7 @@ npx tauri build        # compile + package installer
 - `npm run bundle:conpty`: Stage the sideloaded Microsoft ConPTY pair (terminal support on Windows 10).
 - `npm run bundle:check`: Verify the staged bundle.
 - `npm run build:release`: Bundle runtimes + build frontend (shorthand for CI).
-- `npm run check:architecture`: Run all 5 architecture guards (import boundaries, app shell, protected zones, domain contracts, settings keys).
+- `npm run check:architecture`: Run all 6 architecture guards (import boundaries, app shell, protected zones, domain contracts, settings keys, editor engine).
 - `npm run test:domains`: Run domain-level unit tests.
 - `npm run check`: Run architecture guards + build (CI shorthand).
 - `npm run tauri`: Run Tauri CLI commands.

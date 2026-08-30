@@ -37,7 +37,7 @@ npm run dev          # Vite dev server (frontend only)
 npm run tauri dev    # Full Tauri app with Rust backend
 
 # Validation (run before every PR)
-npm run check:architecture   # 5 architecture guards
+npm run check:architecture   # 6 architecture guards
 npm run test:domains         # Domain unit tests
 npm run build                # Production build
 ```
@@ -189,7 +189,7 @@ New domains change the architecture permanently. The bar is higher:
 4. Follow the domain contract (factory + commands + selectors)
 5. Add the domain to the Domain Master List in `docs/Orchestration.md`
 6. Add a test file in `test/domains/`
-7. Ensure all 5 architecture guards pass
+7. Ensure all 6 architecture guards pass
 
 ---
 
