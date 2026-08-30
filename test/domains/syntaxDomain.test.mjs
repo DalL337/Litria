@@ -1207,3 +1207,197 @@ test('computeConnectStubEdit: non-JS target returns empty edits (existing #127 g
   });
   assert.deepEqual(result.edits, []);
 });
+
+// ---------------------------------------------------------------------------
+// Multi-line import statements (regression, 2026-08-30)
+//
+// Origin: dogfooding Litria on the Litria repo. Dragging `src/` onto the canvas
+// wrote import stubs INTO THE MIDDLE of existing multi-line imports and left 10
+// source files syntactically invalid. Root cause was a line-based import
+// scanner: for
+//
+//     import {
+//       A,
+//     } from './mod.js';
+//
+// only the first line starts with `import`, and the `from` clause lives on the
+// closing line. So the "is it already imported?" probe never matched (it fires
+// when it should no-op) and the insert position resolved to "after `import {`",
+// i.e. inside the statement. Journal:
+// .research/2026-08-30-import-insertion-corruption.md
+// ---------------------------------------------------------------------------
+
+/**
+ * Fail if any import statement is interrupted by another import — the exact
+ * corruption signature. Walks brace depth from each `import {` opener.
+ */
+function assertNoImportInsideImport(text, label) {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!/^\s*import\b/.test(line)) continue;
+    let depth = (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
+    if (depth <= 0) continue;
+    for (let j = i + 1; j < lines.length && depth > 0; j++) {
+      assert.ok(
+        !/^\s*import\b/.test(lines[j]),
+        `${label}: import opened at line ${i} is interrupted by another import at line ${j}\n---\n${text}\n---`
+      );
+      depth += (lines[j].match(/\{/g) || []).length - (lines[j].match(/\}/g) || []).length;
+    }
+  }
+}
+
+/** Register a source module plus a target whose text the caller supplies. */
+function setupMultilineTarget(targetText) {
+  const domain = createSyntaxDomain();
+  const srcPath = '/project/src/utils.js';
+  const srcText = 'export function helper() {}\nexport function compute() {}\n';
+  domain.commands.registerFile(srcPath, srcText);
+
+  const tgtPath = '/project/src/app.js';
+  domain.commands.registerFile(tgtPath, targetText);
+
+  const { edgeId, syntaxConn } = domain.commands.connect({
+    connectionId: 'conn-1', sourceFilePath: srcPath, targetFilePath: tgtPath,
+  });
+  const exports = domain.selectors.getExportCandidates(srcPath);
+  return {
+    domain, srcPath, srcText, tgtPath, edgeId,
+    relSpec: syntaxConn.relSpec,
+    helperId: exports.find((s) => s.name === 'helper').symbolId,
+    computeId: exports.find((s) => s.name === 'compute').symbolId,
+  };
+}
+
+test('multi-line import: an unrelated multi-line import is never split by an insert', () => {
+  const targetText = [
+    'import {',
+    '  A,',
+    '  B,',
+    "} from './other.js';",
+    '',
+    '// app body',
+    '',
+  ].join('\n');
+
+  const s = setupMultilineTarget(targetText);
+  const result = s.domain.commands.computeResolveEdits({
+    edgeId: s.edgeId, symbolIds: [s.helperId],
+    targetText, sourceText: s.srcText,
+  });
+
+  const edit = result.edits.find((e) => e.filePath === s.tgtPath);
+  assert.ok(edit, 'target edit produced');
+  assertNoImportInsideImport(edit.newText, 'insert into unrelated multi-line');
+
+  const lines = edit.newText.split('\n');
+  const openIdx = lines.findIndex((l) => l.trim() === 'import {');
+  assert.equal(lines[openIdx + 1].trim(), 'A,');
+  assert.equal(lines[openIdx + 2].trim(), 'B,');
+  assert.ok(lines[openIdx + 3].includes("} from './other.js';"));
+  const newIdx = lines.findIndex((l) => l.includes('helper') && l.includes(s.relSpec));
+  assert.ok(newIdx > openIdx + 3, 'new import inserted after the closing line');
+});
+
+test('multi-line import: an existing multi-line import of the SAME module merges, never duplicates', () => {
+  const domain = createSyntaxDomain();
+  const srcPath = '/project/src/utils.js';
+  const srcText = 'export function helper() {}\nexport function compute() {}\n';
+  domain.commands.registerFile(srcPath, srcText);
+  const tgtPath = '/project/src/app.js';
+  domain.commands.registerFile(tgtPath, '// placeholder\n');
+
+  const { edgeId, syntaxConn } = domain.commands.connect({
+    connectionId: 'conn-1', sourceFilePath: srcPath, targetFilePath: tgtPath,
+  });
+  const relSpec = syntaxConn.relSpec;
+  const exports = domain.selectors.getExportCandidates(srcPath);
+  const computeId = exports.find((s) => s.name === 'compute').symbolId;
+
+  // Already imported multi-line, WITH the .js extension the writer omits.
+  const targetText = [
+    'import {',
+    '  helper,',
+    `} from '${relSpec}.js';`,
+    '',
+    '// app body',
+    '',
+  ].join('\n');
+
+  const result = domain.commands.computeResolveEdits({
+    edgeId, symbolIds: [computeId], targetText, sourceText: srcText,
+  });
+  const edit = result.edits.find((e) => e.filePath === tgtPath);
+  assert.ok(edit, 'target edit produced');
+  assertNoImportInsideImport(edit.newText, 'merge into same-module multi-line');
+
+  const importCount = edit.newText
+    .split('\n')
+    .filter((l) => l.includes('import') && l.includes(relSpec)).length;
+  assert.equal(importCount, 1, `expected one import of ${relSpec}, got:\n${edit.newText}`);
+  assert.ok(edit.newText.includes('compute'), 'new symbol merged in');
+  assert.ok(edit.newText.includes('helper'), 'pre-existing symbol preserved');
+});
+
+test('multi-line import: the historical corruption signature does not reappear', () => {
+  // Shape lifted from src/app/useCanvasHud.js, the worst real casualty.
+  const targetText = [
+    "import { useCallback, useEffect } from 'react';",
+    '',
+    "import { isEditableTarget } from './interactionDomain.js';",
+    'import {',
+    '  HUD_WIDGETS,',
+    '  HUD_PREF_KEY,',
+    '  parseHudState,',
+    "} from './hudState.js';",
+    '',
+    '// body',
+    '',
+  ].join('\n');
+
+  const s = setupMultilineTarget(targetText);
+  const result = s.domain.commands.computeResolveEdits({
+    edgeId: s.edgeId, symbolIds: [s.helperId, s.computeId],
+    targetText, sourceText: s.srcText,
+  });
+
+  const edit = result.edits.find((e) => e.filePath === s.tgtPath);
+  assert.ok(edit, 'target edit produced');
+  assertNoImportInsideImport(edit.newText, 'useCanvasHud shape');
+
+  assert.ok(
+    !/^\s*import\s*\{\s*$\n\s*import\b/m.test(edit.newText),
+    `stub inserted inside the hudState import:\n${edit.newText}`
+  );
+  const lines = edit.newText.split('\n');
+  const hudOpen = lines.findIndex((l) => l.trim() === 'import {');
+  assert.equal(lines[hudOpen + 1].trim(), 'HUD_WIDGETS,');
+  assert.equal(lines[hudOpen + 2].trim(), 'HUD_PREF_KEY,');
+  assert.equal(lines[hudOpen + 3].trim(), 'parseHudState,');
+  assert.ok(lines[hudOpen + 4].includes("} from './hudState.js';"));
+});
+
+test('multi-line import: insert lands after the last statement when the file ends with one', () => {
+  const targetText = [
+    'import {',
+    '  A,',
+    "} from './other.js';",
+  ].join('\n');
+
+  const s = setupMultilineTarget(targetText);
+  const result = s.domain.commands.computeResolveEdits({
+    edgeId: s.edgeId, symbolIds: [s.helperId],
+    targetText, sourceText: s.srcText,
+  });
+  const edit = result.edits.find((e) => e.filePath === s.tgtPath);
+  assert.ok(edit);
+  assertNoImportInsideImport(edit.newText, 'insert at EOF');
+
+  const lines = edit.newText.split('\n');
+  assert.ok(lines[2].includes("} from './other.js';"), 'closing line still at index 2');
+  assert.ok(
+    lines.slice(3).some((l) => l.includes('helper')),
+    `new import placed after the closing line:\n${edit.newText}`
+  );
+});
