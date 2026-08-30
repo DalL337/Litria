@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { parseJsTsDefinitions, parseJsTsExports } from '../../src/app/jstsSymbolParser.js';
 
@@ -486,4 +487,109 @@ test('parseJsTsExports includes export block entries for definitions exported vi
   assert.equal(symbols.length, 2);
   const names = symbols.map((s) => s.name).sort();
   assert.deepEqual(names, ['bar', 'foo']);
+});
+
+// ---------------------------------------------------------------------------
+// Regex literals must not inflate brace depth (regression, 2026-08-30)
+//
+// _updateBraceDepth skipped strings, template literals and comments but not
+// REGEX LITERALS, so `/^export\s+\{/` counted its `\{` as a real block opener.
+// Depth then never returned to 0 (it is clamped at 0 on the way down) and every
+// top-level declaration after that line was treated as nested and dropped.
+//
+// Found by dogfooding: jstsSymbolParser.js could not see its own
+// `parseJsTsExports` export, so the wire into syntaxDomain.js rendered broken.
+// Journal: .research/2026-08-30-import-insertion-corruption.md
+// ---------------------------------------------------------------------------
+
+test('regex literal with an unbalanced brace does not hide later exports', () => {
+  const text = [
+    "const RE_BLOCK = /^export\\s+(?:type\\s+)?\\{/;",
+    '',
+    'export function afterTheRegex() {}',
+  ].join('\n');
+
+  const names = parseJsTsExports(text, '/p/a.js').map((s) => s.name);
+  assert.ok(names.includes('afterTheRegex'), `export after a brace-bearing regex was dropped: ${JSON.stringify(names)}`);
+});
+
+test('regex literal with a closing brace does not corrupt depth either', () => {
+  const text = [
+    "const RE_END = /\\}.*$/;",
+    "const RE_INNER = /^[^{]*\\{/;",
+    '',
+    'export const AFTER = 1;',
+    'export function alsoAfter() {}',
+  ].join('\n');
+
+  const names = parseJsTsExports(text, '/p/b.js').map((s) => s.name);
+  assert.ok(names.includes('AFTER'), `const export dropped: ${JSON.stringify(names)}`);
+  assert.ok(names.includes('alsoAfter'), `function export dropped: ${JSON.stringify(names)}`);
+});
+
+test('regex quantifier braces are not counted as blocks', () => {
+  const text = [
+    'const RE_QTY = /a{2,3}b/;',
+    'export function afterQuantifier() {}',
+  ].join('\n');
+
+  const names = parseJsTsExports(text, '/p/c.js').map((s) => s.name);
+  assert.ok(names.includes('afterQuantifier'), JSON.stringify(names));
+});
+
+test('division is still division — a slash after a value does not start a regex', () => {
+  // If `/` after `b` were treated as a regex opener, the rest of the line
+  // would be swallowed and `{` on the next lines would be miscounted.
+  const text = [
+    'const ratio = a / b;',
+    'const other = total / count;',
+    'export function afterDivision() {}',
+  ].join('\n');
+
+  const names = parseJsTsExports(text, '/p/d.js').map((s) => s.name);
+  assert.ok(names.includes('afterDivision'), JSON.stringify(names));
+});
+
+test('a slash inside a regex character class does not terminate it early', () => {
+  const text = [
+    'const RE_PATH = /[/{]+/;',
+    'export function afterCharClass() {}',
+  ].join('\n');
+
+  const names = parseJsTsExports(text, '/p/e.js').map((s) => s.name);
+  assert.ok(names.includes('afterCharClass'), JSON.stringify(names));
+});
+
+test('braces inside strings and comments still do not count (non-regression)', () => {
+  const text = [
+    'const s = "a { b";',
+    "const t = 'c } d';",
+    '// a comment with { and }',
+    '/* block with { */',
+    'export function afterLiterals() {}',
+  ].join('\n');
+
+  const names = parseJsTsExports(text, '/p/f.js').map((s) => s.name);
+  assert.ok(names.includes('afterLiterals'), JSON.stringify(names));
+});
+
+test('nested declarations are still NOT reported as top-level exports', () => {
+  const text = [
+    'export function outer() {',
+    '  function innerNotExported() {}',
+    '  const alsoInner = 1;',
+    '}',
+  ].join('\n');
+
+  const names = parseJsTsExports(text, '/p/g.js').map((s) => s.name);
+  assert.deepEqual(names, ['outer'], `depth tracking lost its nesting: ${JSON.stringify(names)}`);
+});
+
+test('dogfooding: Litria can parse its own symbol parser', () => {
+  // The file that exposed the bug. It declares parseJsTsDefinitions early and
+  // parseJsTsExports well after three brace-bearing regexes.
+  const self = readFileSync(new URL('../../src/app/jstsSymbolParser.js', import.meta.url), 'utf8');
+  const names = parseJsTsExports(self, '/p/jstsSymbolParser.js').map((s) => s.name);
+  assert.ok(names.includes('parseJsTsDefinitions'), JSON.stringify(names));
+  assert.ok(names.includes('parseJsTsExports'), `the parser still cannot see itself: ${JSON.stringify(names)}`);
 });

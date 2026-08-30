@@ -62,12 +62,49 @@ const RE_DEF_TYPE = /^type\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*[=<]/;
 const RE_DEF_INTERFACE = /^(?:abstract\s+)?(?:interface|enum)\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
 
 // ---------------------------------------------------------------------------
-// Brace-depth tracker (string/comment aware)
+// Brace-depth tracker (string/comment/regex aware)
 // ---------------------------------------------------------------------------
 
 /**
+ * Does a `/` at this point start a REGEX LITERAL, or is it division?
+ *
+ * Decided from the last significant token before it, which is the standard
+ * lexer heuristic: a regex may only begin where an expression may begin. After
+ * a value — identifier, literal, `)`, `]` — a slash is division.
+ *
+ * @param {string} codeSoFar - Line content before the slash, comments/strings
+ *   already elided by the caller.
+ * @returns {boolean}
+ */
+function _slashStartsRegex(codeSoFar) {
+  const tail = codeSoFar.replace(/\s+$/, '');
+  if (tail === '') return true; // start of line ⇒ expression position
+  // Keywords that may be followed by an expression.
+  if (/\b(return|typeof|instanceof|in|of|new|delete|void|case|do|else|yield|await)$/.test(tail)) {
+    return true;
+  }
+  // Operators / punctuation that open an expression position.
+  return /[=(,[{;:!&|?+\-*%^~<>]$/.test(tail);
+}
+
+/**
  * Update brace depth for a single line, skipping content inside strings,
- * template literals, and comments.
+ * template literals, comments, and REGEX LITERALS.
+ *
+ * Regex handling added 2026-08-30. Without it a line such as
+ *
+ *     const RE = /^export\s+(?:type\s+)?\{/;
+ *
+ * counted the `\{` inside the pattern as a real block opener. Depth then never
+ * returned to 0 (it is clamped at 0 on the way down, so it cannot self-correct),
+ * and every top-level declaration after that point was treated as nested and
+ * dropped from the symbol index. Discovered by dogfooding Litria on Litria:
+ * `jstsSymbolParser.js` could not see its own `parseJsTsExports` export — depth
+ * at that declaration was 2 — so the wire into `syntaxDomain.js` rendered
+ * broken. Any file with a brace-bearing regex was affected, silently.
+ * (Journal: .research/2026-08-30-import-insertion-corruption.md)
+ *
+ * A regex literal cannot span a newline, so this stays line-local.
  *
  * @param {string} line          - Raw source line.
  * @param {number} currentDepth  - Brace depth before this line.
@@ -79,6 +116,9 @@ function _updateBraceDepth(line, currentDepth, inBlock) {
   let inB = inBlock;
   let inStr = false;
   let strCh = '';
+  // Code seen so far on this line with strings/comments/regexes elided —
+  // just enough context to tell a regex literal from a division sign.
+  let code = '';
 
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
@@ -103,12 +143,34 @@ function _updateBraceDepth(line, currentDepth, inBlock) {
     // Block comment start
     if (ch === '/' && next === '*') { inB = true; i++; continue; }
 
+    // Regex literal — braces inside a pattern are not block delimiters.
+    if (ch === '/' && _slashStartsRegex(code)) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      for (; j < line.length; j++) {
+        const rc = line[j];
+        if (rc === '\\') { j++; continue; }      // escape: skip the next char
+        if (rc === '[') { inClass = true; continue; }
+        if (rc === ']') { inClass = false; continue; }
+        if (rc === '/' && !inClass) { closed = true; break; }
+      }
+      // Only treat it as a regex when it actually terminates on this line;
+      // otherwise fall through and let it be scanned as ordinary code.
+      if (closed) { i = j; code += '/'; continue; }
+    }
+
     // String/template literal start
     if (ch === '"' || ch === "'" || ch === '`') { inStr = true; strCh = ch; continue; }
 
     // Brace tracking
     if (ch === '{') depth++;
     if (ch === '}') depth = Math.max(0, depth - 1);
+
+    // Running record of code on this line, used to tell a regex literal from
+    // division. Whitespace is kept so keyword boundaries survive (`return /x/`
+    // must not collapse to `return/x/`... and `case` must stay a whole word).
+    code += ch;
   }
 
   return { depth, inComment: inB };
