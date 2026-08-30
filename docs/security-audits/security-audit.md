@@ -161,7 +161,9 @@ the finding was first raised.
 - [x] **#17b** — Set `NoDefaultCurrentDirectoryInExePath=1` on the LSP child as
   defence in depth. *(2026-08-27)* — ✅ **owner-ruled ship, 2026-08-30; merged
   PR #8. Held for a ruling because it changes resolution for the language
-  server's own shell-outs — which is also precisely why it is worth having.**
+  server's own shell-outs — which is also precisely why it is worth having.
+  Startup measured on both tiers (rust-analyzer + bundled pyright): handshake
+  byte-identical with and without it — see the ISSUE 17b live-evidence table.**
 
 ### Accepted / not independently actionable
 
@@ -854,6 +856,25 @@ closed. Tested at both levels: the mechanism (with the variable set, even the
 vulnerable bare-name shape stops finding the project's file — guarded by a
 precondition that it *does* find it without) and the wiring (the child
 environment actually carries it).
+
+**Live evidence (2026-08-30).** The concrete risk behind holding this for a
+ruling was "does a real language server still start?", so it was measured rather
+than argued. Both resolution tiers were spawned exactly as `spawn_server` does —
+`env_clear()` + the four system vars + the new variable, `current_dir` set to a
+project root — and driven through a real LSP `initialize` handshake, with and
+without it:
+
+| Server | Tier | Baseline | With `NoDefaultCurrentDirectoryInExePath=1` |
+|---|---|---|---|
+| `rust-analyzer.exe` (PATH) | global | 2790 B; serverInfo, capabilities, hoverProvider; no error | **byte-identical** |
+| `node.exe pyright-langserver.js --stdio` | bundled | 1046 B; capabilities, hoverProvider, completionProvider; no error | **byte-identical** |
+
+**Residual, stated in the same breath:** this covers server *startup* on both
+tiers. It does **not** cover a server's shell-outs during a long live session —
+that remains the owner's app-level acceptance pass. (Probe note for anyone
+repeating this: pyright emits three notifications, 119/191/110 B, before the
+`id:1` response; a probe reading only the first message reports a false
+"no capabilities".)
 
 ---
 
