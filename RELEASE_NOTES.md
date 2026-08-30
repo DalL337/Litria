@@ -1,5 +1,93 @@
 # Release Notes
 
+## v1.0.1 — Data integrity, and an icon of our own
+
+**Date:** 2026-08-30 (PRs #4–#17)
+
+A maintenance release. The headline is two parser bugs that were quietly
+damaging real projects, both found the same afternoon by opening Litria on the
+Litria source and dragging a folder onto the canvas.
+
+> **Platforms and caveats are unchanged from v1.0.0** — unsigned artifacts on
+> every platform, Windows is the build that gets daily use, macOS and Linux
+> compile and pass CI but remain unproven by a human.
+
+---
+
+### Fixed — your source files
+
+**Import writes no longer corrupt multi-line imports.**
+Connecting a wire writes an import into the target file. The helpers that
+decided *where* to write scanned line by line and treated "this line starts with
+`import`" as "this line is a whole import". For the multi-line form that is
+false — only the opening line matches, and the `from` clause sits on the closing
+line. Two things followed: the "is it already imported?" check never matched, so
+the writer fired when it should have done nothing, and the insert position
+resolved to *inside* the statement. The result was a stub written into the
+middle of an existing import and a file that no longer parsed.
+
+One folder drag on a real codebase corrupted ten files. Import scanning is now
+statement-aware, and edits can address a whole statement rather than a single
+line.
+
+**Exports after a regex are visible again.**
+The symbol parser tracked brace depth to find top-level declarations, skipping
+braces inside strings and comments — but not inside **regex literals**. A
+pattern like `/^export\s+\{/` counted its brace as a real block opener, depth
+never returned to zero, and every top-level export declared after that line
+became invisible. Symptoms were silent: missing wires, edges rendering broken,
+empty symbol pickers. Any file carrying a regex with an unbalanced brace was
+affected.
+
+### Fixed — security
+
+Five findings from the security audit close-out, none known to be exploited:
+
+- The package-manager shim now resolves to an absolute path.
+- Crash-record writing carries a session-scoped size and count budget.
+- LSP sessions are validated against a canonical project root, with caps on
+  concurrent servers.
+- LSP child processes no longer inherit a current-directory executable search.
+- A `quick-xml` advisory cleared by updating `plist`; `cargo audit` went 2 → 0,
+  and `npm audit` is 0.
+
+### Changed
+
+**Litria has its own icon.** Every build through v1.0.0 shipped Tauri's default
+placeholder — the yellow and cyan interlocking circles. The desktop, taskbar and
+installer icons are now Litria's, and the mark also appears in the menu bar.
+
+**Public language.** The README and CONTRIBUTING now describe what the product
+actually is — files are nodes, folders are real groups on disk, imports are
+routed wires drawn from the code itself — and name the full language support:
+Python and TypeScript/JavaScript bundled, rust-analyzer and clangd installable
+from the managed directory, Go via your own toolchain, with a server already on
+`PATH` always taking precedence.
+
+**The repo ships a `litria.toml`.** Cloning Litria and opening it in Litria now
+works as a first-class project.
+
+### Internal
+
+A sixth architecture guard keeps the editor engine sealed in its own package, so
+"what would it take to swap the editor?" has a printed answer rather than
+requiring archaeology. It also prints the editor-engine contract on every CI run.
+
+Test suite: 1037 → 1049.
+
+### Known limitations
+
+- **macOS Dock icon shows a black square.** The source artwork is opaque with no
+  transparency, and macOS does not round app icons itself. Windows and most
+  Linux desktops render it correctly.
+- Import de-duplication still treats `./thing` and `./thing/index` as different
+  modules, so connecting a wire can write a redundant (harmless, valid) import.
+- The Python import writer can still insert inside a parenthesised
+  `from x import ( … )`.
+- Collapsed group pills can report a file count that does not match the project.
+
+---
+
 ## v1.0.0 — First public release
 
 **Date:** 2026-08-09 (PRs #111–#247)
