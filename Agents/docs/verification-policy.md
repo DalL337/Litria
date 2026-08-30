@@ -6,11 +6,13 @@ boundaries. Moved here from AGENTS.md §6 (2026-07-13).
 
 ## Rule 1 — The Standard Checks
 
-- `npm run check:architecture` — all **five** guards: architecture (domain/UI
+- `npm run check:architecture` — all **six** guards: architecture (domain/UI
   import boundaries), app-shell (composition manifest), protected-zone
   (ADR-008), domain-contract (`create*Domain`/`use*Domain` + `commands`),
   settings-key (ADR-019: preference keys only via `PREF_KEYS` + registry
-  shape invariants; added 2026-08-01).
+  shape invariants; added 2026-08-01), editor-engine (Monaco sealed inside
+  `ENGINE_FILES`; prints the editor-engine contract and its TEMP debt;
+  added 2026-08-30).
 - `npm run test:domains` — the full node test suite (`test/domains/*.test.mjs`
   is the entire suite; there are no test files outside it).
 - `npm run build` — vite production build (also extracts sourcemaps; see
