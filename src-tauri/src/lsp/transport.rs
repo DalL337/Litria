@@ -772,6 +772,13 @@ mod tests {
         assert!(has("COMSPEC"));
     }
 
+    // The function under test is `#[cfg(windows)]` (the `.cmd` shim resolver is
+    // a Windows-only concern), so the test must carry the same gate. Without it
+    // the lib-test target fails to compile on Linux and macOS with E0425 —
+    // latent since the initial commit, and invisible because `cargo test` runs
+    // only in the release workflow, which gained its "Rust tests" step after
+    // v1.0.0 shipped. Caught by the v1.0.1 release build.
+    #[cfg(windows)]
     #[test]
     fn cmd_resolver_rejects_traversal_outside_dp0() {
         use std::fs;
