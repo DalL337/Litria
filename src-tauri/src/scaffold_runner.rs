@@ -81,9 +81,12 @@ pub(crate) fn run_scaffold(
 
     // Security (audit #12): the CLI-spawning creation path must validate the
     // project name to the same folder-segment contract Blank/Python already
-    // enforce — it becomes a directory below AND a subprocess argument (the
-    // Windows global-npm fallback reaches cmd.exe). Use the trimmed result
-    // consistently for the dir and the arg.
+    // enforce — it becomes a directory below AND a subprocess argument. Use the
+    // trimmed result consistently for the dir and the arg. The shell
+    // metacharacter half of that contract (audit #18) is now belt-and-braces:
+    // the global tier spawns an absolute shim, so nothing re-parses the argv
+    // (#18b, `absolute_pm_path`). Both layers stay — the validator is the
+    // chokepoint (security-policy Rule 4) and covers the folder name too.
     let name = crate::blank_project::validate_project_name(&config.project_name)?;
 
     let location = Path::new(&config.project_location);
@@ -340,14 +343,23 @@ fn probe_command_exists(command: &str) -> bool {
     result.map(|s| s.success()).unwrap_or(false)
 }
 
+/// Read a tool's `--version` for the prerequisite report (display only).
+///
+/// Goes through `absolute_pm_path` rather than `cmd /C <command>` so this
+/// module has no bare-name spawn left at all (audit #18b). `command` is always
+/// a literal here, so this is hygiene rather than a live hole — but leaving one
+/// `cmd /C` behind is how the next argument finds its way into a second parse.
 fn get_command_version(command: &str, version_arg: &str) -> Option<String> {
-    let output = if cfg!(windows) {
-        Command::new("cmd")
-            .args(["/C", command, version_arg])
-            .output()
-    } else {
-        Command::new(command).arg(version_arg).output()
-    };
+    let exe = absolute_pm_path(command)?;
+    let mut cmd = Command::new(&exe);
+    cmd.arg(version_arg);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd.output();
     output.ok().and_then(|o| {
         if o.status.success() {
             let raw = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -368,11 +380,12 @@ fn get_command_version(command: &str, version_arg: &str) -> Option<String> {
 
 /// Resolved package manager ready for spawning.
 struct ResolvedPM {
-    /// Executable to invoke (e.g. `node.exe` for bundled, `cmd` for Windows
-    /// global, `npm`/`pnpm`/`yarn` for Unix global).
+    /// Absolute path to the executable to invoke — `node.exe` for the bundled
+    /// tier, the resolved shim (`…\pnpm.cmd`, `/usr/bin/pnpm`) for the global
+    /// tier. Never a bare name: see `absolute_pm_path` (audit #18b).
     executable: String,
-    /// Arguments inserted before the subcommand (e.g. `["<npm-cli.js>"]` for
-    /// bundled npm, `["/C", "npm"]` for Windows global).
+    /// Arguments inserted before the subcommand (`["<npm-cli.js>"]` for bundled
+    /// npm; empty for the global tier).
     prefix_args: Vec<String>,
 }
 
@@ -398,36 +411,105 @@ fn resolve_npm(app: &AppHandle) -> Result<ResolvedPM, String> {
         }
     }
 
-    // Fallback: global npm.
-    if probe_command_exists("npm") {
-        return Ok(resolve_global_pm_unchecked("npm"));
+    // Fallback: global npm — resolved to an absolute shim, same as pnpm/yarn.
+    if let Ok(pm) = resolve_global_pm("npm") {
+        return Ok(pm);
     }
 
     Err("npm is not available. Install Node.js or wait for the bundled runtime to extract.".into())
 }
 
 fn resolve_global_pm(name: &str) -> Result<ResolvedPM, String> {
-    if !probe_command_exists(name) {
+    let Some(path) = absolute_pm_path(name) else {
         return Err(format!(
             "{name} is not installed. Run: npm install -g {name}"
         ));
-    }
-    Ok(resolve_global_pm_unchecked(name))
+    };
+    Ok(ResolvedPM {
+        executable: path.to_string_lossy().into_owned(),
+        prefix_args: vec![],
+    })
 }
 
-fn resolve_global_pm_unchecked(name: &str) -> ResolvedPM {
-    if cfg!(windows) {
-        // Windows: .cmd shims need `cmd /C` to execute.
-        ResolvedPM {
-            executable: "cmd".into(),
-            prefix_args: vec!["/C".into(), name.into()],
-        }
+/// Resolve a globally-installed package-manager name to the absolute file that
+/// a launch from THIS process's working directory would pick.
+///
+/// Security (audit #18b — structural half of #18): the previous shape was
+/// `cmd /C <name> …` on Windows, which hands the whole argument vector back to
+/// cmd.exe for a second parse. A project name containing `&` was therefore a
+/// command separator: `cmd /C show demo&marker` runs `show demo`, then
+/// `marker.bat`. The blocklist half (`& ^ ( ) % !` in `validate_project_name`)
+/// holds that line, but the structural fix is to never re-enter cmd.exe at all:
+/// `Command::new(<abs>\pnpm.cmd)` passes the same argument as a single inert
+/// token via Rust's post-CVE-2024-24576 batch escaping. It also removes the
+/// bare-name lookup, so the child's own directory can no longer shadow the
+/// shim (the audit #17 hazard, in the scaffold domain).
+///
+/// `where`/`which` list candidates in search order, but the first line is NOT
+/// always the right one: `where npm` answers with the extension-less Unix shell
+/// script (`…\nodejs\npm`) BEFORE `…\nodejs\npm.cmd`, and Windows cannot
+/// execute the former at all. Prefer the first candidate carrying an executable
+/// extension, and only fall back to the first line when none does (which is the
+/// normal Unix answer).
+///
+/// Deliberately invoked from Litria's own cwd, never the project location.
+fn absolute_pm_path(name: &str) -> Option<PathBuf> {
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("where");
+        c.arg(name);
+        c
     } else {
-        ResolvedPM {
-            executable: name.into(),
-            prefix_args: vec![],
-        }
+        let mut c = Command::new("which");
+        c.arg(name);
+        c
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let candidates: Vec<&str> = stdout
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let chosen = candidates
+        .iter()
+        .find(|c| has_executable_extension(c))
+        .or_else(|| candidates.first())?;
+
+    let path = PathBuf::from(chosen);
+    // A PATH holding `.` or an empty entry makes `which` answer with a RELATIVE
+    // path; POSIX defines both AS the cwd. Canonicalize while our own cwd is
+    // still the frame of reference — the step is spawned with `cwd` set to the
+    // project location, where a relative answer would re-resolve.
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::fs::canonicalize(&path).ok()?
+    };
+    path.is_file().then_some(path)
+}
+
+/// Extensions Windows will actually execute as a program. Kept to the subset
+/// a package-manager shim ever uses; a `.js`/`.vbs` PATHEXT hit is not
+/// something the scaffold runner should launch directly.
+fn has_executable_extension(candidate: &str) -> bool {
+    Path::new(candidate)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            let e = e.to_ascii_lowercase();
+            e == "exe" || e == "cmd" || e == "bat" || e == "com"
+        })
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -1763,5 +1845,69 @@ mod tests {
         assert!(!probe_command_exists(
             "__litria_scaffold_nonexistent_42__"
         ));
+    }
+
+    // -- audit #18b: the global tier must commit to an absolute executable ---
+
+    #[test]
+    fn absolute_pm_path_resolves_node_to_an_absolute_file() {
+        // Node.js is a dev prerequisite, so this arm is always exercisable.
+        let resolved = absolute_pm_path("node").expect("node must be on PATH");
+        assert!(resolved.is_absolute(), "got {resolved:?}");
+        assert!(resolved.is_file(), "got {resolved:?}");
+    }
+
+    #[test]
+    fn absolute_pm_path_returns_none_for_nonexistent() {
+        assert!(absolute_pm_path("__litria_scaffold_nonexistent_42__").is_none());
+    }
+
+    #[test]
+    fn resolved_global_pm_is_an_absolute_path_with_no_prefix_args() {
+        // npm is present wherever Node.js is, so this covers the real shape.
+        let pm = resolve_global_pm("npm").expect("npm must be on PATH");
+        assert!(
+            Path::new(&pm.executable).is_absolute(),
+            "global tier must spawn an absolute path, got {:?}",
+            pm.executable
+        );
+        // The `cmd /C <name>` shape is what let a project name re-enter
+        // cmd.exe's parser (audit #18/#18b). No prefix args means no second
+        // parse: the name reaches the shim as one argument.
+        assert!(
+            pm.prefix_args.is_empty(),
+            "global tier must not wrap in a shell, got {:?}",
+            pm.prefix_args
+        );
+        assert_ne!(pm.executable.to_ascii_lowercase(), "cmd");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolved_global_npm_picks_an_executable_extension() {
+        // `where npm` answers with the extension-less Unix shell script
+        // (`…\nodejs\npm`) BEFORE `…\nodejs\npm.cmd`. Taking the first line
+        // would hand Command::new a file Windows cannot execute at all.
+        let pm = resolve_global_pm("npm").expect("npm must be on PATH");
+        assert!(
+            has_executable_extension(&pm.executable),
+            "resolved shim must be directly executable, got {:?}",
+            pm.executable
+        );
+    }
+
+    #[test]
+    fn executable_extension_allowlist_is_narrow() {
+        assert!(has_executable_extension("C:\\x\\npm.cmd"));
+        assert!(has_executable_extension("C:\\x\\npm.CMD"));
+        assert!(has_executable_extension("C:\\x\\pnpm.bat"));
+        assert!(has_executable_extension("C:\\x\\node.exe"));
+        assert!(has_executable_extension("C:\\x\\tool.com"));
+        // On PATHEXT but not something the scaffold runner should launch.
+        assert!(!has_executable_extension("C:\\x\\npm.js"));
+        assert!(!has_executable_extension("C:\\x\\npm.vbs"));
+        // The extension-less Unix shell script `where npm` reports first.
+        assert!(!has_executable_extension("C:\\Program Files\\nodejs\\npm"));
+        assert!(!has_executable_extension("/usr/bin/pnpm"));
     }
 }
