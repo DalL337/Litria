@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Minus, Square, X, Copy } from 'lucide-react';
+import appIcon from '../../img/litria-app-icon-64.png';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -270,6 +271,13 @@ export default function MenuBar({ bindings }) {
   return (
     <div className="menu-bar">
       <div className="menu-bar-left">
+        <img
+          className="menu-bar-brand"
+          src={appIcon}
+          alt=""
+          aria-hidden="true"
+          draggable="false"
+        />
         {sections.map((section) => (
           <MenuDropdown
             key={section.label}
