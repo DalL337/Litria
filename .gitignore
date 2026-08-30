@@ -57,3 +57,4 @@ design-sync-test/
 
 # Archived per-release sourcemaps (crash-stack symbolication; never shipped)
 release-sourcemaps/
+.litria/
