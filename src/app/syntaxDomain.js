@@ -433,21 +433,70 @@ export function createSyntaxDomain() {
 
   // ---- Import stub generation -----------------------------------------------
 
-  function _findImportInsertLine(text) {
+  /**
+   * Collect the top-level import STATEMENTS in `text`, each as a line range.
+   *
+   * Why this exists (2026-08-30): every import helper here used to scan line by
+   * line and treat "line starts with `import`" as "this line is a whole import".
+   * That is false for the multi-line form, which is the norm in this codebase:
+   *
+   *     import {            <- only this line starts with `import`
+   *       HUD_WIDGETS,
+   *     } from './hudState.js';   <- the `from` clause lives HERE
+   *
+   * The consequences were not cosmetic. `_findImportFromSpec` never matched a
+   * multi-line import (the `from` line starts with `}`), so the writer believed
+   * no import existed and took the insert branch; `_findImportInsertLine`
+   * returned "after `import {`", i.e. INSIDE the statement. Dragging a folder
+   * onto the canvas therefore wrote a stub into the middle of an existing
+   * import and left the file syntactically invalid. Found by dogfooding Litria
+   * on Litria; 10 files corrupted in one drag.
+   * (Journal: .research/2026-08-30-import-insertion-corruption.md)
+   *
+   * A statement starts on a line whose first token is `import` (but not the
+   * dynamic `import(`) and continues until its module specifier string closes —
+   * either `from '…'` or the side-effect form `import '…'`. Lookahead is capped
+   * so a stray `import` in prose can never swallow the file.
+   *
+   * @param {string} text
+   * @returns {Array<{ startLine: number, endLine: number, text: string }>}
+   *   Line indices are 0-based and INCLUSIVE. Single-line imports have
+   *   startLine === endLine.
+   */
+  function _collectImportStatements(text) {
     const lines = text.split('\n');
-    let lastImportIndex = -1;
+    const statements = [];
+    // `import` as a statement keyword: followed by whitespace, a brace, a star,
+    // or a quote. Excludes `import(` (dynamic) and identifiers like `important`.
+    const startRe = /^import(?=[\s{*'"`])/;
+    // A complete statement: `import … from '…'` or the bare `import '…'`.
+    const doneRe = /^\s*import\b[\s\S]*?(?:from\s*['"`][^'"`]*['"`]|['"`][^'"`]*['"`])/;
+    const MAX_STATEMENT_LINES = 200;
+
     for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trimStart();
-      if (
-        trimmed.startsWith('import ') ||
-        trimmed.startsWith("import'") ||
-        trimmed.startsWith('import"') ||
-        trimmed.startsWith('import{')
-      ) {
-        lastImportIndex = i;
+      if (!startRe.test(lines[i].trimStart())) continue;
+
+      let acc = lines[i];
+      let end = i;
+      while (!doneRe.test(acc) && end - i < MAX_STATEMENT_LINES && end + 1 < lines.length) {
+        end += 1;
+        acc += `\n${lines[end]}`;
       }
+      // Unterminated (truncated file, or a false positive) — do not claim a
+      // range we cannot prove; skip it rather than guess at a boundary.
+      if (!doneRe.test(acc)) continue;
+
+      statements.push({ startLine: i, endLine: end, text: acc });
+      i = end;
     }
-    return lastImportIndex + 1;
+    return statements;
+  }
+
+  function _findImportInsertLine(text) {
+    const statements = _collectImportStatements(text);
+    if (statements.length === 0) return 0;
+    // After the LAST line of the last statement — never inside one.
+    return statements[statements.length - 1].endLine + 1;
   }
 
   // ---- Python import writing (brief-python-wires S2) ------------------------
@@ -583,15 +632,28 @@ export function createSyntaxDomain() {
           lines.splice(at, 0, ...insertText.split('\n'));
           break;
         }
+        // `endLine` (INCLUSIVE, optional) lets a plan address a whole multi-line
+        // statement. Omitted, it collapses to the historical single-line
+        // behavior. A multi-line import replaced one line at a time would keep
+        // its orphaned specifier lines and its `} from '…';` tail — broken
+        // source, the same class of damage this pass fixes.
         case 'replace': {
           if (plan.line >= 0 && plan.line < lines.length) {
-            lines[plan.line] = plan.text.replace(/\n$/, '');
+            const end = Math.min(
+              Math.max(plan.endLine ?? plan.line, plan.line),
+              lines.length - 1
+            );
+            lines.splice(plan.line, end - plan.line + 1, ...plan.text.replace(/\n$/, '').split('\n'));
           }
           break;
         }
         case 'removeLine': {
           if (plan.line >= 0 && plan.line < lines.length) {
-            lines.splice(plan.line, 1);
+            const end = Math.min(
+              Math.max(plan.endLine ?? plan.line, plan.line),
+              lines.length - 1
+            );
+            lines.splice(plan.line, end - plan.line + 1);
           }
           break;
         }
@@ -615,21 +677,22 @@ export function createSyntaxDomain() {
    *
    * @param {string} text
    * @param {string} relSpec - extension-stripped module specifier
-   * @returns {{ line: number, raw: string, spec: string } | null}
-   *   `line` 0-indexed; `raw` is the full existing import line; `spec` is the
-   *   existing line's module specifier (with whatever extension it had).
+   * @returns {{ line: number, endLine: number, raw: string, spec: string } | null}
+   *   `line`/`endLine` 0-indexed and INCLUSIVE; `raw` is the full existing
+   *   import STATEMENT (which may span several lines); `spec` is the existing
+   *   statement's module specifier (with whatever extension it had).
    */
   function _findImportFromSpec(text, relSpec) {
-    const lines = text.split('\n');
     const escaped = relSpec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     // Same module, with or without a JS/TS extension. Capture the actual spec.
     const specRe = new RegExp(`from\\s*['"\`](${escaped}(?:\\.(?:jsx?|tsx?|mjs|cjs))?)['"\`]`);
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trimStart();
-      if (!trimmed.startsWith('import')) continue;
-      const m = lines[i].match(specRe);
+    // Statement-wise, not line-wise: a multi-line import keeps its `from`
+    // clause on the closing line, which no line-level `startsWith('import')`
+    // test can ever reach.
+    for (const stmt of _collectImportStatements(text)) {
+      const m = stmt.text.match(specRe);
       if (!m) continue;
-      return { line: i, raw: lines[i], spec: m[1] };
+      return { line: stmt.startLine, endLine: stmt.endLine, raw: stmt.text, spec: m[1] };
     }
     return null;
   }
@@ -759,11 +822,11 @@ export function createSyntaxDomain() {
         // stub rather than deleting a line the user may expect to exist.
         const stub = `import { /* TODO: select symbol */ } from '${existing.spec}';\n`;
         return _applyPlansToText(targetText, [
-          { kind: 'replace', filePath: edge.targetFilePath, line: existing.line, text: stub },
+          { kind: 'replace', filePath: edge.targetFilePath, line: existing.line, endLine: existing.endLine, text: stub },
         ]);
       }
       return _applyPlansToText(targetText, [
-        { kind: 'replace', filePath: edge.targetFilePath, line: existing.line, text: newLine },
+        { kind: 'replace', filePath: edge.targetFilePath, line: existing.line, endLine: existing.endLine, text: newLine },
       ]);
     }
 
@@ -797,11 +860,11 @@ export function createSyntaxDomain() {
     const newLine = _composeImportLine({ def: ex.def, ns: ex.ns, named }, existing.spec, _detectQuote(existing.raw));
     if (newLine === '') {
       return _applyPlansToText(targetText, [
-        { kind: 'removeLine', filePath: edge.targetFilePath, line: existing.line },
+        { kind: 'removeLine', filePath: edge.targetFilePath, line: existing.line, endLine: existing.endLine },
       ]);
     }
     return _applyPlansToText(targetText, [
-      { kind: 'replace', filePath: edge.targetFilePath, line: existing.line, text: newLine },
+      { kind: 'replace', filePath: edge.targetFilePath, line: existing.line, endLine: existing.endLine, text: newLine },
     ]);
   }
 
@@ -1292,7 +1355,7 @@ export function createSyntaxDomain() {
       if (!existing) return { edits: [] };
 
       const newTargetText = _applyPlansToText(targetText, [
-        { kind: 'removeLine', filePath: edge.targetFilePath, line: existing.line },
+        { kind: 'removeLine', filePath: edge.targetFilePath, line: existing.line, endLine: existing.endLine },
       ]);
       if (newTargetText === targetText) return { edits: [] };
       return { edits: [{ filePath: edge.targetFilePath, newText: newTargetText }] };
