@@ -15,6 +15,20 @@
   align-items: center;
   padding-left: 4px;
 }
+/* Brand mark. The source art is line work on an OPAQUE black square (no alpha),
+   so `screen` blending is what makes it sit on the bar: screen leaves the
+   backdrop untouched wherever the source is black, so the square disappears and
+   only the lotus survives. Drop the blend mode and you get a visible dark tile.
+   Revisit if a transparent export ever lands. */
+.menu-bar-brand {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin: 0 8px 0 2px;
+  mix-blend-mode: screen;
+  -webkit-user-drag: none;
+  user-select: none;
+}
 .menu-bar-drag {
   flex: 1;
   height: 100%;
