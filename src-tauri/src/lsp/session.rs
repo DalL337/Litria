@@ -10,6 +10,7 @@
 //! handshake, before the session is inserted into the registry.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -51,6 +52,27 @@ fn session_key(project_id: &str, language_id: &str) -> SessionKey {
 }
 
 // ---------------------------------------------------------------------------
+// Session quotas (audit #21)
+// ---------------------------------------------------------------------------
+//
+// Dedupe keys on the caller-supplied `(project_id, language_id)`. Both ids are
+// length-capped (#5) and the key is collision-free (#7), but `project_root` was
+// validated and then dropped — so N different `project_id`s named one directory
+// and got N servers for it. These bound the blast radius of a renderer that
+// varies the id, which in a local IDE means an XSS in Litria's own UI first.
+
+/// Five packs exist today (python, typescript, rust, cpp, go). Per-root headroom
+/// for a couple more; a root legitimately wanting nine servers does not exist.
+const MAX_SESSIONS_PER_ROOT: usize = 8;
+/// Generous even for the multi-session future (~3 projects × every pack).
+/// Twenty-four language servers is already far past any real workspace.
+const MAX_SESSIONS_TOTAL: usize = 24;
+/// A start holds a spawned child through a ~1–2s handshake before it is ever
+/// registered, so the registry caps above cannot see it. This is the cap that
+/// actually bounds a burst.
+const MAX_CONCURRENT_STARTS: usize = 4;
+
+// ---------------------------------------------------------------------------
 // Start reservations — closes the check-then-insert race (2026-07-17 dev
 // crash-loop). `start` registers the session only AFTER resolve + spawn +
 // handshake (~1-2s); two concurrent starts for the same key both passed the
@@ -59,12 +81,17 @@ fn session_key(project_id: &str, language_id: &str) -> SessionKey {
 // unconditional remove dropped the successor: a self-sustaining cascade.
 // A key must now be reserved for the whole start; the loser fails fast with
 // `already_active`.
+//
+// The claim carries the canonical root as well as the key (audit #21): the
+// registry checks cannot see an in-flight start, so without this a second
+// `project_id` for the same directory sails through the whole window.
 // ---------------------------------------------------------------------------
 
-static STARTING: OnceLock<Mutex<std::collections::HashSet<SessionKey>>> = OnceLock::new();
+/// In-flight starts: session key → the canonical root that start is claiming.
+static STARTING: OnceLock<Mutex<HashMap<SessionKey, PathBuf>>> = OnceLock::new();
 
-fn starting_keys() -> &'static Mutex<std::collections::HashSet<SessionKey>> {
-    STARTING.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+fn starting_keys() -> &'static Mutex<HashMap<SessionKey, PathBuf>> {
+    STARTING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// RAII reservation of a session key for the duration of a start attempt.
@@ -79,14 +106,39 @@ impl Drop for StartReservation {
     }
 }
 
-/// Reserve `key` for a start attempt. Returns None when another start for the
-/// same key is already in flight.
-fn try_reserve_start(key: &SessionKey) -> Option<StartReservation> {
-    if starting_keys().lock().unwrap().insert(key.clone()) {
-        Some(StartReservation { key: key.clone() })
-    } else {
-        None
+/// Why a start could not be reserved. Each maps to a distinct error message so
+/// a refusal is diagnosable rather than a generic "already active".
+#[derive(Debug)]
+enum StartRefusal {
+    KeyInFlight,
+    RootInFlight,
+    TooManyConcurrent,
+}
+
+/// Reserve `key` for a start attempt against `canonical_root`.
+fn try_reserve_start(
+    key: &SessionKey,
+    canonical_root: &Path,
+) -> Result<StartReservation, StartRefusal> {
+    let mut starting = starting_keys().lock().unwrap();
+
+    if starting.contains_key(key) {
+        return Err(StartRefusal::KeyInFlight);
     }
+    // Same directory, same language, different project_id — the #21 shape,
+    // caught inside the window where the registry is still blind to it.
+    if starting
+        .iter()
+        .any(|(k, root)| k.1 == key.1 && root == canonical_root)
+    {
+        return Err(StartRefusal::RootInFlight);
+    }
+    if starting.len() >= MAX_CONCURRENT_STARTS {
+        return Err(StartRefusal::TooManyConcurrent);
+    }
+
+    starting.insert(key.clone(), canonical_root.to_path_buf());
+    Ok(StartReservation { key: key.clone() })
 }
 
 // Input bounds for LSP command identifiers (audit #5). In the desktop model the
@@ -114,13 +166,17 @@ fn ensure_len(value: &str, max: usize, field: &str) -> CommandResult<()> {
 
 pub(crate) struct LspSession {
     pub session_id: String,
-    // Identity mirrored from the session key (diagnostics + the
-    // multi-session scoping the brief anticipates); not read on any
-    // current path.
-    #[allow(dead_code)]
+    // Identity mirrored from the session key. Read by the audit #21 quota
+    // checks in `start_session`; the `#[allow(dead_code)]` these carried is
+    // gone now that a consumer landed (implementation-policy Rule 5).
     pub language_id: String,
-    #[allow(dead_code)]
     pub project_id: String,
+    /// The canonicalized `project_root` this server was spawned into. Read by
+    /// the quota checks in `start_session` (audit #21) so one directory cannot
+    /// be claimed by an unbounded number of `project_id`s. Comparison only —
+    /// the original, un-canonicalized `project_root` is what reaches
+    /// `current_dir` and `rootUri`.
+    canonical_root: PathBuf,
     transport: LspTransport,
     pending: PendingMap,
 }
@@ -156,6 +212,138 @@ impl LspSession {
 // ---------------------------------------------------------------------------
 // Session start
 // ---------------------------------------------------------------------------
+
+/// The identity fields the quota policy reasons about, lifted out of the
+/// registry so the policy is a pure function over a slice — testable without a
+/// spawned language server behind every entry.
+struct SessionIdentity<'a> {
+    project_id: &'a str,
+    language_id: &'a str,
+    canonical_root: &'a Path,
+}
+
+/// Why a start was refused, with the context its message needs.
+enum QuotaRefusal {
+    KeyActive,
+    RootActive { holder: String },
+    ProjectIdRebound { other_root: String },
+    RootQuota { count: usize },
+    GlobalQuota { count: usize },
+}
+
+/// The audit #21 policy, in one place and free of locks and I/O.
+fn evaluate_start_quotas(
+    existing: &[SessionIdentity<'_>],
+    project_id: &str,
+    language_id: &str,
+    canonical_root: &Path,
+) -> Result<(), QuotaRefusal> {
+    if existing
+        .iter()
+        .any(|s| s.project_id == project_id && s.language_id == language_id)
+    {
+        return Err(QuotaRefusal::KeyActive);
+    }
+
+    // The finding itself: one directory, one server per language. Reaching here
+    // with a matching root means a DIFFERENT project_id named it, because the
+    // exact key missed above.
+    if let Some(holder) = existing
+        .iter()
+        .find(|s| s.canonical_root == canonical_root && s.language_id == language_id)
+    {
+        return Err(QuotaRefusal::RootActive {
+            holder: holder.project_id.to_string(),
+        });
+    }
+
+    // The inverse confusion: one project_id claiming two directories. Cheap to
+    // check here and it keeps the id↔root binding one-to-one in both
+    // directions, which is what makes the check above trustworthy.
+    if let Some(other) = existing
+        .iter()
+        .find(|s| s.project_id == project_id && s.canonical_root != canonical_root)
+    {
+        return Err(QuotaRefusal::ProjectIdRebound {
+            other_root: other.canonical_root.display().to_string(),
+        });
+    }
+
+    let per_root = existing
+        .iter()
+        .filter(|s| s.canonical_root == canonical_root)
+        .count();
+    if per_root >= MAX_SESSIONS_PER_ROOT {
+        return Err(QuotaRefusal::RootQuota { count: per_root });
+    }
+
+    if existing.len() >= MAX_SESSIONS_TOTAL {
+        return Err(QuotaRefusal::GlobalQuota {
+            count: existing.len(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Registry-side half of the audit #21 quotas: snapshot the identities under one
+/// lock so every answer is consistent with the others, then apply the policy.
+///
+/// The bindings are DERIVED from the session registry rather than kept in a
+/// second map: a parallel index of root → project_id is one more thing that can
+/// drift out of step with the sessions it describes.
+fn check_start_quotas(
+    canonical_root: &Path,
+    project_id: &str,
+    language_id: &str,
+    pack: &LanguagePack,
+) -> CommandResult<()> {
+    let sessions = sessions().lock().unwrap();
+    let identities: Vec<SessionIdentity<'_>> = sessions
+        .values()
+        .map(|s| SessionIdentity {
+            project_id: &s.project_id,
+            language_id: &s.language_id,
+            canonical_root: &s.canonical_root,
+        })
+        .collect();
+
+    let prefix = &pack.error_prefix;
+    evaluate_start_quotas(&identities, project_id, language_id, canonical_root).map_err(|refusal| {
+        match refusal {
+            QuotaRefusal::KeyActive => CommandError::conflict(
+                &format!("{prefix}.session.already_active"),
+                format!(
+                    "LSP session already active for project '{project_id}' language '{language_id}'"
+                ),
+            ),
+            QuotaRefusal::RootActive { holder } => CommandError::conflict(
+                &format!("{prefix}.session.root_already_active"),
+                format!(
+                    "An LSP session for language '{language_id}' is already active on this project root under project id '{holder}'."
+                ),
+            ),
+            QuotaRefusal::ProjectIdRebound { other_root } => CommandError::conflict(
+                &format!("{prefix}.session.project_root_mismatch"),
+                format!(
+                    "Project id '{project_id}' is already bound to a different project root ('{other_root}')."
+                ),
+            ),
+            QuotaRefusal::RootQuota { count } => CommandError::conflict(
+                &format!("{prefix}.session.root_quota"),
+                format!(
+                    "This project root already has {count} language servers running (limit {MAX_SESSIONS_PER_ROOT})."
+                ),
+            ),
+            QuotaRefusal::GlobalQuota { count } => CommandError::conflict(
+                &format!("{prefix}.session.global_quota"),
+                format!(
+                    "{count} language servers are already running (limit {MAX_SESSIONS_TOTAL})."
+                ),
+            ),
+        }
+    })
+}
 
 /// Start a new LSP session for the given language + project.
 ///
@@ -194,25 +382,50 @@ pub(crate) fn start_session(
         ));
     }
 
+    // Audit #21: the root was validated above and then dropped, so the session
+    // key said nothing about which directory it named. Canonicalize it once and
+    // use it as the identity the quotas below are enforced against — symlinks,
+    // `.`/`..` and case differences all collapse to one answer, so varying the
+    // spelling is not a way around them. COMPARISON ONLY: `project_root` itself
+    // is what still reaches `current_dir` and `rootUri` (on Windows this yields
+    // a `\\?\` verbatim path, which some servers dislike as a root).
+    let canonical_root = std::fs::canonicalize(project_root).map_err(|e| {
+        CommandError::invalid_path(
+            &format!("{}.invalid_project_root", pack.error_prefix),
+            format!("Project root '{project_root}' could not be resolved: {e}"),
+        )
+    })?;
+
     let key = session_key(project_id, language_id);
-    if sessions().lock().unwrap().contains_key(&key) {
-        return Err(CommandError::conflict(
-            &format!("{}.session.already_active", pack.error_prefix),
-            format!(
-                "LSP session already active for project '{project_id}' language '{language_id}'"
-            ),
-        ));
-    }
+    check_start_quotas(&canonical_root, project_id, language_id, &pack)?;
+
     // Hold a start reservation for the whole resolve/spawn/handshake window —
     // a concurrent second start fails fast here instead of replacing the
-    // first session at insert time. Released on every exit path via Drop.
-    let _start_reservation = try_reserve_start(&key).ok_or_else(|| {
-        CommandError::conflict(
-            &format!("{}.session.already_active", pack.error_prefix),
-            format!(
-                "LSP session start already in progress for project '{project_id}' language '{language_id}'"
+    // first session at insert time. The claim carries the canonical root, so a
+    // second `project_id` for the same directory is refused inside the window
+    // too. Released on every exit path via Drop.
+    let _start_reservation = try_reserve_start(&key, &canonical_root).map_err(|refusal| {
+        let prefix = &pack.error_prefix;
+        match refusal {
+            StartRefusal::KeyInFlight => CommandError::conflict(
+                &format!("{prefix}.session.already_active"),
+                format!(
+                    "LSP session start already in progress for project '{project_id}' language '{language_id}'"
+                ),
             ),
-        )
+            StartRefusal::RootInFlight => CommandError::conflict(
+                &format!("{prefix}.session.root_already_active"),
+                format!(
+                    "An LSP session for language '{language_id}' is already starting for this project root."
+                ),
+            ),
+            StartRefusal::TooManyConcurrent => CommandError::conflict(
+                &format!("{prefix}.session.too_many_starts"),
+                format!(
+                    "Too many LSP sessions are starting at once (limit {MAX_CONCURRENT_STARTS}). Try again in a moment."
+                ),
+            ),
+        }
     })?;
 
     let session_id =
@@ -330,6 +543,7 @@ pub(crate) fn start_session(
         session_id: session_id.clone(),
         language_id: language_id.to_string(),
         project_id: project_id.to_string(),
+        canonical_root: canonical_root.clone(),
         transport,
         pending,
     };
@@ -793,27 +1007,151 @@ mod tests {
         assert_eq!(session_key("proj", "rust"), ("proj".to_string(), "rust".to_string()));
     }
 
+    /// `STARTING` is process-global and now carries a concurrency cap, so the
+    /// reservation cases must run as one test — cargo's parallel runner would
+    /// otherwise let separate tests hold reservations against each other's cap.
     #[test]
-    fn start_reservation_blocks_second_start_and_releases_on_drop() {
+    fn start_reservations_are_per_key_per_root_and_capped() {
+        let root_a = Path::new("/tmp/litria-res-a");
+        let root_b = Path::new("/tmp/litria-res-b");
+
+        // -- per key: a second start for the same key fails fast, and the key
+        //    is reusable once the first reservation drops.
         let key = session_key("res-test-proj", "res-test-lang");
-        let first = try_reserve_start(&key);
-        assert!(first.is_some(), "first reservation must succeed");
+        let first = try_reserve_start(&key, root_a).expect("first reservation");
         assert!(
-            try_reserve_start(&key).is_none(),
-            "second concurrent reservation must fail fast"
+            matches!(
+                try_reserve_start(&key, root_a),
+                Err(StartRefusal::KeyInFlight)
+            ),
+            "second concurrent reservation for the same key must fail fast"
         );
         drop(first);
-        let again = try_reserve_start(&key);
-        assert!(again.is_some(), "reservation must be reusable after release");
+        let again = try_reserve_start(&key, root_a).expect("reusable after release");
         drop(again);
+
+        // -- audit #21: a different project_id naming the SAME root for the
+        //    same language is refused inside the start window, where the
+        //    session registry cannot see it yet.
+        let a = try_reserve_start(&session_key("proj-a", "python"), root_a).expect("a");
+        assert!(
+            matches!(
+                try_reserve_start(&session_key("proj-a-alias", "python"), root_a),
+                Err(StartRefusal::RootInFlight)
+            ),
+            "a second project_id for one root+language must be refused"
+        );
+        // A different root, or a different language on the same root, is fine.
+        let b = try_reserve_start(&session_key("proj-b", "python"), root_b).expect("b");
+        let c = try_reserve_start(&session_key("proj-a", "typescript"), root_a).expect("c");
+
+        // -- concurrency cap: three are held; the fourth fits, the fifth does not.
+        let d = try_reserve_start(&session_key("proj-d", "rust"), Path::new("/tmp/litria-res-d"))
+            .expect("fourth fits the cap");
+        assert_eq!(MAX_CONCURRENT_STARTS, 4, "test assumes the cap it exercises");
+        assert!(
+            matches!(
+                try_reserve_start(&session_key("proj-e", "cpp"), Path::new("/tmp/litria-res-e")),
+                Err(StartRefusal::TooManyConcurrent)
+            ),
+            "a start past the concurrency cap must be refused"
+        );
+
+        drop((a, b, c, d));
+        assert!(
+            starting_keys().lock().unwrap().is_empty(),
+            "every reservation must release on drop"
+        );
+    }
+
+    // -- audit #21 quota policy (pure — no registry, no locks) ----------------
+
+    fn ident<'a>(project_id: &'a str, language_id: &'a str, root: &'a Path) -> SessionIdentity<'a> {
+        SessionIdentity {
+            project_id,
+            language_id,
+            canonical_root: root,
+        }
     }
 
     #[test]
-    fn reservations_are_per_key() {
-        let a = try_reserve_start(&session_key("proj-a", "python"));
-        let b = try_reserve_start(&session_key("proj-b", "python"));
-        let c = try_reserve_start(&session_key("proj-a", "typescript"));
-        assert!(a.is_some() && b.is_some() && c.is_some());
+    fn quotas_allow_a_fresh_root_and_a_second_language_on_a_known_root() {
+        let root = Path::new("/tmp/litria-q-a");
+        assert!(evaluate_start_quotas(&[], "p1", "python", root).is_ok());
+
+        let existing = [ident("p1", "python", root)];
+        assert!(
+            evaluate_start_quotas(&existing, "p1", "typescript", root).is_ok(),
+            "a second language on the same project is the normal case"
+        );
+    }
+
+    #[test]
+    fn quotas_refuse_a_second_project_id_for_one_root() {
+        // The finding: `project_root` was validated then dropped, so varying
+        // `project_id` spawned N servers for one directory.
+        let root = Path::new("/tmp/litria-q-b");
+        let existing = [ident("p1", "python", root)];
+        assert!(matches!(
+            evaluate_start_quotas(&existing, "p2", "python", root),
+            Err(QuotaRefusal::RootActive { holder }) if holder == "p1"
+        ));
+    }
+
+    #[test]
+    fn quotas_refuse_the_same_key_twice() {
+        let root = Path::new("/tmp/litria-q-c");
+        let existing = [ident("p1", "python", root)];
+        assert!(matches!(
+            evaluate_start_quotas(&existing, "p1", "python", root),
+            Err(QuotaRefusal::KeyActive)
+        ));
+    }
+
+    #[test]
+    fn quotas_refuse_one_project_id_claiming_two_roots() {
+        let root_a = Path::new("/tmp/litria-q-d");
+        let root_b = Path::new("/tmp/litria-q-e");
+        let existing = [ident("p1", "python", root_a)];
+        assert!(matches!(
+            evaluate_start_quotas(&existing, "p1", "typescript", root_b),
+            Err(QuotaRefusal::ProjectIdRebound { .. })
+        ));
+    }
+
+    #[test]
+    fn quotas_cap_servers_per_root() {
+        let root = Path::new("/tmp/litria-q-f");
+        // One project id, MAX_SESSIONS_PER_ROOT languages already running.
+        let langs: Vec<String> = (0..MAX_SESSIONS_PER_ROOT)
+            .map(|i| format!("lang-{i}"))
+            .collect();
+        let existing: Vec<SessionIdentity<'_>> =
+            langs.iter().map(|l| ident("p1", l, root)).collect();
+        assert!(matches!(
+            evaluate_start_quotas(&existing, "p1", "one-more", root),
+            Err(QuotaRefusal::RootQuota { count }) if count == MAX_SESSIONS_PER_ROOT
+        ));
+    }
+
+    #[test]
+    fn quotas_cap_servers_globally() {
+        // Every entry on its own root and its own id, so only the global cap
+        // can be the thing that refuses.
+        let roots: Vec<PathBuf> = (0..MAX_SESSIONS_TOTAL)
+            .map(|i| PathBuf::from(format!("/tmp/litria-q-g-{i}")))
+            .collect();
+        let ids: Vec<String> = (0..MAX_SESSIONS_TOTAL).map(|i| format!("p{i}")).collect();
+        let existing: Vec<SessionIdentity<'_>> = roots
+            .iter()
+            .zip(ids.iter())
+            .map(|(r, id)| ident(id, "python", r))
+            .collect();
+        let fresh = Path::new("/tmp/litria-q-g-fresh");
+        assert!(matches!(
+            evaluate_start_quotas(&existing, "p-new", "python", fresh),
+            Err(QuotaRefusal::GlobalQuota { count }) if count == MAX_SESSIONS_TOTAL
+        ));
     }
 
     #[test]
