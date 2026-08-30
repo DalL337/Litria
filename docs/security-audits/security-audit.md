@@ -1,11 +1,14 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-08-28 — external-scan remediation round 2 (PR #3):
-> review-of-the-review corrections to issues 17 and 20, plus refreshed npm and
-> cargo scans. Preceded by the 2026-08-27 external automated scan (CodeRabbit),
-> issues 15–21 — a sink-reachability pass over `src-tauri/` only; see that
-> section's scope note for what it does not cover.
+> **Last reviewed**: 2026-08-30 — **checklist close-out (PRs #4–#8)**: every
+> remaining actionable finding closed (#17b, #18b, #19, #21) and the `quick-xml`
+> HIGH advisory cleared, which turned out not to be blocked upstream any more.
+> **The Master Remediation Checklist now has no open code findings.** Preceded
+> by 2026-08-28 (external-scan remediation round 2, PR #3: corrections to issues
+> 17 and 20) and the 2026-08-27 external automated scan (CodeRabbit), issues
+> 15–21 — a sink-reachability pass over `src-tauri/` only; see that section's
+> scope note for what it does not cover.
 > **Last whole-repo pass**: 2026-07-16
 > **Scope (whole-repo pass)**: Tauri config/CSP, IPC command surface, ADR-005
 > download manager (pins/SHA/extraction), ADR-021 scaffold runner, ADR-020
@@ -28,19 +31,28 @@
 - History: 2026-07-16 carried 1 low (`@babel/core` GHSA-4x5r-pxfx-6jf8), cleared
   by `npm audit fix` in PR #152. 2026-03-28 scanned 0 vulns across 263 packages.
 
-### Cargo (552 crate dependencies)
-- [ ] **2 HIGH vulnerabilities (NEW 2026-07-16)** — `quick-xml 0.38.4`:
+### Cargo (586 crate dependencies)
+- [x] **0 vulnerabilities — cleared 2026-08-30.** `cargo audit` reports no
+  advisories. The two HIGH `quick-xml 0.38.4` findings below are retired.
+- [x] **2 HIGH vulnerabilities (raised 2026-07-16, CLEARED 2026-08-30)** —
+  `quick-xml 0.38.4`:
   - RUSTSEC-2026-0194 (7.5) — quadratic runtime on duplicate attribute names (DoS).
   - RUSTSEC-2026-0195 (7.5) — unbounded namespace-declaration allocation → memory
     exhaustion (DoS). Fix: quick-xml `>=0.41.0`.
-  - **Blocked upstream.** Path: `quick-xml ← plist 1.8.0 ← tauri-plugin-{opener,
-    fs,dialog} + tauri-codegen`. `cargo update -p quick-xml` locks 0 packages —
-    `plist 1.8.0` constrains quick-xml to the 0.38.x line; unblocks when Tauri
-    ships a plist bump. Runtime reachability is low (plist parses Apple XML plists,
-    macOS-centric; the codegen path runs at build time), but advisory severity is
-    High. **Unblocks on:** Tauri/plist upstream release. Re-check each Tauri bump.
-  - **Rescanned 2026-08-28: unchanged.** Both advisories still present, still
-    `plist`-blocked. `cargo audit` reports "2 vulnerabilities found".
+  - Path was `quick-xml ← plist 1.8.0 ← tauri-plugin-{opener,fs,dialog} +
+    tauri-codegen`, and it was carried as blocked-upstream for six weeks because
+    `plist 1.8.0` pinned the 0.38.x line.
+  - **Not blocked any more.** `cargo update -p plist` moves plist 1.8.0 → 1.10.0
+    and removes quick-xml 0.38.4 from the tree entirely; the remaining
+    quick-xml 0.41.0 is the copy `wayland-scanner` already pulled, so one now
+    serves both. Lockfile only — Tauri's own requirement always permitted the
+    newer plist. ✅ **merged PR #7 (2026-08-30).**
+  - **Method note worth keeping:** the "blocked upstream, `cargo update` locks 0
+    packages" line was accurate when written and was re-read rather than re-run
+    at the 2026-08-28 rescan. A blocked-upstream item has to be **re-probed** on
+    each pass, not re-read — the probe is one command and the note has no way to
+    tell you it went stale.
+  - **Rescanned 2026-08-28: unchanged** (the last pass at which this was true).
 - [ ] **22 upstream warnings** (was 21 at 2026-07-16, 18 before that) —
   unmaintained/unsound transitive deps. **New at the 2026-08-28 rescan:**
   `fxhash` unmaintained (RUSTSEC-2025-0057), transitive via the Tauri/GTK tree.
@@ -65,14 +77,29 @@ don't restate the fix here). Ordered by leverage, then severity. `#N` is the
 finding number; the parenthetical is the fix in a phrase, and the date is when
 the finding was first raised.
 
+> **Status 2026-08-30 — no open code findings.** Every finding raised across the
+> 2026-03-19, 2026-03-28, 2026-07-16 and 2026-08-27 passes is now fixed, or
+> accepted with a recorded reason (#3, #16). The only unchecked line left is the
+> 22 unmaintained-transitive cargo warnings, which are blocked on Tauri's GTK4
+> migration and are tracking-only. `cargo audit` = 0 vulnerabilities;
+> `npm audit` = 0.
+>
+> This is a snapshot of *findings raised*, not a claim of absence. The last
+> whole-repo pass was 2026-07-16; the 2026-08-27 external scan covered
+> `src-tauri/` sinks only, and found three things that whole-repo pass had
+> missed. An empty checklist is due for the next pass, not proof there is
+> nothing to find.
+
 ### Do first (highest leverage)
 
 - [x] **#10** — Enable a restrictive CSP (`csp: null` → `default-src 'self'`,
   no `unsafe-inline`/`eval` on scripts). Single change that contains #1/#11/#12
   if XSS ever lands. *(2026-07-16)* — ✅ **merged PR #151 (2026-07-17, S7, ADR-023; strict prod `csp` + dev-only `devCsp`, verified on a production build incl. Monaco under CSP).**
-- [ ] **dep** — Track `quick-xml` 0.38.4 (2× RUSTSEC-2026-0194/0195, HIGH DoS)
-  to the next Tauri/plist bump; blocked upstream today (`cargo update` locks 0).
-  *(2026-07-16)* — **still blocked upstream; watch each Tauri bump.**
+- [x] **dep** — `quick-xml` 0.38.4 (2× RUSTSEC-2026-0194/0195, HIGH DoS).
+  *(2026-07-16)* — ✅ **merged PR #7 (2026-08-30); `cargo update -p plist`
+  (1.8.0 → 1.10.0) drops quick-xml 0.38.4 from the tree. `cargo audit` = 0.
+  It had stopped being blocked upstream some time before anyone re-probed —
+  see the Cargo section's method note.**
 
 ### Moderate
 
@@ -119,26 +146,34 @@ the finding was first raised.
   declared) output. Entry count capped at 50k for BOTH zip and tar.gz — the tar
   count pass was added in PR #3 after review flagged that the original fix left
   it documented-but-unenforced. *(2026-08-27)* — ✅ **`630bba8` + PR #3.**
-- [ ] **#18b** — *Structural half of #18*: resolve the package-manager shim to an
-  absolute path so cmd.exe never re-parses the argv (mirrors #17). Proven to work;
-  blocklist holds the line until then. *(2026-08-27)*
-- [ ] **#19** — Byte + count budget for renderer-originated crash records only;
+- [x] **#18b** — *Structural half of #18*: resolve the package-manager shim to an
+  absolute path so cmd.exe never re-parses the argv (mirrors #17). *(2026-08-27)*
+  — ✅ **merged PR #4 (2026-08-30); `absolute_pm_path`, global tier spawns the
+  absolute shim with no prefix args. Blocklist retained at the chokepoint.**
+- [x] **#19** — Byte + count budget for renderer-originated crash records only;
   preserve the deliberate startup-only prune for the panic path. *(2026-08-27)*
-- [ ] **#21** — Bind the LSP session key to a backend-registered canonical project
-  root; add global/per-root/concurrent-start caps. *(2026-08-27)*
-- [ ] **#17b** — *Owner decision, not started*: set
-  `NoDefaultCurrentDirectoryInExePath=1` on the LSP child as defence in depth. Cheap
-  and on-point, but it changes resolution for the language server's own shell-outs,
-  so it was deliberately not shipped unilaterally. *(2026-08-27)*
+  — ✅ **merged PR #5 (2026-08-30); session-scoped 16 records / 4 MiB,
+  `write_js_value`. Panic hook and once-per-event synthesizers untouched.**
+- [x] **#21** — Bind the LSP session key to a backend-registered canonical project
+  root; add global/per-root/concurrent-start caps. *(2026-08-27)* — ✅ **merged
+  PR #6 (2026-08-30); validates rather than re-keys (no IPC-surface change),
+  caps 8/root · 24 global · 4 concurrent starts.**
+- [x] **#17b** — Set `NoDefaultCurrentDirectoryInExePath=1` on the LSP child as
+  defence in depth. *(2026-08-27)* — ✅ **owner-ruled ship, 2026-08-30; merged
+  PR #8. Held for a ruling because it changes resolution for the language
+  server's own shell-outs — which is also precisely why it is worth having.**
 
 ### Accepted / not independently actionable
 
 - [x] **#3** — Path-resolution TOCTOU — accepted (single-user desktop; revisit
   only if multi-user / server). *(2026-03-28)*
-- [ ] **21 cargo warnings** — unmaintained / unsound transitive deps (GTK3,
-  `unic-*`, `glib`, `anyhow`, `rand`) — blocked on Tauri upstream. *(tracking only)*
-- [ ] **1 low npm** — `@babel/core` dev-dep advisory — `npm audit fix` at
-  convenience. *(2026-07-16)*
+- [ ] **22 cargo warnings** — unmaintained / unsound transitive deps (GTK3,
+  `unic-*`, `glib`, `anyhow`, `rand`, `fxhash`) — blocked on Tauri upstream.
+  *(tracking only — **re-probe, don't re-read**: `cargo audit` each pass, per the
+  quick-xml lesson)*
+- [x] **1 low npm** — `@babel/core` dev-dep advisory. *(2026-07-16)* — ✅
+  **cleared by PR #152; re-verified 2026-08-30, `npm audit` = 0 across every
+  severity. This line had outlived its finding.**
 
 ---
 
@@ -208,7 +243,19 @@ Refuses any URL not prefixed `https://github.com/DalL337/litria/issues/new`, so 
 
 ---
 
-## Open Findings
+## Finding Register
+
+Every finding ever raised, in the order it was numbered — fixed, accepted, and
+open alike. The Master Remediation Checklist above is the working view; this is
+the detail each entry points at.
+
+> **Renamed from "Open Findings" 2026-08-30.** The heading had outlived its
+> contents: issues 1–14 all shipped in the S1–S7 arc on 2026-07-17, but each
+> write-up still carried `Status: Open` / `Not remediated` because only the
+> checklist and the summary table were updated at merge time. A reader landing
+> in this section would have counted thirteen open findings that were closed six
+> weeks earlier. Per-issue Status fields are now synced with the checklist —
+> **when a finding lands, update both.**
 
 ### ISSUE 1: `read_external_file` has no project root boundary
 
@@ -217,10 +264,10 @@ Refuses any URL not prefixed `https://github.com/DalL337/litria/issues/new`, so 
 | **Severity** | Moderate |
 | **Location** | `src-tauri/src/project_ops.rs` — `read_external_file()` |
 | **Type** | Information disclosure |
-| **Status** | Open |
+| **Status** | Fixed — PR #150 (S6, ADR-022) |
 | **Found** | 2026-03-19 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #150 (S6, ADR-022)**
 
 Accepts any absolute file path and reads contents. No boundary check. Every other filesystem command validates project root — this is the exception. Read-only risk, but if a webview vulnerability allows arbitrary JS execution, this becomes an information disclosure primitive (SSH keys, .env files, etc.).
 
@@ -235,10 +282,10 @@ Accepts any absolute file path and reads contents. No boundary check. Every othe
 | **Severity** | Low |
 | **Location** | `src-tauri/capabilities/default.json` |
 | **Type** | Missing defense-in-depth |
-| **Status** | Open |
+| **Status** | Fixed — PR #149 (S4) |
 | **Found** | 2026-03-19 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #149 (S4)**
 
 No filesystem scope restrictions defined. Rust `path_guard` is the only defense layer. Litria uses custom Tauri commands (not the `fs` plugin), so standard scopes don't apply directly. Document this architectural decision.
 
@@ -269,10 +316,10 @@ Between existence check and canonicalization, a symlink swap is theoretically po
 | **Severity** | Moderate |
 | **Location** | `src-tauri/src/lsp/transport.rs` — `resolve_cmd_to_node()` |
 | **Type** | Path traversal |
-| **Status** | Open |
+| **Status** | Fixed — PR #146 (S3) |
 | **Found** | 2026-03-28 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #146 (S3)**
 
 The `.cmd` file parser extracts `%dp0%\<path>` and constructs a script path without validating for `..` segments. A malicious `.cmd` file (e.g., compromised npm package) could reference `%dp0%\..\..\..\..\evil.js`.
 
@@ -289,10 +336,10 @@ The `.cmd` file parser extracts `%dp0%\<path>` and constructs a script path with
 | **Severity** | Moderate |
 | **Location** | `src-tauri/src/commands.rs` — all `lsp_*` commands |
 | **Type** | Input validation / DoS |
-| **Status** | Open |
+| **Status** | Fixed — PR #146 (S3) |
 | **Found** | 2026-03-28 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #146 (S3)**
 
 `language_id`, `project_id`, `method` strings have no length limits. A malicious frontend call with megabyte-sized strings could cause memory pressure. `timeout_ms` has no upper bound cap.
 
@@ -309,10 +356,10 @@ The `.cmd` file parser extracts `%dp0%\<path>` and constructs a script path with
 | **Severity** | Moderate |
 | **Location** | `src-tauri/src/lsp/session.rs` — `start_session()` |
 | **Type** | Insufficient validation |
-| **Status** | Open |
+| **Status** | Fixed — PR #146 (S3) |
 | **Found** | 2026-03-28 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #146 (S3)**
 
 `project_root` is passed directly to `Command::current_dir()` without checking it exists, is a directory, or is under an expected project path. The LSP server would run with an attacker-controlled working directory.
 
@@ -329,10 +376,10 @@ The `.cmd` file parser extracts `%dp0%\<path>` and constructs a script path with
 | **Severity** | Low |
 | **Location** | `src-tauri/src/lsp/session.rs` — `session_key()` |
 | **Type** | Key collision |
-| **Status** | Open |
+| **Status** | Fixed — PR #146 (S3) |
 | **Found** | 2026-03-28 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #146 (S3)**
 
 Session key uses `format!("{project_id}::{language_id}")`. If `project_id` contains `::`, keys can collide across different sessions.
 
@@ -349,10 +396,10 @@ Session key uses `format!("{project_id}::{language_id}")`. If `project_id` conta
 | **Severity** | Low |
 | **Location** | `src-tauri/src/lsp/packs/python.rs`, `typescript.rs` |
 | **Type** | Environment injection |
-| **Status** | Open |
+| **Status** | Fixed — PR #147 (S5) |
 | **Found** | 2026-03-28 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #147 (S5)**
 
 `PYTHONPATH` and `NODE_PATH` in env allowlists could inject code paths into language servers if the parent process has malicious values. Desktop context makes this low risk — the parent is the OS shell.
 
@@ -367,10 +414,10 @@ Session key uses `format!("{project_id}::{language_id}")`. If `project_id` conta
 | **Severity** | Low |
 | **Location** | `src/lsp/createLspAdapters.js` — catch blocks |
 | **Type** | Information disclosure |
-| **Status** | Open |
+| **Status** | Fixed — PR #147 (S5) |
 | **Found** | 2026-03-28 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #147 (S5)**
 
 Error objects from Tauri IPC (including file paths, spawn details) are passed directly to the domain layer. Could expose internal paths in UI error messages.
 
@@ -398,10 +445,10 @@ XSS would turn it into an arbitrary-file-read exfiltration primitive.
 | **Severity** | Moderate (defense-in-depth multiplier) |
 | **Location** | `src-tauri/tauri.conf.json` — `app.security.csp = null` |
 | **Type** | Missing defense-in-depth (XSS containment) |
-| **Status** | Open |
+| **Status** | Fixed — PR #151 (S7, ADR-023) |
 | **Found** | 2026-07-16 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #151 (S7, ADR-023)**
 
 Tauri injects no `Content-Security-Policy` when `csp` is `null`. The app has no HTML-injection sinks today (verified — see Verified Strengths), so this is not an active XSS. But CSP is the layer that would *contain* any XSS introduced later (a new feature, a compromised frontend dependency, unsanitized markdown), and several IPC commands (ISSUE 1 `read_external_file`, ISSUE 11 interpreter spawn, ISSUE 12 scaffold name) would become escalation primitives if one landed. This single change raises the floor under most Moderate findings.
 
@@ -416,10 +463,10 @@ Tauri injects no `Content-Security-Policy` when `csp` is `null`. The app has no 
 | **Severity** | Low → Moderate (defense-in-depth) |
 | **Location** | `src-tauri/src/python_scaffold.rs` — `env_command()` l.345-356, `run_env_command()` l.534 |
 | **Type** | Arbitrary process spawn |
-| **Status** | Open |
+| **Status** | Fixed — PR #144 (S1) |
 | **Found** | 2026-07-16 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #144 (S1)**
 
 `config.interpreter_path` (frontend-supplied) flows into `Command::new(interpreter)` with fixed `-m venv .venv` args. It is never checked against the `detect_python_interpreters` results, nor verified to exist / be a Python executable. Under a webview compromise this becomes an arbitrary-program spawn (args are benign, but the *program* is attacker-chosen). Normal flow has the user pick a detected interpreter, so real-world risk is low.
 
@@ -434,10 +481,10 @@ Tauri injects no `Content-Security-Policy` when `csp` is `null`. The app has no 
 | **Severity** | Low (defense-in-depth) |
 | **Location** | `src-tauri/src/scaffold_runner.rs` — `run_scaffold()` l.83, l.132 |
 | **Type** | Path traversal / argument-injection surface |
-| **Status** | Open |
+| **Status** | Fixed — PR #144 (S1) |
 | **Found** | 2026-07-16 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #144 (S1)**
 
 The shared `validate_project_name` guards the Blank and Python creation paths, but the npm/CLI scaffold path uses `config.project_name` raw: `project_dir = location.join(&project_name)` (a `..`-laden name escapes the chosen location; only an `exists()` check follows), and the name is pushed as a subprocess argument. On the Windows **global-npm fallback** (executable `cmd`, prefix `["/C","npm"]`) that argument reaches `cmd.exe` — the BatBadBut (CVE-2024-24576) zone (the default bundled-npm path uses `node npm-cli.js`, no cmd.exe). Rust ≥1.77 mitigates batch-arg escaping, but this is the one creation path that actually spawns external commands and it is the unprotected one.
 
@@ -452,10 +499,10 @@ The shared `validate_project_name` guards the Blank and Python creation paths, b
 | **Severity** | Low |
 | **Location** | `src-tauri/src/lsp/download.rs` — `download_to()` l.163-218 |
 | **Type** | Resource exhaustion (DoS) |
-| **Status** | Open |
+| **Status** | Fixed — PR #145 (S2) |
 | **Found** | 2026-07-16 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #145 (S2)**
 
 The streamed download reads to EOF with no maximum-byte cap; `content-length` is read but used only for progress. Since the SHA is verified *after* the full download, a compromised/redirected endpoint (or a custom URL — ISSUE 14) can stream unbounded bytes and fill the disk before verification rejects them.
 
@@ -470,10 +517,10 @@ The streamed download reads to EOF with no maximum-byte cap; `content-length` is
 | **Severity** | Low (by-design, consent-gated) |
 | **Location** | `src-tauri/src/lsp/download.rs` — `install_server(custom_url)` l.363-370 |
 | **Type** | Integrity / transport downgrade |
-| **Status** | Open (accept-with-hardening) |
+| **Status** | Fixed — PR #145 (S2) |
 | **Found** | 2026-07-16 |
 
-- [ ] **Not remediated**
+- [x] **Remediated — PR #145 (S2)**
 
 A `custom_url` install (ADR §8, recorded as kind `custom`) skips the registry's https-and-64-hex-SHA validation entirely — no integrity pin (by design; the consent UI carries the warning) and **no scheme check**, so a custom URL may be plain `http://` (MITM-able). `ureq` is http(s)-only, so `file://` is not a vector.
 
@@ -629,13 +676,29 @@ separation, escaping, grouping, and variable/delayed expansion. Placed at the
 shared validator per security-policy Rule 4 (a chokepoint rule belongs at the
 chokepoint); all three callers were swept first and all produce folder names.
 
-**Open follow-up (structural half)**: resolve the package-manager shim to an
-absolute path so cmd.exe never re-parses, mirroring the ISSUE 17 fix. Proven to
-work by the same probe — `Command::new(<abs>\show.bat)` with the identical
-argument yields `ARG=["demo&marker"]`, inert, via Rust's post-CVE-2024-24576
-batch escaping.
+**Fixed (structural half — ISSUE 18b, 2026-08-30, PR #4)**: `absolute_pm_path`
+resolves the shim from Litria's own cwd and the global tier spawns it directly
+with no prefix args, so nothing re-parses the argv and the child's own directory
+can no longer shadow it (the ISSUE 17 hazard, in the scaffold domain). Both
+halves of the probe were re-run before the change rather than taken from this
+write-up: `cmd /C show demo&marker` yields `ARG=[demo]` followed by `marker.bat`
+executing; `Command::new(<abs>\show.cmd)` with the identical argument yields
+`ARG=["demo&marker"]`, inert, via Rust's post-CVE-2024-24576 batch escaping. The
+blocklist stays — it is the chokepoint, and it also covers the folder name.
 
-### ISSUE 19: Renderer crash records are unbounded — OPEN
+> **Trap found while fixing, worth carrying to any future `where`-based
+> resolver:** the first line of `where` output is not necessarily executable.
+> `where npm` answers with the extension-less Unix shell script
+> (`…\nodejs\npm`) *before* `…\nodejs\npm.cmd`, and `Command::new` on the former
+> fails outright (os error 2) — so the naive "take the first line" resolver
+> would have broken the global-npm path while looking correct. The scaffold
+> resolver prefers the first candidate carrying an executable extension.
+> `lsp/resolver.rs::absolute_path_on_path` has the same `.lines().next()` shape;
+> it is **not** live there (`where node` returns only `node.exe`, and the other
+> global-tier commands are real `.exe` files), but it is one PATH layout away
+> from mattering.
+
+### ISSUE 19: Renderer crash records are unbounded
 
 | | |
 |---|---|
@@ -650,6 +713,21 @@ crash time) and should be preserved.
 **Recommendation**: a counter + byte budget for **renderer-originated** records
 (`crash_write_js_record`) only, leaving the panic hook's allocation-light path
 untouched. Requires a hostile renderer to exploit.
+
+**Fixed (2026-08-30, PR #5)** — `write_js_value`, a budgeted writer used by the
+renderer command alone. The budget is **session-scoped**, which is what lets it
+add no directory I/O at all: counters start at zero each process start, and a
+process start is exactly when `prune` already runs, so total disk cost is one
+session's allowance plus the pruned carry-over. 16 records / 4 MiB, with count
+and bytes reserved together under one lock so two concurrent commands cannot
+both pass the check and both spend; a failed write refunds. Exhaustion returns
+`None` — the shape the caller already used for an over-size record — and logs
+the reason rather than refusing silently.
+
+The startup-only prune is preserved exactly as designed, and so are the paths a
+caller cannot drive in a loop: the panic hook, the webview watcher, and the
+unclean-shutdown synthesizer all still go through the unbudgeted `write_json` /
+`write_value`.
 
 ### ISSUE 20: Archive extraction is unbounded (decompression bomb)
 
@@ -702,7 +780,7 @@ audited rather than re-implementing them around a byte counter.
 > entry count is not knowable without parsing the central directory, which is
 > exactly what `ZipArchive::new` does. Revisit if zip exposes a pre-parse limit.
 
-### ISSUE 21: LSP session key is not bound to the canonical project root — OPEN
+### ISSUE 21: LSP session key is not bound to the canonical project root
 
 | | |
 |---|---|
@@ -718,6 +796,64 @@ validated and then never used to derive or check the key, so varying
 **Recommendation**: key or validate against a backend-registered canonical root,
 plus small global/per-root/concurrent-start caps. Requires a hostile renderer —
 which in a local IDE means an XSS in Litria's own UI first.
+
+**Fixed (2026-08-30, PR #6)** — took the *validate* branch of that
+recommendation, not the *re-key* branch: re-keying `SessionKey` would change
+`stop_session` / `session_request` / `session_notify` and every JS adapter, which
+is more surface than a defence-in-depth finding earns. The root is canonicalized
+once at start and stored on `LspSession`, and the bindings are **derived** from a
+scan of the registry rather than kept in a second index that could drift out of
+step with the sessions it describes.
+
+Canonicalization is comparison only — the original `project_root` string still
+reaches `current_dir` and `rootUri`, so servers see no change. (On Windows
+`canonicalize` yields a `\\?\` verbatim path, which some servers dislike as a
+root; that is why it is not substituted.)
+
+Four refusals, each with its own error code so a refusal is diagnosable:
+same root + language under a different `project_id` (the finding);
+one `project_id` claiming two roots (the inverse confusion — checking it is what
+makes the first check trustworthy); per-root cap 8; global cap 24.
+
+The **concurrent-start cap (4)** is the one that actually bounds a burst: a start
+holds a spawned child through the ~1–2s handshake before it is ever registered,
+so the registry caps are blind to it. `STARTING` therefore carries the canonical
+root alongside the key.
+
+Also closed here, and worth noting as a pattern: the quota *policy* is a pure
+function over a slice of `(project_id, language_id, canonical_root)` identities,
+so all seven cases are unit-tested without spawning a language server.
+
+### ISSUE 17b: LSP child does not suppress the current-directory executable search
+
+| | |
+|---|---|
+| **Severity** | Low (defence in depth) |
+| **Location** | `src-tauri/src/lsp/transport.rs` — `spawn_server` env build |
+| **CWE** | 427 |
+
+Split out of ISSUE 17 as an owner decision. cmd.exe and `SearchPath` consult the
+current directory before PATH for a bare command name, and the LSP child's
+current directory is the project root. ISSUE 17 closed that at the resolver by
+committing to absolute paths; what the resolver cannot reach is the language
+server's **own** shell-outs.
+
+Held rather than shipped with #17 because it changes resolution for those
+shell-outs — a genuine behaviour change, and the kind that belongs to the owner
+rather than to the agent that noticed it.
+
+**Fixed (2026-08-30, owner-ruled ship; PR #8)** —
+`apply_windows_system_env` sets `NoDefaultCurrentDirectoryInExePath=1` on every
+LSP child. This **restores** a mitigation rather than inventing one: some shells
+set the variable, `env_clear()` strips it, and the ISSUE 17 erratum already
+records that the clean-environment hardening was withholding it from exactly the
+child that needed it. Every server Litria packs resolves its toolchain on PATH
+(rust-analyzer → `cargo`, gopls → `go`) or by absolute path (pyright → the
+interpreter), and a project directory answering a bare name is the attack being
+closed. Tested at both levels: the mechanism (with the variable set, even the
+vulnerable bare-name shape stops finding the project's file — guarded by a
+precondition that it *does* find it without) and the wiring (the child
+environment actually carries it).
 
 ---
 
@@ -742,11 +878,13 @@ which in a local IDE means an XSS in Litria's own UI first.
 | 15 | Download follows redirects to cleartext | High | **Fixed — `f898055`** ‡ |
 | 16 | Custom install URL has no integrity pin | Low | Accepted (ADR-005 §8; re-affirms #14) |
 | 17 | Global LSP tier spawns a shadowable name | High | **Fixed — `271139c`** ‡ |
+| 17b | LSP child allows cwd executable search | Low | **Fixed — PR #8** |
 | 18 | Project name reaches cmd.exe as separator | Moderate | **Fixed (blocklist) — `f13ae4e`** ‡ |
-| 19 | Renderer crash records unbounded | Low–Mod | Open |
+| 18b | Package-manager shim spawned as a bare name | Moderate | **Fixed — PR #4** |
+| 19 | Renderer crash records unbounded | Low–Mod | **Fixed — PR #5** |
 | 20 | Archive extraction unbounded (bomb) | Moderate | **Fixed — `630bba8`** ‡ |
-| 21 | LSP session key not bound to canonical root | Low | Open |
-| dep | quick-xml 0.38.4 — 2× RUSTSEC (7.5) | High (advisory) | Blocked upstream |
+| 21 | LSP session key not bound to canonical root | Low | **Fixed — PR #6** |
+| dep | quick-xml 0.38.4 — 2× RUSTSEC (7.5) | High (advisory) | **Fixed — PR #7** |
 
 ‡ Merged to `main` via **PR #1** (2026-08-28). Follow-up corrections to #17
 (Unix scope) and #20 (tar entry cap) landed in **PR #3**; see the ISSUE 17
@@ -760,18 +898,18 @@ ADR-023). **Critical / High (first-party code)**: 0 · **Accepted**: #3.
 **External scan, 2026-08-27 (issues 15–21):** 7 findings, **0 false positives**,
 all in `src-tauri/`. 4 fixed on branch `security/scan-hardening-2026-08-27`
 (15, 17, 18, 20 — every finding the tool rated High, plus the substantive
-Medium); 1 re-affirmed as accepted by design (16); **2 open** (19, 21), both
-requiring a hostile renderer. One follow-up outstanding: the structural half of
-18 (resolve the package-manager shim so cmd.exe never re-parses).
+Medium); 1 re-affirmed as accepted by design (16). **The remaining four —
+19, 21, and the 18b / 17b follow-ups — closed 2026-08-30 in PRs #4–#8.**
 
 Severity re-rated against the threat model in three places — see the section for
 each. The scan found three issues (15, 17, 20) that the 2026-07-16 whole-repo
 pass missed; #17 in particular was exploitable by opening an untrusted project.
 
-**Only residual — tracking, not code:** the `quick-xml` HIGH cargo advisory is
-transitive via Tauri's `plist` and blocked upstream (`cargo update` can't move
-it) — re-check on each Tauri bump. The 21 unmaintained/unsound cargo warnings and
-the low `@babel/core` dev-dep advisory remain (npm `audit fix` clears babel).
+**Only residual — tracking, not code (2026-08-30):** the 22 unmaintained/unsound
+cargo warnings (GTK3, `unic-*`, `glib`, `anyhow`, `rand`, `fxhash`), all
+transitive and blocked on Tauri's GTK4 migration. `cargo audit` = 0
+vulnerabilities and `npm audit` = 0; the `quick-xml` HIGH advisory and the low
+`@babel/core` advisory that used to live in this paragraph are both cleared.
 
 ---
 
@@ -787,3 +925,4 @@ the low `@babel/core` dev-dep advisory remain (npm `audit fix` clears babel).
 | 2026-07-17 | Remediation execution (build-plan S7 — final) | Content-Security-Policy | #10 fixed + merged (PR #151, ADR-023): `csp: null` → strict production CSP (`script-src 'self'`, no unsafe-inline/eval — Tauri auto-nonces first-party; `object-src`/`frame-src 'none'`; `worker-src 'self' blob'` for Monaco; `connect-src ipc:`) + dev-only permissive `devCsp` for Vite HMR. Posture test blocks regression to null / unsafe script-src. Verified on a **production build** (`--no-bundle`; strict csp is prod-only): 0 CSP violations across boot/React/IPC/launcher/canvas/discovery/terminal (CDP), and Monaco editor mounted + rendered + hover with 0 violations on an owner-driven file open (live CDP capture). **ALL 13 findings now fixed + merged; only the blocked-upstream quick-xml dep remains.** |
 | 2026-08-27 | External automated scan (CodeRabbit) + same-session remediation | Sink-reachability pass over `src-tauri/`; renderer, dependencies, and logic flaws NOT covered | 7 new issues (15-21), 0 false positives, 0 in 42.6k lines of frontend JS. 3 were ground the whole-repo pass missed (15, 17, 20). **#17 was the significant one** - opening an untrusted repo containing `rust-analyzer.bat` executed it (Windows cwd-before-PATH); confirmed by live demonstration, and the fix surfaced that `env_clear()` had been stripping `NoDefaultCurrentDirectoryInExePath`, plus a latent bug where the Unix arm discarded the GOPATH fallback's absolute path. 4 fixed on branch (15/17/18/20), 1 re-affirmed accepted (16), 2 open (19/21, both hostile-renderer-gated). Design finding recorded under #20: zip's declared uncompressed size is unusable as a bomb guard (`.take(compressed_size)`), so the guard measures real expansion. Full triage: `.research/2026-08-27-coderabbit-security-scan-triage.md`. |
 | 2026-08-28 | External review of the remediation itself (CodeRabbit on PR #1, posted post-merge) + refreshed dependency scans | LSP resolution across platforms, archive entry limits, npm + cargo advisories | Review raised 3 Major code findings; 2 valid and fixed in PR #3. **#17 scope was wrong** — the claim "Unix execvp never searches the cwd" ignored that PATH may hold `.` or an empty entry, which POSIX defines as the cwd and which is consulted after the child chdir's into the project root; resolution is now absolute on both platforms (plus canonicalization of a relative `which` answer, and the same fix for `resolve_node`, which the bundled tier spawns with the same cwd). **#20's documented tar entry-count gap closed** with a counting pass. Third finding (zip pre-parse allocation) verified against zip 2.4.2 and recorded as an accepted Low with evidence — its suggested fix is not implementable via the crate's public API. Verified negative also recorded: Rust's `Command::new(<bare name>)` does NOT search the child's `current_dir` on Windows, so the bundled `node` spawn was never exposed there. Scans: npm 1 high (`nanoid`) found and cleared to **0**; cargo unchanged at 2 blocked-upstream HIGH, warnings 21 → 22 (`fxhash` newly unmaintained). |
+| 2026-08-30 | Owner-requested close-out of the Master Remediation Checklist | The four remaining actionable findings (#18b, #19, #21, #17b) plus a re-probe of every dependency line | **Checklist closed: no open code findings.** #18b (PR #4) — package-manager shim resolved to an absolute path; both halves of the cmd.exe probe re-run rather than trusted, and a trap surfaced: `where npm` answers with the non-executable extension-less script first, so a naive first-line resolver would have broken the global-npm path (the same `.lines().next()` shape sits in `lsp/resolver.rs`, latent). #19 (PR #5) — session-scoped 16-record / 4 MiB budget on the renderer path alone, adding no directory I/O, panic hook untouched. #21 (PR #6) — validated against a canonical root rather than re-keyed, so the IPC surface is unchanged; caps 8/root, 24 global, 4 concurrent starts; quota policy extracted as a pure function so all seven cases test without spawning a server. #17b (PR #8) — owner ruled ship; `NoDefaultCurrentDirectoryInExePath=1` on the LSP child, restoring what `env_clear()` had been stripping. **quick-xml (PR #7) — the six-week-old "blocked upstream" line was stale**: plist 1.10.0 had shipped, `cargo update -p plist` removes quick-xml 0.38.4 outright, and `cargo audit` went 2 → **0**. Method lesson recorded: re-probe blocked-upstream items, never re-read them. `npm audit` re-verified 0, retiring the stale `@babel/core` line. Integrated `main`: 257 Rust tests, 1037 JS tests, 5 guards, 0 build warnings. Owner acceptance step outstanding: a live LSP session pass (start / hover / diagnostics / stop) covering #21 + #17b. Full journal: `.research/2026-08-30-master-remediation-finish.md`. |

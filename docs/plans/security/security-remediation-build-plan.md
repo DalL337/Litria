@@ -6,8 +6,19 @@
 > Remediation Checklist); this plan says in what order and in what branches to
 > close them. Cite the finding number (`#N`); do not restate the fix detail.
 > **Created**: 2026-07-16 (owner-requested, after the whole-repo audit pass)
-> **Status**: Accepted (2026-07-16 — both sequencing decisions confirmed by
-> owner; ready to execute S1 first).
+> **Status**: **COMPLETE (2026-08-30).** S1–S7 all shipped 2026-07-17, closing
+> the 13 findings this plan was written for. The two tracking-only dependency
+> items outlived it and were closed later: `quick-xml` on 2026-08-30 (PR #7 —
+> it had quietly stopped being blocked upstream), the cargo warnings still open
+> and still blocked on Tauri's GTK4 migration.
+>
+> **This plan is history, not a live queue.** Findings raised after it was
+> written (issues 15–21, the 2026-08-27 external scan) were never in its scope
+> and were sequenced directly from the audit; they closed on 2026-08-30 in
+> PRs #4–#8. The Master Remediation Checklist in
+> `docs/security-audits/security-audit.md` is the live tracker — start there.
+> A future remediation arc large enough to need sequencing should get its own
+> build plan rather than extending this one.
 
 ## Scope
 
@@ -190,12 +201,18 @@ option; capture the decision as an ADR (or dated decision note) when S6 starts.
 
 ## Tracking-only (no branch until upstream moves)
 
-- **quick-xml 0.38.4 (2× HIGH DoS)** — transitive via Tauri `plist`;
-  `cargo update -p quick-xml` locks 0 (plist 1.8.0 pins the 0.38.x line).
-  Re-check on every Tauri bump; opens a slice the moment a compatible plist
-  ships. Owner-visible severity: High advisory, low runtime reach.
-- **21 cargo warnings** (GTK3, `unic-*`, `glib`, `anyhow`, `rand`) — all
-  transitive, blocked on Tauri's GTK4 migration. Tracking only.
+- ✅ **quick-xml 0.38.4 (2× HIGH DoS) — CLOSED 2026-08-30, PR #7.** Was
+  transitive via Tauri `plist`; the note said `cargo update -p quick-xml` locks
+  0 because plist 1.8.0 pinned the 0.38.x line. That stopped being true when
+  plist 1.10.0 shipped, and nobody noticed because the line was **re-read
+  instead of re-run** at two later scans. `cargo update -p plist` removes
+  quick-xml 0.38.4 outright; `cargo audit` went 2 → 0.
+  **Generalize the correction, not just the fix: "blocked upstream" is a claim
+  with an expiry date and no way to announce it. Re-probe every such item on
+  every pass — the probe is one command.**
+- **22 cargo warnings** (GTK3, `unic-*`, `glib`, `anyhow`, `rand`, `fxhash`) —
+  all transitive, blocked on Tauri's GTK4 migration. Tracking only, and subject
+  to the same re-probe rule.
 
 ---
 
@@ -206,13 +223,20 @@ option; capture the decision as an ADR (or dated decision note) when S6 starts.
 | 1 | S1 creation-path validation | #12, #11 | ~½ day | Low | ✅ merged PR #144 |
 | 2 | S2 download hardening | #13, #14 | ~½ day | Low | ✅ merged PR #145 |
 | 3 | S3 LSP boundary hardening | #4, #5, #6, #7 | ~1 day | Low–Mod | ✅ merged PR #146 |
-| 4 | S5 LSP domain hygiene | #8, #9 | ~½ day | Low | next |
-| 5 | S4 capability scoping | #2 | ~½ day | Low | — |
-| 6 | S6 read_external_file (Decision 2) | #1 | ~½–1 day | Mod | — |
-| 7 | S7 CSP (Decision 1) | #10 | ~1 day (mostly verify) | Mod–High | — |
-| — | chore npm audit fix | (npm low) | ~10 min | V.low | — |
+| 4 | S5 LSP domain hygiene | #8, #9 | ~½ day | Low | ✅ merged PR #147 |
+| 5 | S4 capability scoping | #2 | ~½ day | Low | ✅ merged PR #149 |
+| 6 | S6 read_external_file (Decision 2) | #1 | ~½–1 day | Mod | ✅ merged PR #150 (ADR-022) |
+| 7 | S7 CSP (Decision 1) | #10 | ~1 day (mostly verify) | Mod–High | ✅ merged PR #151 (ADR-023) |
+| — | chore npm audit fix | (npm low) | ~10 min | V.low | ✅ merged PR #152 |
 
 (Table gained a Status column 2026-07-17. #9 folded into S5. S5 promoted ahead of
 S4 to sweep up #9 with the other LSP-domain finding; S4/S5 are independent so
-order between them is free.) S1–S3 done; **8 of 13 findings merged to `main`**.
-quick-xml and the cargo warnings stay on the watch list until Tauri moves.
+order between them is free.)
+
+**Final (2026-07-17): S1–S7 all merged — 13 of 13 findings closed.** S5 → PR
+#147, S4 → PR #149, S6 → PR #150 (ADR-022), S7 → PR #151 (ADR-023). The npm
+`@babel/core` chore went with PR #152.
+
+**Postscript (2026-08-30):** the last tracking-only dependency item closed too
+(PR #7), leaving only the cargo warnings. The plan's own scope is finished; see
+the Status banner at the top for where live work lives now.
