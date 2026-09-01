@@ -164,10 +164,12 @@ are adopted when present.
   (`.tsx`/`.jsx` handled spec-correctly as react variants)
 - Bundled runtimes in the installer: Node.js 24.14.0, pyright 1.1.411,
   typescript-language-server 5.3.0, TypeScript 5.9.3
-- **Managed server directory** (ADR-005): registry-pinned downloads with
-  per-event consent pills, checksum verification, install / uninstall /
-  re-verify from the Preferences panel; Go supported via toolchain hint
-  (offer the command, the terminal is the consent)
+- **Managed server directory** (ADR-005): rust-analyzer and clangd install
+  from a registry of pinned downloads with per-event consent pills, checksum
+  verification, and install / uninstall / re-verify from the Preferences
+  panel; Go is supported via toolchain hint (offer the command, the terminal
+  is the consent). A server already on `PATH` always wins over a managed or
+  bundled one
 - Python local intelligence providers supplement the LSP (hover,
   completions, definitions) for instant single-file responsiveness
 - Custom Python hover card: diagnostic stacking, pin (`P`), severity labels
@@ -418,11 +420,11 @@ The capability layer itself is held together by enforced architecture:
 | Metric | Current |
 |--------|---------|
 | Domain modules | 15 (registry: `docs/Orchestration.md` §2) |
-| Architecture guards | **5** — imports, app shell, protected zones, domain contract, settings keys |
-| JS tests | **1028** across 84 suites (`test/domains/`) |
-| Rust tests | **232** |
+| Architecture guards | **6** — imports, app shell, protected zones, domain contract, settings keys, editor engine |
+| JS tests | **1049** across 85 suites (`test/domains/`) |
+| Rust tests | **257** |
 | ADRs | **25** |
-| Tauri commands | ~77 registered (registry of record: `src-tauri/src/lib.rs`) |
+| Tauri commands | ~81 registered (registry of record: `src-tauri/src/lib.rs`) |
 | Workspace DB schema | v3 (2 migrations) |
 | Theme tokens | 47 (v3) |
 | Bundled runtimes | Node 24.14.0, pyright 1.1.411, ts-ls 5.3.0, ts 5.9.3 |
