@@ -65,12 +65,12 @@ jobs:
       # fix that does not change shipped behaviour). On a tag push both are the
       # same thing.
       - name: Checkout ${{ inputs.ref || github.ref_name }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref_name }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -171,7 +171,7 @@ jobs:
           ls -la dist-artifacts/
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: litria-${{ matrix.label }}
           path: dist-artifacts/*
