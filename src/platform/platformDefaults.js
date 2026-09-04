@@ -5,7 +5,7 @@ const PLATFORM_DEFAULTS = {
     modifierKeyCode: 'Meta',
     altKeyLabel: '\u2325',
     placeholderPath: '~/Projects/my-project',
-    placeholderNewProjectPath: '~/Projects/python-projects',
+    projectsDirName: 'Projects',
     hiddenFiles: ['.DS_Store', '._*', '.Spotlight-V100', '.Trashes'],
     showWindowControls: false,
     shortcutLabels: {
@@ -30,7 +30,7 @@ const PLATFORM_DEFAULTS = {
     modifierKeyCode: 'Control',
     altKeyLabel: 'Alt',
     placeholderPath: 'C:\\Projects\\my-project',
-    placeholderNewProjectPath: 'C:\\Projects\\python-projects',
+    projectsDirName: 'Projects',
     hiddenFiles: ['Thumbs.db', 'desktop.ini'],
     showWindowControls: true,
     shortcutLabels: {
@@ -55,7 +55,7 @@ const PLATFORM_DEFAULTS = {
     modifierKeyCode: 'Control',
     altKeyLabel: 'Alt',
     placeholderPath: '~/projects/my-project',
-    placeholderNewProjectPath: '~/projects/python-projects',
+    projectsDirName: 'Projects',
     hiddenFiles: ['.directory'],
     showWindowControls: true,
     shortcutLabels: {

@@ -487,7 +487,11 @@ pub(crate) fn run_python_scaffold(
     }
 
     let files = blueprint_files(&config);
-    let root: PathBuf = Path::new(location).join(name);
+    // Shared destination chokepoint — see path_guard::resolve_project_destination.
+    let base = crate::path_guard::resolve_project_destination(location).map_err(|message| {
+        CommandError::invalid_path("python_scaffold.location.invalid", message)
+    })?;
+    let root: PathBuf = base.join(name);
 
     // Same target-folder policy as Blank: nonexistent or empty is fine, and a
     // folder holding only OUR blueprint files is a retryable previous attempt.
