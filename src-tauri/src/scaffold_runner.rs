@@ -89,7 +89,10 @@ pub(crate) fn run_scaffold(
     // chokepoint (security-policy Rule 4) and covers the folder name too.
     let name = crate::blank_project::validate_project_name(&config.project_name)?;
 
-    let location = Path::new(&config.project_location);
+    // Shared destination chokepoint — see path_guard::resolve_project_destination.
+    let location = crate::path_guard::resolve_project_destination(&config.project_location)
+        .map_err(|message| CommandError::invalid_path("scaffold.location.invalid", message))?;
+    let location = location.as_path();
     let project_dir = location.join(name);
 
     // Guard: target directory must not already exist.

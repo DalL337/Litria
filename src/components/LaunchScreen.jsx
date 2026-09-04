@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { usePlatformConfig } from '../platform/usePlatformConfig';
+import { useDefaultProjectFolder } from '../platform/useDefaultProjectFolder';
 import { getLastProjectDir, rememberProjectDir } from '../utils/lastProjectDir';
 import NewProjectWizard from './NewProjectWizard';
 import PreferencesPanel from './PreferencesPanel';
@@ -25,7 +26,9 @@ function LaunchScreen({
   buildLogDomain = null,
   buildLogActions = null,
 }) {
-  const { placeholderPath, placeholderNewProjectPath } = usePlatformConfig();
+  const { placeholderPath } = usePlatformConfig();
+  // Computed absolute path — never a literal containing `~`.
+  const defaultProjectFolder = useDefaultProjectFolder();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isOpenExistingOpen, setIsOpenExistingOpen] = useState(false);
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(false);
@@ -250,7 +253,7 @@ function LaunchScreen({
           defaultFolder={
             (typeof seedPrefs?.[PREF_KEYS.defaultProjectLocation] === 'string' && seedPrefs[PREF_KEYS.defaultProjectLocation].trim())
               ? seedPrefs[PREF_KEYS.defaultProjectLocation]
-              : placeholderNewProjectPath
+              : defaultProjectFolder
           }
           initialEnergyLevel={energyLevel}
           initialTheme={seedPrefs?.[PREF_KEYS.defaultBaseTheme]}

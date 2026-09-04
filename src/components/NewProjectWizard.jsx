@@ -16,6 +16,7 @@ import {
   buildPythonReviewRows,
   pickDefaultInterpreter,
 } from '../scaffold/pythonWizardModel';
+import { isDestinationError } from '../scaffold/creationErrors';
 import { THEME_ACCENT_SWATCHES } from '../app/themeDomain';
 import { BUILTIN_THEME_IDS } from '../theme/themeDefaults';
 import { getLastProjectDir, rememberProjectDir } from '../utils/lastProjectDir';
@@ -348,6 +349,9 @@ function NewProjectWizard({
   const [isScaffolding, setIsScaffolding] = useState(false);
   const [progressLines, setProgressLines] = useState([]);
   const [error, setError] = useState('');
+  // Phase of the last failure. A destination failure must not offer
+  // "Create as Blank" — Blank writes to the same place and fails identically.
+  const [errorIsDestination, setErrorIsDestination] = useState(false);
   // Held completion: the run succeeded but the trace stays up until the user
   // acts (see `tracePause`). Carries the onDone payload until they continue.
   const [pendingDone, setPendingDone] = useState(null);
@@ -410,8 +414,8 @@ function NewProjectWizard({
   }, [isPython, pyProbe.status, runPythonProbe]);
 
   // -- Navigation --
-  const goNext = () => { setDirection('forward'); setPage((p) => p + 1); setError(''); };
-  const goBack = () => { setDirection('backward'); setPage((p) => p - 1); setError(''); };
+  const goNext = () => { setDirection('forward'); setPage((p) => p + 1); setError(''); setErrorIsDestination(false); };
+  const goBack = () => { setDirection('backward'); setPage((p) => p - 1); setError(''); setErrorIsDestination(false); };
 
   // -- Folder picker --
   const handlePickFolder = useCallback(async () => {
@@ -478,6 +482,7 @@ function NewProjectWizard({
       await onDone(payload);
     } catch (err) {
       setError(toErrorMessage(err, 'Opening the workspace failed.'));
+      setErrorIsDestination(false);
     }
   }, [onDone, pendingDone]);
 
@@ -642,6 +647,7 @@ function NewProjectWizard({
       });
     } catch (err) {
       const message = toErrorMessage(err, 'Scaffold failed.');
+      setErrorIsDestination(isDestinationError(err));
       buildLogDomain?.commands.failRun(message);
       if (autoSendLogs) {
         await buildLogActions?.sendCurrentRunToLogs?.();
@@ -671,6 +677,7 @@ function NewProjectWizard({
       await runBlankCreate();
     } catch (err) {
       const message = toErrorMessage(err, 'Blank creation failed.');
+      setErrorIsDestination(isDestinationError(err));
       buildLogDomain?.commands.failRun(message);
       setError(message);
       setIsScaffolding(false);
@@ -1256,7 +1263,23 @@ function NewProjectWizard({
                     </div>
                   )}
                   {error && <div className="npw-error">{error}</div>}
-                  {error && !isScaffolding && !isBlank && (
+                  {error && errorIsDestination && (
+                    <div className="npw-fallback">
+                      <div className="npw-fallback-hint">
+                        This is about where the project would go, not how it is built —
+                        so creating it as Blank would fail the same way. Go back and
+                        choose a different location.
+                      </div>
+                      <button
+                        className="npw-btn-done npw-fallback-btn"
+                        type="button"
+                        onClick={() => { setError(''); setErrorIsDestination(false); setPage(0); }}
+                      >
+                        {'\u{1F4C1}'} Choose a different location
+                      </button>
+                    </div>
+                  )}
+                  {error && !errorIsDestination && !isScaffolding && !isBlank && (
                     <div className="npw-fallback">
                       <div className="npw-fallback-hint">
                         You can still start this project as Blank — README, .gitignore,

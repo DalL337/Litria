@@ -10,7 +10,7 @@
 // .gitignore — already present in ours, so it no-ops.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
@@ -178,7 +178,13 @@ pub(crate) fn create_blank_project(
         ));
     }
 
-    let root: PathBuf = Path::new(location).join(name);
+    // Every creation path resolves its destination through the same chokepoint:
+    // expands a leading `~`, refuses a relative path (cwd is `/` for a macOS
+    // .app launched from Finder, so relative means the read-only system volume).
+    let base = crate::path_guard::resolve_project_destination(location)
+        .map_err(|message| CommandError::invalid_path("blank_project.location.invalid", message))?;
+
+    let root: PathBuf = base.join(name);
     if root.exists() {
         if !root.is_dir() {
             return Err(CommandError::conflict(
@@ -241,6 +247,7 @@ pub(crate) fn create_blank_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn readme_has_heading_and_quote_blockquote() {
