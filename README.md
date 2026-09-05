@@ -44,9 +44,10 @@ Builds are **unsigned**, so your OS will object the first time:
   That strips the download-quarantine flag. It does not disable Gatekeeper.
 - **Linux (AppImage)** — `chmod +x litria_<version>_amd64.AppImage` then run it.
 
-> **Windows is the build that gets used daily.** The macOS and Linux builds compile
-> and pass the full test suite in CI, but have not yet been launched by a human.
-> They should work — please tell us when they don't.
+> **Windows is the build that gets used daily.** **macOS** has been launched and run by
+> a tester — briefly, on one machine, which is enough to say it works and not enough to
+> call it proven. The **Linux** builds compile and pass the full test suite in CI but
+> have not yet been launched by a human. Both should work — please tell us when they don't.
 
 Prefer to build it yourself? Jump to [Getting into it](#getting-into-it).
 
