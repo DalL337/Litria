@@ -1,5 +1,73 @@
 # Release Notes
 
+## v1.0.2 — macOS project creation
+
+**Date:** 2026-08-31 (PRs #18–#20)
+
+A small release with one blocker fix. **macOS has now been launched and run by a
+human for the first time** — a tester on an unsigned build — and the first thing
+they hit was this.
+
+> **Platform status has changed.** macOS has been launched and run by a tester:
+> briefly, on one machine, which is enough to say it works and not enough to call
+> it proven. Linux still compiles and passes CI without any human having launched
+> it. Every artifact remains **unsigned** — SmartScreen and Gatekeeper will object,
+> and on macOS you still need
+> `xattr -dr com.apple.quarantine /Applications/litria.app`.
+
+---
+
+### Fixed — creating a project on macOS
+
+Accepting the New Project wizard's default location failed immediately:
+
+```text
+Unable to create project directory: Read-only file system (os error 30)
+```
+
+The wizard was handing the backend the literal string `~/Projects/…`. Nothing
+expanded the `~`, and an app launched from Finder has its working directory set
+to `/` — so the destination resolved against the read-only system volume.
+
+The default location is now **computed** from your actual home directory rather
+than being a stand-in string that was never meant to be used as a value. A typed
+`~/somewhere` also works now, on every platform, and a location that isn't a full
+path is refused with a message that says so instead of failing at the filesystem.
+
+All three creation paths — Blank, Python, and the npm scaffolds — resolve their
+destination through one place, so they cannot drift apart again.
+
+**Litria also stops offering the wrong escape hatch.** When creation failed for a
+*location* reason, the wizard offered "Create as Blank instead" — but Blank writes
+to the same folder and would fail the same way. Location failures now offer
+**Choose a different location**; the Blank fallback stays for genuine scaffold
+failures.
+
+### Fixed — release builds
+
+The Rust test suite could not compile for Linux or macOS: a Windows-only test
+carried no platform gate. It went unnoticed because `cargo test` runs only in the
+release workflow, and that step was added after v1.0.0 shipped — so v1.0.1 was the
+first build that ever compiled those tests off Windows.
+
+### Internal
+
+GitHub-maintained CI actions moved to the Node 24 runtime.
+
+### Known limitations
+
+Unchanged from v1.0.1, minus nothing:
+
+- **macOS Dock icon shows a black square.** The source artwork is opaque with no
+  transparency, and macOS does not round app icons itself.
+- Import de-duplication treats `./thing` and `./thing/index` as different modules,
+  so connecting a wire can write a redundant (harmless) import.
+- The Python import writer can still insert inside a parenthesised
+  `from x import ( … )`.
+- Collapsed group pills can report a file count that does not match the project.
+
+---
+
 ## v1.0.1 — Data integrity, and an icon of our own
 
 **Date:** 2026-08-30 (PRs #4–#17)
