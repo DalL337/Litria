@@ -12,12 +12,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-/// Suppress console window flash on Windows probe subprocesses.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+// Every spawn below goes through `hidden_command`: on Windows a release
+// build has no console, and a bare `Command::new` would open one per probe.
+use crate::platform::hidden_command;
 
 /// Hard cap for probe subprocesses — a hung binary (wedged shim, broken
 /// network-drive PATH entry) must never hang session start or prerequisite
@@ -113,11 +110,11 @@ pub(crate) fn resolve_node(app: &AppHandle) -> Option<PathBuf> {
 /// Check that the global `node --version` reports major version ≥ 18.
 fn probe_node_version_ok() -> bool {
     let output = if cfg!(windows) {
-        Command::new("cmd")
+        hidden_command("cmd")
             .args(["/C", "node", "--version"])
             .output()
     } else {
-        Command::new("node").arg("--version").output()
+        hidden_command("node").arg("--version").output()
     };
 
     match output {
@@ -234,11 +231,11 @@ fn probe_global(pack: &LanguagePack) -> Option<ResolvedCommand> {
 fn probe_gopath_bin(binary: &str, version_arg: &str) -> Option<PathBuf> {
     // Same cmd /C shape as probe_prerequisite for shim safety on Windows.
     let output = if cfg!(windows) {
-        Command::new("cmd")
+        hidden_command("cmd")
             .args(["/C", "go", "env", "GOPATH"])
             .output()
     } else {
-        Command::new("go").args(["env", "GOPATH"]).output()
+        hidden_command("go").args(["env", "GOPATH"]).output()
     }
     .ok()?;
     if !output.status.success() {
@@ -261,11 +258,11 @@ fn probe_gopath_bin(binary: &str, version_arg: &str) -> Option<PathBuf> {
 /// (windows_lsp_gotchas: Command::new alone only finds .exe).
 fn probe_command_runs(command: &str, version_arg: &str) -> bool {
     let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
+        let mut c = hidden_command("cmd");
         c.args(["/C", command, version_arg]);
         c
     } else {
-        let mut c = Command::new(command);
+        let mut c = hidden_command(command);
         c.arg(version_arg);
         c
     };
@@ -275,7 +272,7 @@ fn probe_command_runs(command: &str, version_arg: &str) -> bool {
 /// Same execution requirement for a fully-resolved path (no PATH lookup,
 /// no cmd /C — the file is spawned directly).
 fn probe_binary_runs(path: &std::path::Path, version_arg: &str) -> bool {
-    let mut cmd = Command::new(path);
+    let mut cmd = hidden_command(path);
     cmd.arg(version_arg);
     probe_exits_zero_within(&mut cmd, PROBE_TIMEOUT_MS)
 }
@@ -288,12 +285,12 @@ fn probe_binary_runs(path: &std::path::Path, version_arg: &str) -> bool {
 fn probe_exits_zero_within(command: &mut Command, timeout_ms: u64) -> bool {
     use std::io::Read;
 
+    // The caller built `command` via hidden_command, so the Windows
+    // console flag is already set.
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
 
     let mut child = match command.spawn() {
         Ok(c) => c,
@@ -400,14 +397,8 @@ fn probe_bundled(pack: &LanguagePack, app: &AppHandle) -> Option<ResolvedCommand
 /// own cwd, never the project root, so an untrusted project cannot influence
 /// the answer.
 fn absolute_path_on_path(command: &str) -> Option<PathBuf> {
-    #[cfg(windows)]
-    let output = Command::new("where")
-        .arg(command)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
-    #[cfg(not(windows))]
-    let output = Command::new("which").arg(command).output().ok()?;
+    let locator = if cfg!(windows) { "where" } else { "which" };
+    let output = hidden_command(locator).arg(command).output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -440,19 +431,12 @@ fn absolute_path_on_path(command: &str) -> Option<PathBuf> {
 /// On Windows: `where <command>` (exits 0 if found).
 /// On Unix: `which <command>` (exits 0 if found).
 fn probe_command_exists(command: &str) -> bool {
-    let result = if cfg!(windows) {
-        Command::new("where")
-            .arg(command)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-    } else {
-        Command::new("which")
-            .arg(command)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-    };
+    let locator = if cfg!(windows) { "where" } else { "which" };
+    let result = hidden_command(locator)
+        .arg(command)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 
     result.map(|s| s.success()).unwrap_or(false)
 }
