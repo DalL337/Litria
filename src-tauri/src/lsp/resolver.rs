@@ -446,7 +446,7 @@ fn pick_executable_line(stdout: &str, windows: bool, pathext: Option<&str>) -> O
         .map(|ext| ext.trim().to_ascii_uppercase())
         .filter(|ext| !ext.is_empty())
         .collect();
-    let executable = |line: &&str| {
+    let is_executable = |line: &str| {
         std::path::Path::new(line)
             .extension()
             .and_then(|ext| ext.to_str())
@@ -455,7 +455,7 @@ fn pick_executable_line(stdout: &str, windows: bool, pathext: Option<&str>) -> O
     };
     lines
         .iter()
-        .find(executable)
+        .find(|line| is_executable(line))
         .or_else(|| lines.first())
         .map(|line| line.to_string())
 }
