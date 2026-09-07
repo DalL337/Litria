@@ -1,6 +1,18 @@
 import { Fragment, useReducer, useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronLeft, ChevronRight, MoreHorizontal, Copy, FileDown } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Info,
+  MoreHorizontal,
+  Copy,
+  FileDown,
+  Palette,
+  Pencil,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { getFrameworks, getLanguages, getAddons, getAddonDeps, isLanguageLocked } from '../scaffold/compatibility-matrix';
 import { pinnedCreateSpec, pinnedAddonSpecs, previewCreateLabel, SCAFFOLD_POSTURE_NOTE } from '../scaffold/create-cli-versions';
 import {
@@ -24,6 +36,9 @@ import {
   isWizardDirty,
   ROVING_KEYS,
   rovingTarget,
+  countAdvancedChanges,
+  countColorChanges,
+  reviewRowTarget,
 } from '../scaffold/wizardNavigation';
 import { THEME_ACCENT_SWATCHES } from '../app/themeDomain';
 import { BUILTIN_THEME_IDS } from '../theme/themeDefaults';
@@ -359,6 +374,10 @@ function NewProjectWizard({
   const [direction, setDirection] = useState('forward');
   // Cancel on a dirty wizard confirms inline in the footer (never a modal).
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  // Advanced folds (slice 3). Remembered across step jumps so a fold you
+  // opened is still open when you come back.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [colorsOpen, setColorsOpen] = useState(false);
   const titleRef = useRef(null);
   const bodyRef = useRef(null);
   const nameInputRef = useRef(null);
@@ -429,13 +448,17 @@ function NewProjectWizard({
   // -- Navigation --
   // One mover for Next, Back and the stepper. Moving never resets state, so
   // jumping back to fix one choice keeps everything else.
-  const goToPage = useCallback((target) => {
+  const goToPage = useCallback((target, { fold = null } = {}) => {
     setDirection(target > page ? 'forward' : 'backward');
     setPage(target);
     setMaxReached((reached) => Math.max(reached, target));
     setError('');
     setErrorIsDestination(false);
     setConfirmingCancel(false);
+    // An Edit jump into a fold opens it — the control must be on screen,
+    // not behind a second click.
+    if (fold === 'advanced') setAdvancedOpen(true);
+    if (fold === 'colors') setColorsOpen(true);
   }, [page]);
   const goNext = () => { if (page < PAGE_COUNT - 1 && advanceReady) goToPage(page + 1); };
   const goBack = () => { if (page > 0) goToPage(page - 1); };
@@ -794,6 +817,13 @@ function NewProjectWizard({
   const reviewRows = isPython
     ? buildPythonReviewRows(state, pyProbe)
     : buildReviewRows(state);
+  // Every review row knows where its Edit control jumps. The Workspace row
+  // is added here: the review card used to omit the step entirely.
+  const themeName = THEMES.find((t) => t.id === state.theme)?.name ?? capitalize(state.theme);
+  const reviewRowsWithTargets = [
+    ...reviewRows.map(([key, val]) => [key, val, reviewRowTarget(key)]),
+    ['Workspace', `${themeName} \u00B7 ${state.energyLevel === 'calm' ? 'Calm' : 'Live'}`, reviewRowTarget('Workspace')],
+  ];
 
   // Blank hides the entire stack cascade — there is no stack.
   const showFramework = state.wrapper !== null && !isBlank;
@@ -803,6 +833,17 @@ function NewProjectWizard({
   // Python replaces the npm manager row with the environment strip.
   const showPackageManager = !isBlank && !isPython;
   const showPythonEnv = isPython && state.framework !== null;
+  // Advanced fold (slice 3): only the sections that apply to this stack.
+  // The engine choice needs an interpreter to exist, like the strip above it.
+  const showPythonEngine = showPythonEnv && pyProbe.status === 'ready' && pyProbe.interpreters.length > 0;
+  const showAdvanced = showPackageManager || showBackend || showPythonEngine;
+  const advancedItems = [
+    showPackageManager && 'package manager',
+    showBackend && 'backend',
+    showPythonEngine && 'environment engine',
+  ].filter(Boolean);
+  const advancedChanges = countAdvancedChanges(state);
+  const colorChanges = countColorChanges(state);
 
   // Matrix-driven filtering: only valid options appear at each cascade step.
   // 'blank' is not in the compatibility matrix — guard against lookups.
@@ -962,31 +1003,6 @@ function NewProjectWizard({
                 </div>
               </div>
 
-              {/* Backend (Web Only) */}
-              <div className={`npw-subsection${showBackend ? ' visible' : ''}`}>
-                <div className="npw-subsection-inner">
-                <div className="npw-section-label">Backend</div>
-                <div className="npw-card-row" role="radiogroup" aria-label="Backend">
-                  {BACKENDS.map((b) => (
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={state.backend === b.id}
-                      key={b.id}
-                      className={`npw-card${state.backend === b.id ? ' selected' : ''}`}
-                      onClick={() => dispatch({ type: 'SET_BACKEND', value: b.id })}
-                    >
-                      <span className="npw-card-check">{'\u2713'}</span>
-                      <span className="npw-card-icon" style={{ background: b.bg }}>{b.icon}</span>
-                      <span className="npw-card-name">{b.name}</span>
-                      <span className="npw-card-desc">{b.desc}</span>
-                      {b.badge && <span className={`npw-badge ${b.badgeClass}`}>{b.badge}</span>}
-                    </button>
-                  ))}
-                </div>
-                </div>
-              </div>
-
               {/* Addons — filtered by compatibility matrix */}
               <div className={`npw-subsection${showAddons ? ' visible' : ''}`}>
                 <div className="npw-subsection-inner">
@@ -1066,34 +1082,6 @@ function NewProjectWizard({
                       </select>
                     </div>
                     <div className="npw-env-caption">{PY_ENV_CAPTION}</div>
-                    <details className="npw-env-details">
-                      <summary>Environment engine</summary>
-                      <div className="npw-env-engine-row">
-                        {PY_ENGINES.map((engine) => (
-                          <label
-                            key={engine.id}
-                            className={`npw-pm-option${state.pyEnvEngine === engine.id ? ' selected' : ''}`}
-                          >
-                            <input
-                              type="radio"
-                              name="npw-py-engine"
-                              checked={state.pyEnvEngine === engine.id}
-                              onChange={() => dispatch({ type: 'SET_PY_ENGINE', value: engine.id })}
-                            />
-                            {engine.name}
-                            {engine.id === 'auto' && ` — ${pyProbe.uvAvailable ? 'uv detected, will use it' : 'uv not detected, uses python -m venv'}`}
-                          </label>
-                        ))}
-                      </div>
-                      {state.pyEnvMode === 'existing' && (
-                        <input
-                          className="npw-input npw-env-existing"
-                          placeholder="Path to an existing environment (e.g. C:\\envs\\shared)"
-                          value={state.pyExistingEnv}
-                          onChange={(e) => dispatch({ type: 'SET_PY_EXISTING_ENV', value: e.target.value })}
-                        />
-                      )}
-                    </details>
                   </>
                 )}
                 {pyProbe.status === 'ready' && pyProbe.interpreters.length === 0 && (
@@ -1121,22 +1109,100 @@ function NewProjectWizard({
                 </div>
               </div>
 
-              {/* Package Manager — meaningless for Blank (no npm involved) */}
-              {showPackageManager && (
-                <div className="npw-pm-row">
-                  <span className="npw-pm-label">Package Manager</span>
-                  {PM_OPTIONS.map((pm) => (
-                    <label key={pm} className={`npw-pm-option${state.manager === pm ? ' selected' : ''}`}>
-                      <input
-                        type="radio"
-                        name="npw-pm"
-                        checked={state.manager === pm}
-                        onChange={() => dispatch({ type: 'SET_MANAGER', value: pm })}
-                      />
-                      {pm}
-                    </label>
-                  ))}
-                </div>
+              {/* Advanced (slice 3): the choices most projects never touch —
+                  package manager, backend, the Python environment engine —
+                  behind one fold. Its header counts non-default choices so a
+                  collapsed fold can never hide a surprise. */}
+              {showAdvanced && (
+                <details
+                  className="npw-fold"
+                  open={advancedOpen}
+                  onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+                >
+                  <summary className="npw-fold-summary">
+                    <SlidersHorizontal size={14} aria-hidden="true" />
+                    <span className="npw-fold-label">Advanced</span>
+                    {advancedChanges > 0 && (
+                      <span className="npw-badge npw-badge-default npw-fold-count">{advancedChanges} changed</span>
+                    )}
+                    <span className="npw-fold-items">{advancedItems.join(' \u00B7 ')}</span>
+                    <ChevronDown size={14} className="npw-fold-chevron" aria-hidden="true" />
+                  </summary>
+                  <div className="npw-fold-body">
+                    {showPackageManager && (
+                      <div className="npw-fold-section">
+                        <div className="npw-section-label">Package Manager</div>
+                        <div className="npw-pm-row" role="radiogroup" aria-label="Package manager">
+                          {PM_OPTIONS.map((pm) => (
+                            <label key={pm} className={`npw-pm-option${state.manager === pm ? ' selected' : ''}`}>
+                              <input
+                                type="radio"
+                                name="npw-pm"
+                                checked={state.manager === pm}
+                                onChange={() => dispatch({ type: 'SET_MANAGER', value: pm })}
+                              />
+                              {pm}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {showBackend && (
+                      <div className="npw-fold-section">
+                        <div className="npw-section-label">Backend</div>
+                        <div className="npw-card-row" role="radiogroup" aria-label="Backend">
+                          {BACKENDS.map((b) => (
+                            <button
+                              type="button"
+                              role="radio"
+                              aria-checked={state.backend === b.id}
+                              key={b.id}
+                              className={`npw-card${state.backend === b.id ? ' selected' : ''}`}
+                              onClick={() => dispatch({ type: 'SET_BACKEND', value: b.id })}
+                            >
+                              <span className="npw-card-check">{'\u2713'}</span>
+                              <span className="npw-card-icon" style={{ background: b.bg }}>{b.icon}</span>
+                              <span className="npw-card-name">{b.name}</span>
+                              <span className="npw-card-desc">{b.desc}</span>
+                              {b.badge && <span className={`npw-badge ${b.badgeClass}`}>{b.badge}</span>}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {showPythonEngine && (
+                      <div className="npw-fold-section">
+                        <div className="npw-section-label">Environment engine</div>
+                        <div className="npw-env-engine-row" role="radiogroup" aria-label="Environment engine">
+                          {PY_ENGINES.map((engine) => (
+                            <label
+                              key={engine.id}
+                              className={`npw-pm-option${state.pyEnvEngine === engine.id ? ' selected' : ''}`}
+                            >
+                              <input
+                                type="radio"
+                                name="npw-py-engine"
+                                checked={state.pyEnvEngine === engine.id}
+                                onChange={() => dispatch({ type: 'SET_PY_ENGINE', value: engine.id })}
+                              />
+                              {engine.name}
+                              {engine.id === 'auto' && ` — ${pyProbe.uvAvailable ? 'uv detected, will use it' : 'uv not detected, uses python -m venv'}`}
+                            </label>
+                          ))}
+                        </div>
+                        {state.pyEnvMode === 'existing' && (
+                          <input
+                            className="npw-input npw-env-existing"
+                            placeholder="Path to an existing environment (e.g. C:\\envs\\shared)"
+                            aria-label="Existing environment path"
+                            value={state.pyExistingEnv}
+                            onChange={(e) => dispatch({ type: 'SET_PY_EXISTING_ENV', value: e.target.value })}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </details>
               )}
 
               {/* Flag Preview */}
@@ -1204,6 +1270,25 @@ function NewProjectWizard({
                   <WizardStylePreview state={state} />
                 </div>
 
+              </div>
+
+              {/* Advanced · Colors (slice 3): the colour-mode choices fold
+                  under the theme + preview, which stay primary. */}
+              <details
+                className="npw-fold"
+                open={colorsOpen}
+                onToggle={(e) => setColorsOpen(e.currentTarget.open)}
+              >
+                <summary className="npw-fold-summary">
+                  <Palette size={14} aria-hidden="true" />
+                  <span className="npw-fold-label">Advanced {'\u00B7'} Colors</span>
+                  {colorChanges > 0 && (
+                    <span className="npw-badge npw-badge-default npw-fold-count">{colorChanges} changed</span>
+                  )}
+                  <span className="npw-fold-items">folder groups {'\u00B7'} single pieces</span>
+                  <ChevronDown size={14} className="npw-fold-chevron" aria-hidden="true" />
+                </summary>
+                <div className="npw-fold-body npw-fold-columns">
                 {/* Folder group colors (bottom-left) */}
                 <div className="npw-style-group">
                   <div className="npw-section-label">Folder Group Colors</div>
@@ -1275,6 +1360,17 @@ function NewProjectWizard({
                     </div>
                   )}
                 </div>
+                </div>
+              </details>
+
+              {/* ADR-019 ownership: the wizard seeds, Preferences owns. */}
+              <div className="npw-seed-note">
+                <Info size={14} aria-hidden="true" />
+                <span>
+                  Seeded from <b>Preferences</b> (default base theme, energy). Everything on
+                  this step can be changed later in Preferences {'\u2014'} this wizard only picks
+                  a starting point.
+                </span>
               </div>
             </div>
           )}
@@ -1285,10 +1381,22 @@ function NewProjectWizard({
                 <div className="npw-capstone-left">
                   <div className="npw-review">
                     <div className="npw-review-title">Your Project at a Glance</div>
-                    {reviewRows.map(([key, val]) => (
+                    {reviewRowsWithTargets.map(([key, val, target]) => (
                       <div key={key} className="npw-review-row">
                         <span className="npw-review-key">{key}</span>
                         <span className="npw-review-val">{val}</span>
+                        {/* Fix one choice without walking back through every
+                            step. Held or running creation freezes the rows. */}
+                        <button
+                          type="button"
+                          className="npw-review-edit"
+                          aria-label={`Edit ${key}`}
+                          title={`Edit ${key}`}
+                          disabled={isScaffolding || pendingDone !== null}
+                          onClick={() => goToPage(target.step, { fold: target.fold })}
+                        >
+                          <Pencil size={12} aria-hidden="true" />
+                        </button>
                       </div>
                     ))}
                     {isPython && (

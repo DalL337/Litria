@@ -57,7 +57,9 @@ test('every cascade subsection wraps its content in the single measured child', 
   // child would render at its natural height outside the animated row.
   const openings = (jsx.match(/className=\{`npw-subsection[ $]/g) ?? []).length;
   const inners = (jsx.match(/className="npw-subsection-inner"/g) ?? []).length;
-  assert.ok(openings >= 5, `expected the five cascade subsections, found ${openings}`);
+  // Framework, language, add-ons, Python environment (backend moved into the
+  // Advanced fold in slice 3 and is no longer an animated cascade section).
+  assert.ok(openings >= 4, `expected the four cascade subsections, found ${openings}`);
   assert.equal(inners, openings, 'each .npw-subsection needs exactly one .npw-subsection-inner');
 });
 
