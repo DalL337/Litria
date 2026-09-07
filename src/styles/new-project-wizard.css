@@ -370,9 +370,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  /* Lucide glyph (slice 4): tinted by the card's ink, tile by its bg. */
+  color: rgba(255, 255, 255, 0.85);
   margin-bottom: 8px;
 }
+.npw-card-icon svg { width: 17px; height: 17px; }
 
 .npw-card-name {
   display: block;
@@ -394,7 +396,9 @@
   position: absolute;
   top: 10px;
   right: 10px;
-  font-size: 14px;
+  display: grid;
+  place-items: center;
+  color: #818cf8;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
@@ -425,11 +429,11 @@
 
 /* ── Tier Icon Backgrounds ── */
 
-.npw-tier-tauri    { background: rgba(255, 140, 50, 0.12); }
-.npw-tier-electron { background: rgba(20, 184, 166, 0.12); }
-.npw-tier-web      { background: rgba(99, 102, 241, 0.12); }
-.npw-tier-blank    { background: rgba(163, 230, 53, 0.10); }
-.npw-tier-python   { background: rgba(53, 114, 165, 0.14); }
+.npw-tier-tauri    { background: rgba(255, 140, 50, 0.12); color: #fb923c; }
+.npw-tier-electron { background: rgba(20, 184, 166, 0.12); color: #2dd4bf; }
+.npw-tier-web      { background: rgba(99, 102, 241, 0.12); color: #818cf8; }
+.npw-tier-blank    { background: rgba(163, 230, 53, 0.10); color: #a3e635; }
+.npw-tier-python   { background: rgba(53, 114, 165, 0.14); color: #7cb4e8; }
 
 /* ── Subsection Collapse/Expand ──
    Animated with grid-template-rows 0fr → 1fr, never a px max-height cap:
@@ -524,6 +528,7 @@
 }
 
 .npw-env-stub { color: rgba(251, 191, 36, 0.65); }
+.npw-env-stub svg { vertical-align: -2px; margin-right: 4px; }
 
 .npw-env-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .npw-env-empty .npw-browse-btn { margin-top: 6px; }
@@ -841,6 +846,7 @@ button:disabled .npw-key { display: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
@@ -1094,7 +1100,7 @@ button:disabled .npw-key { display: none; }
   border-color: #5c6bc0;
   background: rgba(92, 107, 192, 0.12);
 }
-.npw-mode-icon { font-size: 15px; color: #9fa8da; }
+.npw-mode-icon { display: inline-grid; color: #9fa8da; }
 .npw-mode-name { display: block; font-size: 13px; font-weight: 600; color: #ececf2; margin-top: 4px; }
 .npw-mode-desc { display: block; font-size: 11px; color: rgba(200, 200, 210, 0.55); margin-top: 3px; line-height: 1.35; }
 

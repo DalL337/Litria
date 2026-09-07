@@ -18,10 +18,12 @@ export function isPythonWrapper(wrapperId) {
 // filter selects these when the runtime is python; section label becomes
 // "Project Type"). Captions are always visible (ADR-019 style).
 export const PY_ARCHETYPES = [
-  { id: 'py-script', name: 'Script', icon: '\u{1F4DC}', bg: 'rgba(53,114,165,0.12)', desc: 'A runnable main.py — the simplest start' },
-  { id: 'py-cli', name: 'CLI App', icon: '⌨️', bg: 'rgba(255,212,59,0.10)', desc: 'Command-line tool — argparse, stdlib only' },
-  { id: 'py-lib', name: 'Library', icon: '\u{1F4E6}', bg: 'rgba(163,113,247,0.12)', desc: 'Importable package — src layout, pytest-ready' },
-  { id: 'py-fastapi', name: 'FastAPI', icon: '\u{1F680}', bg: 'rgba(5,150,105,0.12)', desc: 'Web API service — deps declared, not installed' },
+  // `icon` is a key into src/components/wizardIcons.js (Lucide glyphs, no
+  // brand marks); `ink` tints the glyph, `bg` the tile behind it.
+  { id: 'py-script', name: 'Script', icon: 'file-code', ink: '#7cb4e8', bg: 'rgba(53,114,165,0.12)', desc: 'A runnable main.py — the simplest start' },
+  { id: 'py-cli', name: 'CLI App', icon: 'square-terminal', ink: '#ffd43b', bg: 'rgba(255,212,59,0.10)', desc: 'Command-line tool — argparse, stdlib only' },
+  { id: 'py-lib', name: 'Library', icon: 'package', ink: '#c4a6ff', bg: 'rgba(163,113,247,0.12)', desc: 'Importable package — src layout, pytest-ready' },
+  { id: 'py-fastapi', name: 'FastAPI', icon: 'server', ink: '#34d399', bg: 'rgba(5,150,105,0.12)', desc: 'Web API service — deps declared, not installed' },
 ];
 
 // Environment mode options. `.venv` is the recommended default; the caption

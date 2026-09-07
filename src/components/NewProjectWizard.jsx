@@ -10,8 +10,12 @@ import {
   Copy,
   FileDown,
   Palette,
+  FolderOpen,
   Pencil,
   SlidersHorizontal,
+  Sparkles,
+  Sprout,
+  TriangleAlert,
 } from 'lucide-react';
 import { getFrameworks, getLanguages, getAddons, getAddonDeps, isLanguageLocked } from '../scaffold/compatibility-matrix';
 import { pinnedCreateSpec, pinnedAddonSpecs, previewCreateLabel, SCAFFOLD_POSTURE_NOTE } from '../scaffold/create-cli-versions';
@@ -45,23 +49,25 @@ import { BUILTIN_THEME_IDS } from '../theme/themeDefaults';
 import { getLastProjectDir, rememberProjectDir } from '../utils/lastProjectDir';
 import { getLastPyInterpreter, rememberPyInterpreter } from '../utils/lastPyInterpreter';
 import WizardStylePreview from './WizardStylePreview';
+import { WizardIcon } from './wizardIcons';
 
 // ---------------------------------------------------------------------------
-// Card data — matches Widget API Contract and prototype exactly
+// Card data. `icon` is a key into ./wizardIcons.js (Lucide glyphs — no
+// emoji, no brand marks); `ink` tints the glyph over the `bg` tile.
 // ---------------------------------------------------------------------------
 
 const WRAPPERS = [
-  { id: 'tauri', name: 'Tauri', icon: '\u{1F980}', desc: 'Rust-powered native desktop', badge: 'DESKTOP', badgeClass: 'npw-badge-tauri', tier: 'npw-tier-tauri' },
-  { id: 'electron', name: 'Electron', icon: '\u26A1', desc: 'Node-powered native desktop', badge: 'DESKTOP', badgeClass: 'npw-badge-electron', tier: 'npw-tier-electron' },
-  { id: 'web', name: 'Web Only', icon: '\u{1F310}', desc: 'Browser-first, no wrapper', badge: 'WEB', badgeClass: 'npw-badge-web', tier: 'npw-tier-web' },
+  { id: 'tauri', name: 'Tauri', icon: 'monitor', desc: 'Rust-powered native desktop', badge: 'DESKTOP', badgeClass: 'npw-badge-tauri', tier: 'npw-tier-tauri' },
+  { id: 'electron', name: 'Electron', icon: 'zap', desc: 'Node-powered native desktop', badge: 'DESKTOP', badgeClass: 'npw-badge-electron', tier: 'npw-tier-electron' },
+  { id: 'web', name: 'Web Only', icon: 'globe', desc: 'Browser-first, no wrapper', badge: 'WEB', badgeClass: 'npw-badge-web', tier: 'npw-tier-web' },
   // Python (ADR-020): offline blueprint scaffold — Litria writes the files
   // itself, creates the venv with local tools only, and never installs
   // anything at creation. No npm, no network, no third-party code execution.
-  { id: 'python', name: 'Python', icon: '\u{1F40D}', desc: 'Offline scaffold, environment-ready', badge: 'OFFLINE', badgeClass: 'npw-badge-python', tier: 'npw-tier-python' },
+  { id: 'python', name: 'Python', icon: 'terminal', desc: 'Offline scaffold, environment-ready', badge: 'OFFLINE', badgeClass: 'npw-badge-python', tier: 'npw-tier-python' },
   // Blank is a first-class template, not a wrapper: no CLI scaffold, no npm,
   // no prerequisites. Generates only the stack-agnostic substrate (README
   // with a quote, .gitignore, .editorconfig) \u2014 the one path that always works.
-  { id: 'blank', name: 'Blank', icon: '\u{1F331}', desc: 'No scaffold \u2014 just the essentials', badge: 'INSTANT', badgeClass: 'npw-badge-default', tier: 'npw-tier-blank' },
+  { id: 'blank', name: 'Blank', icon: 'file-plus', desc: 'No scaffold \u2014 just the essentials', badge: 'INSTANT', badgeClass: 'npw-badge-default', tier: 'npw-tier-blank' },
 ];
 
 // Substrate files the Blank template generates (mirrors the Rust command's
@@ -69,11 +75,11 @@ const WRAPPERS = [
 const BLANK_FILES = ['README.md', '.gitignore', '.editorconfig'];
 
 const FRAMEWORKS = [
-  { id: 'react', name: 'React', icon: '\u269B\uFE0F', bg: 'rgba(97,218,251,0.1)', desc: 'Component-driven UI' },
-  { id: 'svelte', name: 'Svelte', icon: '\u{1F525}', bg: 'rgba(255,62,0,0.1)', desc: 'Compiled, minimal runtime' },
-  { id: 'vue', name: 'Vue', icon: '\u{1F49A}', bg: 'rgba(66,184,131,0.1)', desc: 'Progressive, approachable' },
-  { id: 'angular', name: 'Angular', icon: '\u{1F170}\uFE0F', bg: 'rgba(221,0,49,0.1)', desc: 'Full platform, TypeScript-first' },
-  { id: 'solid', name: 'Solid', icon: '\u{1F4A0}', bg: 'rgba(68,107,230,0.1)', desc: 'Fine-grained reactivity' },
+  { id: 'react', name: 'React', icon: 'atom', ink: '#61dafb', bg: 'rgba(97,218,251,0.1)', desc: 'Component-driven UI' },
+  { id: 'svelte', name: 'Svelte', icon: 'flame', ink: '#ff6a3d', bg: 'rgba(255,62,0,0.1)', desc: 'Compiled, minimal runtime' },
+  { id: 'vue', name: 'Vue', icon: 'layers', ink: '#42b883', bg: 'rgba(66,184,131,0.1)', desc: 'Progressive, approachable' },
+  { id: 'angular', name: 'Angular', icon: 'shield', ink: '#f0506e', bg: 'rgba(221,0,49,0.1)', desc: 'Full platform, TypeScript-first' },
+  { id: 'solid', name: 'Solid', icon: 'gem', ink: '#7f95ec', bg: 'rgba(68,107,230,0.1)', desc: 'Fine-grained reactivity' },
   // Python archetypes render through this same card row — the compatibility
   // matrix filter picks them when the runtime is python, and the section
   // label switches to "Project Type" (they are archetypes, not frameworks).
@@ -81,25 +87,25 @@ const FRAMEWORKS = [
 ];
 
 const LANGUAGES = [
-  { id: 'ts', name: 'TypeScript', icon: '\u{1F537}', bg: 'rgba(49,120,198,0.1)', desc: 'Typed, safer, recommended' },
-  { id: 'js', name: 'JavaScript', icon: '\u{1F7E8}', bg: 'rgba(247,223,30,0.1)', desc: 'Flexible, zero overhead' },
-  { id: 'py', name: 'Python', icon: '\u{1F40D}', bg: 'rgba(53,114,165,0.1)', desc: 'Readable, batteries included' },
+  { id: 'ts', name: 'TypeScript', icon: 'braces', ink: '#6aa3e6', bg: 'rgba(49,120,198,0.1)', desc: 'Typed, safer, recommended' },
+  { id: 'js', name: 'JavaScript', icon: 'code', ink: '#f7df1e', bg: 'rgba(247,223,30,0.1)', desc: 'Flexible, zero overhead' },
+  { id: 'py', name: 'Python', icon: 'terminal', ink: '#7cb4e8', bg: 'rgba(53,114,165,0.1)', desc: 'Readable, batteries included' },
 ];
 
 const BACKENDS = [
-  { id: 'none', name: 'None', icon: '\u{1F6AB}', bg: 'rgba(255,255,255,0.04)', desc: 'Frontend only', badge: 'DEFAULT', badgeClass: 'npw-badge-default', isDefault: true },
-  { id: 'express', name: 'Express', icon: '\u{1F7E9}', bg: 'rgba(255,255,255,0.06)', desc: 'Minimal Node.js server', badge: 'NODE', badgeClass: 'npw-badge-web' },
-  { id: 'fastify', name: 'Fastify', icon: '\u26A1', bg: 'rgba(255,200,50,0.08)', desc: 'Fast, low overhead Node', badge: 'NODE', badgeClass: 'npw-badge-web' },
+  { id: 'none', name: 'None', icon: 'ban', ink: 'rgba(255,255,255,0.6)', bg: 'rgba(255,255,255,0.04)', desc: 'Frontend only', badge: 'DEFAULT', badgeClass: 'npw-badge-default', isDefault: true },
+  { id: 'express', name: 'Express', icon: 'server', ink: '#cfd8dc', bg: 'rgba(255,255,255,0.06)', desc: 'Minimal Node.js server', badge: 'NODE', badgeClass: 'npw-badge-web' },
+  { id: 'fastify', name: 'Fastify', icon: 'zap', ink: '#ffc832', bg: 'rgba(255,200,50,0.08)', desc: 'Fast, low overhead Node', badge: 'NODE', badgeClass: 'npw-badge-web' },
 ];
 
 const ADDONS = [
-  { id: 'tailwind', name: 'Tailwind', icon: '\u{1F30A}', bg: 'rgba(56,189,248,0.1)', desc: 'Utility-first CSS' },
-  { id: 'shadcn', name: 'ShadCN', icon: '\u{1F9E9}', bg: 'rgba(255,255,255,0.05)', desc: 'Accessible UI components' },
-  { id: 'router', name: 'Router', icon: '\u{1F500}', bg: 'rgba(99,102,241,0.1)', desc: 'Client-side navigation' },
+  { id: 'tailwind', name: 'Tailwind', icon: 'waves', ink: '#38bdf8', bg: 'rgba(56,189,248,0.1)', desc: 'Utility-first CSS' },
+  { id: 'shadcn', name: 'ShadCN', icon: 'component', ink: '#e5e7eb', bg: 'rgba(255,255,255,0.05)', desc: 'Accessible UI components' },
+  { id: 'router', name: 'Router', icon: 'route', ink: '#818cf8', bg: 'rgba(99,102,241,0.1)', desc: 'Client-side navigation' },
   // Python add-ons are declaration-only: files + pyproject entries at
   // creation; nothing installs (ADR-020 — deps go via the visible terminal).
-  { id: 'pytest', name: 'pytest', icon: '\u{1F9EA}', bg: 'rgba(5,150,105,0.1)', desc: 'Test scaffold + dev dependency (declared)' },
-  { id: 'ruff', name: 'Ruff', icon: '\u{1F9F9}', bg: 'rgba(212,93,54,0.1)', desc: 'Linter + formatter config in pyproject' },
+  { id: 'pytest', name: 'pytest', icon: 'flask-conical', ink: '#34d399', bg: 'rgba(5,150,105,0.1)', desc: 'Test scaffold + dev dependency (declared)' },
+  { id: 'ruff', name: 'Ruff', icon: 'brush', ink: '#e8825f', bg: 'rgba(212,93,54,0.1)', desc: 'Linter + formatter config in pyproject' },
 ];
 
 const THEMES = [
@@ -113,13 +119,13 @@ const PM_OPTIONS = ['npm', 'pnpm', 'yarn'];
 
 // Workspace-style color modes (prototype page 3 → "Shape the workspace").
 const GROUP_COLOR_MODES = [
-  { id: 'auto', name: 'Auto groups', icon: '✦', desc: 'Litria assigns friendly group colors as folders appear.' },
-  { id: 'custom', name: 'Custom default', icon: '◈', desc: 'Use one starting group color and adjust later.' },
+  { id: 'auto', name: 'Auto groups', icon: 'wand-sparkles', desc: 'Litria assigns friendly group colors as folders appear.' },
+  { id: 'custom', name: 'Custom default', icon: 'palette', desc: 'Use one starting group color and adjust later.' },
 ];
 
 const NODE_COLOR_MODES = [
-  { id: 'inherit', name: 'Inherit group', icon: '↳', desc: 'New pieces borrow the color of their folder group.' },
-  { id: 'custom', name: 'Custom default', icon: '◆', desc: 'New standalone pieces start with one chosen color.' },
+  { id: 'inherit', name: 'Inherit group', icon: 'link', desc: 'New pieces borrow the color of their folder group.' },
+  { id: 'custom', name: 'Custom default', icon: 'palette', desc: 'New standalone pieces start with one chosen color.' },
 ];
 
 const PAGE_COUNT = WIZARD_STEPS.length;
@@ -935,8 +941,8 @@ function NewProjectWizard({
                     className={`npw-card${state.wrapper === w.id ? ' selected' : ''}`}
                     onClick={() => dispatch({ type: 'SET_WRAPPER', value: w.id })}
                   >
-                    <span className="npw-card-check">{'\u2713'}</span>
-                    <span className={`npw-card-icon ${w.tier}`}>{w.icon}</span>
+                    <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
+                    <span className={`npw-card-icon ${w.tier}`}><WizardIcon name={w.icon} /></span>
                     <span className="npw-card-name">{w.name}</span>
                     <span className="npw-card-desc">{w.desc}</span>
                     <span className={`npw-badge ${w.badgeClass}`}>{w.badge}</span>
@@ -959,8 +965,8 @@ function NewProjectWizard({
                       className={`npw-card${state.framework === fw.id ? ' selected' : ''}`}
                       onClick={() => dispatch({ type: 'SET_FRAMEWORK', value: fw.id })}
                     >
-                      <span className="npw-card-check">{'\u2713'}</span>
-                      <span className="npw-card-icon" style={{ background: fw.bg }}>{fw.icon}</span>
+                      <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
+                      <span className="npw-card-icon" style={{ background: fw.bg, color: fw.ink }}><WizardIcon name={fw.icon} /></span>
                       <span className="npw-card-name">{fw.name}</span>
                       <span className="npw-card-desc">{fw.desc}</span>
                     </button>
@@ -986,8 +992,8 @@ function NewProjectWizard({
                         className={`npw-card${state.lang === l.id ? ' selected' : ''}${isLocked ? ' dep-locked' : ''}`}
                         onClick={() => !isLocked && dispatch({ type: 'SET_LANG', value: l.id })}
                       >
-                        <span className="npw-card-check">{'\u2713'}</span>
-                        <span className="npw-card-icon" style={{ background: l.bg }}>{l.icon}</span>
+                        <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
+                        <span className="npw-card-icon" style={{ background: l.bg, color: l.ink }}><WizardIcon name={l.icon} /></span>
                         <span className="npw-card-name">{l.name}</span>
                         <span className="npw-card-desc">{l.desc}</span>
                       </button>
@@ -1020,8 +1026,8 @@ function NewProjectWizard({
                         className={`npw-card${isSelected ? ' selected' : ''}${isDepLocked ? ' dep-locked' : ''}`}
                         onClick={() => dispatch({ type: 'TOGGLE_ADDON', value: a.id })}
                       >
-                        <span className="npw-card-check">{'\u2713'}</span>
-                        <span className="npw-card-icon" style={{ background: a.bg }}>{a.icon}</span>
+                        <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
+                        <span className="npw-card-icon" style={{ background: a.bg, color: a.ink }}><WizardIcon name={a.icon} /></span>
                         <span className="npw-card-name">{a.name}</span>
                         <span className="npw-card-desc">{a.desc}</span>
                         {isDepLocked && <span className="npw-dep-hint">required by {ADDONS.find((x) => x.id === depParent)?.name}</span>}
@@ -1093,7 +1099,8 @@ function NewProjectWizard({
                     </div>
                     {pyProbe.excluded.length > 0 && (
                       <div className="npw-env-caption npw-env-stub">
-                        {'⚠'} The {'“'}python{'”'} on this PC is a Microsoft Store
+                        <TriangleAlert size={12} aria-hidden="true" />
+                        The {'“'}python{'”'} on this PC is a Microsoft Store
                         shortcut, not an installation.
                       </div>
                     )}
@@ -1160,8 +1167,8 @@ function NewProjectWizard({
                               className={`npw-card${state.backend === b.id ? ' selected' : ''}`}
                               onClick={() => dispatch({ type: 'SET_BACKEND', value: b.id })}
                             >
-                              <span className="npw-card-check">{'\u2713'}</span>
-                              <span className="npw-card-icon" style={{ background: b.bg }}>{b.icon}</span>
+                              <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
+                              <span className="npw-card-icon" style={{ background: b.bg, color: b.ink }}><WizardIcon name={b.icon} /></span>
                               <span className="npw-card-name">{b.name}</span>
                               <span className="npw-card-desc">{b.desc}</span>
                               {b.badge && <span className={`npw-badge ${b.badgeClass}`}>{b.badge}</span>}
@@ -1302,7 +1309,7 @@ function NewProjectWizard({
                         className={`npw-mode-card${state.groupColorMode === m.id ? ' selected' : ''}`}
                         onClick={() => dispatch({ type: 'SET_GROUP_COLOR_MODE', value: m.id })}
                       >
-                        <span className="npw-mode-icon">{m.icon}</span>
+                        <span className="npw-mode-icon"><WizardIcon name={m.icon} size={15} /></span>
                         <span className="npw-mode-name">{m.name}</span>
                         <span className="npw-mode-desc">{m.desc}</span>
                       </button>
@@ -1338,7 +1345,7 @@ function NewProjectWizard({
                         className={`npw-mode-card${state.nodeColorMode === m.id ? ' selected' : ''}`}
                         onClick={() => dispatch({ type: 'SET_NODE_COLOR_MODE', value: m.id })}
                       >
-                        <span className="npw-mode-icon">{m.icon}</span>
+                        <span className="npw-mode-icon"><WizardIcon name={m.icon} size={15} /></span>
                         <span className="npw-mode-name">{m.name}</span>
                         <span className="npw-mode-desc">{m.desc}</span>
                       </button>
@@ -1524,7 +1531,8 @@ function NewProjectWizard({
                         type="button"
                         onClick={() => goToPage(0)}
                       >
-                        {'\u{1F4C1}'} Choose a different location
+                        <FolderOpen size={14} aria-hidden="true" />
+                        Choose a different location
                       </button>
                     </div>
                   )}
@@ -1540,7 +1548,8 @@ function NewProjectWizard({
                         type="button"
                         onClick={handleBlankFallback}
                       >
-                        {'\u{1F331}'} Create as Blank instead
+                        <Sprout size={14} aria-hidden="true" />
+                        Create as Blank instead
                       </button>
                     </div>
                   )}
@@ -1608,9 +1617,10 @@ function NewProjectWizard({
                 disabled={isScaffolding || pendingDone !== null}
                 aria-keyshortcuts="Enter"
               >
+                <Sparkles size={14} aria-hidden="true" />
                 {isScaffolding
-                  ? (isBlank || isPython ? '\u2726 Creating...' : '\u2726 Scaffolding...')
-                  : '\u2726 Create Project'}
+                  ? (isBlank || isPython ? 'Creating...' : 'Scaffolding...')
+                  : 'Create Project'}
                 {!isScaffolding && !pendingDone && <kbd className="npw-key">{'\u21B5'}</kbd>}
               </button>
             )}
