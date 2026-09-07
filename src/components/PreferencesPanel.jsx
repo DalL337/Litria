@@ -1,5 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
-import { entriesForPlace, PREF_KEYS } from '../preferences/registry.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Check,
+  FilePlus,
+  FolderOpen,
+  Globe,
+  Info,
+  Languages,
+  Layers,
+  Palette,
+  SlidersHorizontal
+} from 'lucide-react';
+import { entriesByRoom, entriesForPlace, PREF_KEYS } from '../preferences/registry.js';
 import { prefsLoadGlobal, prefsSaveGlobal } from '../preferences/preferencesStore.js';
 import { createThemeDomain } from '../app/themeDomain';
 import {
@@ -19,18 +30,58 @@ import {
 } from '../app/serverInventoryModel.js';
 
 /**
- * PreferencesPanel — the Preferences surface (ADR-019).
+ * PreferencesPanel — the Preferences surface (ADR-019), v2 chrome
+ * (brief-preferences-panel-v2.md): the wizard's bounded modal with a
+ * pinned header and footer, scope pills, a rooms rail that tracks the
+ * room in view, and rows rendered from `entriesByRoom` — never a
+ * hand-placed list.
  *
  * Two callers, one renderer:
  * - Launcher (`projectContext` null): global scope only — no project is open,
- *   so there is nothing to override. Loads appearance itself.
- * - In-app (File → Preferences…): Global + This Project scope tabs. Receives
- *   the LIVE theme state as props (self-loading would desync the open
+ *   so there is nothing to override. Loads appearance itself. The project
+ *   pill still renders, disabled, with its caption: the concept is
+ *   discoverable before it is usable.
+ * - In-app (File → Preferences…): Global + This project scope. Receives the
+ *   LIVE theme state as props (self-loading would desync the open
  *   workspace) and the project energy override + setters.
  *
- * Rows render from registry queries ('preferences.global' /
- * 'preferences.project'); captions are always visible, never tooltips.
+ * Rooms: the registry's preference rooms first, then Themes (the library —
+ * definitions, not preferences) and Language servers (machine state), which
+ * the panel renders itself. Captions are always visible, never tooltips.
  */
+
+const ROOM_ICONS = {
+  appearance: Palette,
+  projectCreation: FilePlus,
+  behavior: SlidersHorizontal,
+  themes: Layers,
+  servers: Languages
+};
+
+const THEMES_ROOM = {
+  id: 'themes',
+  label: 'Themes',
+  description: 'Your theme library — definitions live here; other surfaces only pick from them.'
+};
+
+const SERVERS_ROOM = {
+  id: 'servers',
+  label: 'Language servers',
+  description: 'Installed language intelligence and what the curated registry can add. Managed installs are pinned versions, verified before they touch disk.'
+};
+
+const SAVED_IDLE = 'Changes save as you go';
+
+function tierClass(row) {
+  if (row.updateAvailable) return 'is-update';
+  switch (row?.tier) {
+    case 'managed': return 'is-managed';
+    case 'global': return 'is-path';
+    case 'bundled': return 'is-bundled';
+    default: return '';
+  }
+}
+
 function PreferencesPanel({
   projectContext = null,
   energyLevel,
@@ -53,6 +104,28 @@ function PreferencesPanel({
   const [error, setError] = useState('');
   const [newThemeName, setNewThemeName] = useState('');
   const [renameThemeName, setRenameThemeName] = useState(activeThemeName ?? '');
+
+  // Footer feedback for the write-through model: idle text, then a short
+  // "Saved …" after every successful write.
+  const [savedNote, setSavedNote] = useState(SAVED_IDLE);
+  const savedTimer = useRef(null);
+  const flashSaved = (message) => {
+    setSavedNote(message);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSavedNote(SAVED_IDLE), 1400);
+  };
+  useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current); }, []);
+
+  // Rooms rail: the body is the scroller; each room section registers its
+  // element so scrolling can track the room in view and the rail can jump.
+  const bodyRef = useRef(null);
+  const titleRef = useRef(null);
+  const sectionRefs = useRef({});
+  const [activeRoom, setActiveRoom] = useState(null);
+
+  useEffect(() => {
+    titleRef.current?.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
     setRenameThemeName(activeThemeName ?? '');
@@ -143,12 +216,14 @@ function PreferencesPanel({
     setError('');
     if (hasLiveTheme) {
       onSelectTheme?.(themeId);
+      flashSaved('Saved theme');
       return;
     }
     const next = themeDomain.commands.setActiveTheme({ themeId });
     setAppearance(next);
     try {
       await prefsSaveGlobal(PREF_KEYS.appearance, next);
+      flashSaved('Saved theme');
     } catch (saveError) {
       setError(toErrorMessage(saveError, 'Failed to save theme preference.'));
     }
@@ -158,6 +233,7 @@ function PreferencesPanel({
     setError('');
     try {
       await onApplyEnergyLevel?.(level);
+      flashSaved('Saved energy');
     } catch (saveError) {
       setError(toErrorMessage(saveError, 'Failed to save energy preference.'));
     }
@@ -167,6 +243,7 @@ function PreferencesPanel({
     setError('');
     try {
       await onSetProjectEnergy?.(levelOrNull);
+      flashSaved(levelOrNull === null ? 'Back to global' : `Saved for ${projectContext?.name ?? 'this project'}`);
     } catch (saveError) {
       setError(toErrorMessage(saveError, 'Failed to save project override.'));
     }
@@ -178,23 +255,84 @@ function PreferencesPanel({
     setValues((prev) => ({ ...prev, [entry.key]: value }));
     try {
       await prefsSaveGlobal(entry.key, value);
+      flashSaved(`Saved ${entry.label.toLowerCase()}`);
     } catch (saveError) {
       setError(toErrorMessage(saveError, `Failed to save ${entry.label}.`));
     }
   };
 
+  // -- Scope + rooms --
+  const inProject = scope === 'project' && Boolean(projectContext);
+  const place = inProject ? 'preferences.project' : 'preferences.global';
+  const registryRooms = entriesByRoom(place);
+  const hasLibrary = hasLiveTheme && typeof onCreateTheme === 'function';
+  const serverRows = servers?.rows ?? [];
+  const extraRooms = inProject
+    ? []
+    : [
+      { ...THEMES_ROOM, count: hasLibrary ? resolvedThemeOptions.length : 0 },
+      { ...SERVERS_ROOM, count: serverRows.length }
+    ];
+  const railRooms = [
+    ...registryRooms.map((room) => ({ id: room.id, label: room.label, count: room.entries.length })),
+    ...extraRooms
+  ];
+  const settingCount = entriesForPlace(place).length;
+  const globalOnlyCount = entriesForPlace('preferences.global').length - entriesForPlace('preferences.project').length;
+  const currentRoom = activeRoom && railRooms.some((r) => r.id === activeRoom) ? activeRoom : railRooms[0]?.id;
+
+  const switchScope = (next) => {
+    if (next === scope) return;
+    setScope(next);
+    setActiveRoom(null);
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  };
+
+  const jumpToRoom = (roomId) => {
+    const body = bodyRef.current;
+    const section = sectionRefs.current[roomId];
+    if (body && section) body.scrollTo({ top: Math.max(0, section.offsetTop - 8), behavior: 'smooth' });
+    setActiveRoom(roomId);
+  };
+
+  const handleBodyScroll = () => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const threshold = body.scrollTop + 40;
+    let inView = null;
+    for (const room of railRooms) {
+      const section = sectionRefs.current[room.id];
+      if (section && section.offsetTop <= threshold) inView = room.id;
+    }
+    if (inView && inView !== activeRoom) setActiveRoom(inView);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    // A pending uninstall confirm is the only thing Escape backs out of
+    // before it closes the panel.
+    if (confirmingUninstall) {
+      setConfirmingUninstall(null);
+      return;
+    }
+    onClose();
+  };
+
+  // -- Renderers --
   const renderChoices = (entry, current, onSelect) => (
-    <div className="prefs-choices" role="group" aria-label={entry.label}>
+    <div className="pf-pills" role="radiogroup" aria-label={entry.label}>
       {entry.values.map((value) => (
         <button
           key={value}
           type="button"
-          className={`launch-toggle ${current === value ? 'is-active' : ''}`}
+          role="radio"
+          className="pf-pill"
           disabled={Boolean(entry.comingSoon) || !onSelect}
-          aria-pressed={current === value}
+          aria-checked={current === value}
           onClick={() => onSelect?.(value)}
         >
-          {value.charAt(0).toUpperCase() + value.slice(1)}
+          {value.charAt(0).toUpperCase() + value.slice(1).replace('-', ' ')}
         </button>
       ))}
     </div>
@@ -205,7 +343,7 @@ function PreferencesPanel({
       case PREF_KEYS.appearance:
         return (
           <select
-            className="launch-input prefs-select"
+            className="pf-select"
             aria-label="Active theme"
             value={resolvedActiveThemeId ?? ''}
             disabled={!isLoaded}
@@ -227,18 +365,18 @@ function PreferencesPanel({
               role="switch"
               aria-checked={current}
               aria-label={entry.label}
-              className={`prefs-switch ${current ? 'is-on' : ''}`}
+              className="pf-switch"
               disabled={Boolean(entry.comingSoon) || !isLoaded}
               onClick={() => handleSetGeneric(entry, !current)}
             >
-              <span className="prefs-switch-thumb" aria-hidden="true" />
+              <span className="pf-switch-thumb" aria-hidden="true" />
             </button>
           );
         }
         if (entry.type === 'text') {
           return (
             <input
-              className="launch-input prefs-select"
+              className="pf-input"
               aria-label={entry.label}
               value={values[entry.key] ?? entry.defaultValue ?? ''}
               placeholder="System default"
@@ -254,77 +392,142 @@ function PreferencesPanel({
     }
   };
 
-  // Split row: text on the left, control on the right. The caption stays
-  // always-visible (ADR-019) but no longer claims a full-width line of its
-  // own, which is what stretched this panel past the viewport.
-  const renderGlobalRows = () => entriesForPlace('preferences.global').map((entry) => (
-    <div className="prefs-row is-split" key={entry.key}>
-      <div className="prefs-row-text">
-        <span className="prefs-label">{entry.label}</span>
-        <div className="prefs-caption">{entry.caption}</div>
-        {entry.comingSoon && <div className="prefs-coming-soon">{entry.comingSoon}</div>}
+  const renderRow = (entry, control, layer = null) => (
+    <div className="pf-row" key={entry.key}>
+      <div className="pf-row-text">
+        <span className="pf-row-label">{entry.label}</span>
+        <span className="pf-row-caption">{entry.caption}</span>
+        {entry.comingSoon && <span className="pf-row-soon">{entry.comingSoon}</span>}
+        {layer}
       </div>
-      <div className="prefs-row-control">{renderGlobalControl(entry)}</div>
-    </div>
-  ));
-
-  // Library room (ADR-019): definitions live here, surfaces only select.
-  // Theme create/rename/delete moved out of the Settings drawer. In-app only —
-  // library editing needs the live workspace theme state.
-  const hasLibrary = hasLiveTheme && typeof onCreateTheme === 'function';
-  const renderLibraryRoom = () => (
-    <div className="prefs-row prefs-library">
-      <div className="prefs-row-head">
-        <span className="prefs-label">Theme library</span>
-      </div>
-      <div className="prefs-caption">
-        Create and manage your themes. Built-in themes can be duplicated but not renamed or deleted.
-      </div>
-      <div className="prefs-library-line">
-        <input
-          className="launch-input prefs-library-input"
-          value={newThemeName}
-          onChange={(e) => setNewThemeName(e.target.value)}
-          placeholder={`New theme from ${activeThemeName ?? 'active'}`}
-        />
-        <button
-          className="launch-action"
-          type="button"
-          disabled={!newThemeName.trim()}
-          onClick={() => { onCreateTheme?.(newThemeName); setNewThemeName(''); }}
-        >
-          Create
-        </button>
-      </div>
-      <div className="prefs-library-line">
-        <input
-          className="launch-input prefs-library-input"
-          value={renameThemeName}
-          onChange={(e) => setRenameThemeName(e.target.value)}
-          placeholder="Rename active theme"
-          disabled={!canDeleteActiveTheme}
-        />
-        <button
-          className="launch-action"
-          type="button"
-          disabled={!canDeleteActiveTheme || !renameThemeName.trim()}
-          onClick={() => onRenameTheme?.(renameThemeName)}
-        >
-          Rename
-        </button>
-      </div>
-      <div className="prefs-library-line">
-        <button
-          className="launch-action"
-          type="button"
-          disabled={!canDeleteActiveTheme}
-          onClick={() => onDeleteTheme?.()}
-        >
-          Delete active theme
-        </button>
-      </div>
+      <div className="pf-row-ctl">{control}</div>
     </div>
   );
+
+  // Project scope: every row shows which layer supplies its value, and an
+  // override always has a one-click way back to the global ground. Only
+  // energy has a live per-project binding today; other overridable entries
+  // render disabled and say so — they used to write the ENERGY override.
+  const renderProjectRow = (entry) => {
+    const isEnergy = entry.key === PREF_KEYS.energyLevel;
+    const isOverridden = isEnergy && projectEnergyLevel !== null;
+    const effective = isEnergy
+      ? (projectEnergyLevel ?? (energyLevel === 'calm' ? 'calm' : 'live'))
+      : (values[entry.key] ?? entry.defaultValue);
+    const layer = (
+      <div className="pf-row-layer">
+        <span className={`pf-layer ${isOverridden ? 'is-override' : ''}`}>
+          {isOverridden ? 'Overridden here' : 'Inheriting global'}
+        </span>
+        {isOverridden && (
+          <button type="button" className="pf-link" onClick={() => handleSelectProjectEnergy(null)}>
+            Reset to global
+          </button>
+        )}
+        {!isEnergy && (
+          <span className="pf-row-caption">Per-project override for this setting is not wired yet — follows Global.</span>
+        )}
+      </div>
+    );
+    return renderRow(entry, renderChoices(entry, effective, isEnergy ? handleSelectProjectEnergy : null), layer);
+  };
+
+  const renderRoom = (room, children) => {
+    const Icon = ROOM_ICONS[room.id];
+    return (
+      <section
+        key={room.id}
+        className="pf-room"
+        id={`pf-room-${room.id}`}
+        aria-labelledby={`pf-room-${room.id}-title`}
+        ref={(el) => { sectionRefs.current[room.id] = el; }}
+      >
+        <div className="pf-room-head">
+          {Icon && <Icon size={13} aria-hidden="true" style={{ color: 'var(--cm-indigo-light)' }} />}
+          <h3 id={`pf-room-${room.id}-title`}>{room.label}</h3>
+        </div>
+        <div className="pf-room-desc">{room.description}</div>
+        {children}
+      </section>
+    );
+  };
+
+  // Themes room (ADR-019 Library): definitions live here, surfaces only
+  // select. In-app only — library editing needs the live workspace theme
+  // state. The launcher says where it lives instead of hiding the room.
+  const renderThemesRoom = () => renderRoom(THEMES_ROOM, hasLibrary ? (
+    <>
+      <div className="pf-row">
+        <div className="pf-row-text">
+          <span className="pf-row-label">New theme</span>
+          <span className="pf-row-caption">
+            Duplicate the active theme ({activeThemeName ?? 'active'}) under a new name. Built-in themes can be duplicated but not renamed or deleted.
+          </span>
+        </div>
+        <div className="pf-row-ctl pf-lib-line">
+          <input
+            className="pf-input"
+            value={newThemeName}
+            onChange={(e) => setNewThemeName(e.target.value)}
+            placeholder="Theme name"
+            aria-label="New theme name"
+          />
+          <button
+            className="pf-btn is-small"
+            type="button"
+            disabled={!newThemeName.trim()}
+            onClick={() => { onCreateTheme?.(newThemeName); setNewThemeName(''); flashSaved('Theme created'); }}
+          >
+            Create
+          </button>
+        </div>
+      </div>
+      <div className="pf-row">
+        <div className="pf-row-text">
+          <span className="pf-row-label">Active theme</span>
+          <span className="pf-row-caption">
+            {canDeleteActiveTheme
+              ? `${activeThemeName ?? 'This theme'} is yours — rename or delete it here.`
+              : `${activeThemeName ?? 'This theme'} is built in and cannot be renamed or deleted.`}
+          </span>
+        </div>
+        <div className="pf-row-ctl pf-lib-line">
+          <input
+            className="pf-input"
+            value={renameThemeName}
+            onChange={(e) => setRenameThemeName(e.target.value)}
+            placeholder="Rename"
+            aria-label="Rename active theme"
+            disabled={!canDeleteActiveTheme}
+          />
+          <button
+            className="pf-btn is-small"
+            type="button"
+            disabled={!canDeleteActiveTheme || !renameThemeName.trim()}
+            onClick={() => { onRenameTheme?.(renameThemeName); flashSaved('Theme renamed'); }}
+          >
+            Rename
+          </button>
+          <button
+            className="pf-btn is-small"
+            type="button"
+            disabled={!canDeleteActiveTheme}
+            onClick={() => { onDeleteTheme?.(); flashSaved('Theme deleted'); }}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </>
+  ) : (
+    <div className="pf-note">
+      <Info size={14} aria-hidden="true" />
+      <span>
+        The theme library is managed inside a workspace — open a project, then File ▸ Preferences…
+        Picking the active theme stays here, under Appearance.
+      </span>
+    </div>
+  ));
 
   // Language servers room (ADR-005 Slice 7). Receipts + resolver tiers are
   // the truth; actions are gated per row (rowActions) so a button never
@@ -336,18 +539,19 @@ function PreferencesPanel({
     const thisBusy = serverBusy === row.languageId;
     const confirming = confirmingUninstall === row.languageId;
     return (
-      <div key={row.languageId}>
-        <div className="prefs-library-line">
-          <span className="prefs-label">{row.name}</span>
-          <span className={`prefs-layer-badge ${row.tier === 'managed' ? 'is-override' : ''}`}>
-            {tierBadge(row)}
-          </span>
-          {row.updateAvailable && (
-            <span className="prefs-layer-badge is-override">Update available</span>
-          )}
+      <div key={row.languageId} className="pf-srv">
+        <div>
+          <div className="pf-srv-head">
+            <span className="pf-srv-name">{row.name}</span>
+            <span className={`pf-tier ${tierClass(row)}`}>{tierBadge(row)}</span>
+            {row.updateAvailable && <span className="pf-tier is-update">Update available</span>}
+          </div>
+          <div className="pf-srv-status">{rowStatusLine(row)}</div>
+        </div>
+        <div className="pf-srv-actions">
           {actions.includes('install') && (
             <button
-              className="launch-action"
+              className="pf-btn is-small is-primary"
               type="button"
               disabled={anyBusy}
               onClick={() => runServerAction(
@@ -361,7 +565,7 @@ function PreferencesPanel({
           )}
           {actions.includes('update') && (
             <button
-              className="launch-action"
+              className="pf-btn is-small is-primary"
               type="button"
               disabled={anyBusy}
               onClick={() => runServerAction(
@@ -375,7 +579,7 @@ function PreferencesPanel({
           )}
           {actions.includes('reverify') && (
             <button
-              className="launch-toggle"
+              className="pf-pill"
               type="button"
               disabled={anyBusy}
               onClick={() => runServerAction(
@@ -389,8 +593,9 @@ function PreferencesPanel({
           )}
           {actions.includes('uninstall') && (
             <button
-              className={`launch-toggle ${confirming ? 'is-active' : ''}`}
+              className="pf-pill is-danger"
               type="button"
+              aria-pressed={confirming}
               disabled={anyBusy}
               onClick={() => {
                 if (!confirming) {
@@ -408,120 +613,127 @@ function PreferencesPanel({
             </button>
           )}
         </div>
-        <div className="prefs-caption">{rowStatusLine(row)}</div>
       </div>
     );
   };
 
-  const renderLanguageServersRoom = () => {
-    const groups = groupInventoryRows(servers?.rows);
+  const renderServersRoom = () => {
+    const groups = groupInventoryRows(serverRows);
     const total = formatBytes(servers?.managedTotalBytes);
-    return (
-      <div className="prefs-row prefs-library">
-        <div className="prefs-row-head">
-          <span className="prefs-label">Language servers</span>
-        </div>
-        <div className="prefs-caption">
-          Installed language intelligence and what the curated registry can add.
-          Managed installs are pinned versions, verified before they touch disk.
-          {servers && total ? ` Managed disk usage: ${total}.` : ''}
-        </div>
-        {!servers && !serversError && <div className="prefs-caption">Loading…</div>}
+    return renderRoom(SERVERS_ROOM, (
+      <>
+        {!servers && !serversError && <div className="pf-caption-line">Loading…</div>}
         {[...groups.installed, ...groups.available].map(renderServerRow)}
-        {serverNotice && <div className="prefs-caption">{serverNotice}</div>}
-        {serversError && <div className="launch-error">{serversError}</div>}
-      </div>
-    );
+        {servers && total ? <div className="pf-caption-line">Managed disk usage: {total}.</div> : null}
+        {serverNotice && <div className="pf-caption-line">{serverNotice}</div>}
+        {serversError && <div className="pf-error" style={{ padding: 0 }}>{serversError}</div>}
+      </>
+    ));
   };
 
-  // Project scope: every row shows which layer supplies its value, and an
-  // override always has a one-click way back to the global ground.
-  const renderProjectRows = () => entriesForPlace('preferences.project').map((entry) => {
-    const isOverridden = entry.key === PREF_KEYS.energyLevel && projectEnergyLevel !== null;
-    const effective = entry.key === PREF_KEYS.energyLevel
-      ? (projectEnergyLevel ?? (energyLevel === 'calm' ? 'calm' : 'live'))
-      : entry.defaultValue;
-    return (
-      <div className="prefs-row" key={entry.key}>
-        <div className="prefs-row-head">
-          <span className="prefs-label">{entry.label}</span>
-          {renderChoices(entry, effective, (value) => handleSelectProjectEnergy(value))}
-        </div>
-        <div className="prefs-caption">{entry.caption}</div>
-        <div className="prefs-layer-line">
-          <span className={`prefs-layer-badge ${isOverridden ? 'is-override' : ''}`}>
-            {isOverridden ? 'Overridden here' : 'Inheriting global'}
-          </span>
-          {isOverridden && (
-            <button
-              type="button"
-              className="launch-toggle prefs-reset"
-              onClick={() => handleSelectProjectEnergy(null)}
-            >
-              Reset to global
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  });
+  const scopeNote = inProject
+    ? `Refinements for ${projectContext.name}. Anything not overridden follows Global.`
+    : projectContext
+      ? 'How Litria behaves for you, across all projects.'
+      : 'Open a project to set per-project overrides.';
 
   return (
     <div
-      className={`launch-modal-shell ${projectContext ? 'prefs-shell-in-app' : ''}`}
+      className={`pf-overlay ${projectContext ? 'is-in-app' : ''}`}
       role="dialog"
       aria-modal="true"
-      aria-label="Preferences"
+      aria-labelledby="pf-title"
     >
-      <div className="launch-modal prefs-modal">
-        <div className="launch-modal-title">Preferences</div>
-
-        {projectContext ? (
-          <div className="prefs-scope-tabs" role="tablist" aria-label="Preference scope">
+      <div className="pf-modal" onKeyDown={handleKeyDown}>
+        {/* ---- Header: title + scope pills (pinned) ---- */}
+        <div className="pf-header">
+          <div className="pf-title-row">
+            <h2 className="pf-title" id="pf-title" ref={titleRef} tabIndex={-1}>Preferences</h2>
+            <span className="pf-title-sub">{settingCount} settings</span>
+          </div>
+          <div className="pf-scope-row" role="tablist" aria-label="Preference scope">
             <button
               type="button"
               role="tab"
-              aria-selected={scope === 'global'}
-              className={`launch-toggle ${scope === 'global' ? 'is-active' : ''}`}
-              onClick={() => setScope('global')}
+              className="pf-scope"
+              aria-selected={!inProject}
+              onClick={() => switchScope('global')}
             >
+              <span className="pf-scope-dot" aria-hidden="true">
+                {inProject ? <Globe size={11} /> : <Check size={11} strokeWidth={2.5} />}
+              </span>
               Global
             </button>
             <button
               type="button"
               role="tab"
-              aria-selected={scope === 'project'}
-              className={`launch-toggle ${scope === 'project' ? 'is-active' : ''}`}
-              onClick={() => setScope('project')}
+              className="pf-scope"
+              aria-selected={inProject}
+              disabled={!projectContext}
+              onClick={() => switchScope('project')}
             >
+              <span className="pf-scope-dot" aria-hidden="true">
+                {inProject ? <Check size={11} strokeWidth={2.5} /> : <FolderOpen size={11} />}
+              </span>
               This project
+              {projectContext && <span className="pf-scope-name">· {projectContext.name}</span>}
             </button>
+            <span className="pf-scope-note">{scopeNote}</span>
           </div>
-        ) : null}
-
-        <div className="prefs-scope-note">
-          {scope === 'project' && projectContext
-            ? `${projectContext.name} — refinements for this project; anything not overridden follows global.`
-            : 'Global — how Litria behaves for you, across all projects.'}
         </div>
 
-        {/* Scroll the settings, not the dialog: the title and Done button stay
-            put however many preferences the registry grows. */}
-        <div className="prefs-body">
-          {scope === 'project' && projectContext ? renderProjectRows() : (
-            <>
-              {renderGlobalRows()}
-              {hasLibrary && renderLibraryRoom()}
-              {renderLanguageServersRoom()}
-            </>
-          )}
+        {/* ---- Body: rooms rail + the one scrolling region ---- */}
+        <div className="pf-body-wrap">
+          <nav className="pf-rail" aria-label="Rooms">
+            <div className="pf-rail-label">Rooms</div>
+            {railRooms.map((room) => {
+              const Icon = ROOM_ICONS[room.id];
+              return (
+                <button
+                  key={room.id}
+                  type="button"
+                  className="pf-rail-item"
+                  aria-current={currentRoom === room.id}
+                  onClick={() => jumpToRoom(room.id)}
+                >
+                  {Icon && <Icon size={14} aria-hidden="true" />}
+                  {room.label}
+                  <span className="pf-rail-n">{room.count}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="pf-body" ref={bodyRef} onScroll={handleBodyScroll}>
+            {registryRooms.map((room) => renderRoom(
+              room,
+              room.entries.map((entry) => (inProject
+                ? renderProjectRow(entry)
+                : renderRow(entry, renderGlobalControl(entry))))
+            ))}
+            {!inProject && renderThemesRoom()}
+            {!inProject && renderServersRoom()}
+            {inProject && globalOnlyCount > 0 && (
+              <div className="pf-note">
+                <Info size={14} aria-hidden="true" />
+                <span>
+                  {globalOnlyCount} more {globalOnlyCount === 1 ? 'setting is' : 'settings are'} global only — they apply to every project.{' '}
+                  <button type="button" className="pf-link" onClick={() => switchScope('global')}>Switch to Global</button>
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
-        {error && <div className="launch-error">{error}</div>}
+        {error && <div className="pf-error">{error}</div>}
 
-        <div className="prefs-actions">
-          <button className="launch-action" type="button" onClick={onClose}>
-            Done
+        {/* ---- Footer (pinned): write-through status + Done ---- */}
+        <div className="pf-footer">
+          <div className="pf-saved" aria-live="polite">
+            <span className="pf-saved-led" aria-hidden="true" />
+            <span>{savedNote}</span>
+          </div>
+          <button className="pf-btn is-primary" type="button" onClick={onClose} aria-keyshortcuts="Escape">
+            Done<kbd className="pf-key">Esc</kbd>
           </button>
         </div>
       </div>
