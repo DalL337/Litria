@@ -612,6 +612,10 @@
   border-radius: 14px;
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.07);
+  /* Explicit: this card is a <button> (slice 2), and a button that declares
+     no background paints the UA button face — a white box around the theme
+     previews on Windows 1.0.3. The other card kinds always set their own. */
+  background: rgba(255, 255, 255, 0.03);
   cursor: pointer;
   transition: all 0.2s ease;
   position: relative;
