@@ -8,9 +8,12 @@ import {
   Languages,
   Layers,
   Palette,
+  Search,
   SlidersHorizontal
 } from 'lucide-react';
 import { entriesByRoom, entriesForPlace, PREF_KEYS } from '../preferences/registry.js';
+import { filterRooms, highlight, textMatches } from '../preferences/search.js';
+import { ROVING_KEYS, rovingTarget } from '../scaffold/wizardNavigation';
 import { prefsLoadGlobal, prefsSaveGlobal } from '../preferences/preferencesStore.js';
 import { createThemeDomain } from '../app/themeDomain';
 import {
@@ -99,6 +102,11 @@ function PreferencesPanel({
   onClose
 }) {
   const [scope, setScope] = useState('global');
+  // Search (slice 4): the exhaustive home is searchable. Matches by label
+  // and caption; rooms stay in the rail (dimmed) so the panel never jumps.
+  const [query, setQuery] = useState('');
+  const searchRef = useRef(null);
+  const hasQuery = query.trim() !== '';
   const [appearance, setAppearance] = useState(null);
   const [isLoaded, setIsLoaded] = useState(Boolean(themeOptions));
   const [error, setError] = useState('');
@@ -264,20 +272,25 @@ function PreferencesPanel({
   // -- Scope + rooms --
   const inProject = scope === 'project' && Boolean(projectContext);
   const place = inProject ? 'preferences.project' : 'preferences.global';
-  const registryRooms = entriesByRoom(place);
+  const registryRooms = filterRooms(entriesByRoom(place), query);
   const hasLibrary = hasLiveTheme && typeof onCreateTheme === 'function';
-  const serverRows = servers?.rows ?? [];
+  const allServerRows = servers?.rows ?? [];
+  const serverRows = allServerRows.filter((row) => textMatches(`${row.name} ${rowStatusLine(row)}`, query));
+  const themeRowCount = hasLibrary ? 2 : 0;
+  const themesMatch = !hasQuery || textMatches('themes theme library new theme active theme rename delete', query);
   const extraRooms = inProject
     ? []
     : [
-      { ...THEMES_ROOM, count: hasLibrary ? resolvedThemeOptions.length : 0 },
-      { ...SERVERS_ROOM, count: serverRows.length }
+      { ...THEMES_ROOM, count: themesMatch ? themeRowCount : 0, total: themeRowCount },
+      { ...SERVERS_ROOM, count: serverRows.length, total: allServerRows.length }
     ];
   const railRooms = [
-    ...registryRooms.map((room) => ({ id: room.id, label: room.label, count: room.entries.length })),
+    ...registryRooms.map((room) => ({ id: room.id, label: room.label, count: room.entries.length, total: room.total })),
     ...extraRooms
   ];
   const settingCount = entriesForPlace(place).length;
+  const matchCount = railRooms.reduce((n, room) => n + room.count, 0);
+  const totalCount = railRooms.reduce((n, room) => n + room.total, 0);
   const globalOnlyCount = entriesForPlace('preferences.global').length - entriesForPlace('preferences.project').length;
   const currentRoom = activeRoom && railRooms.some((r) => r.id === activeRoom) ? activeRoom : railRooms[0]?.id;
 
@@ -307,17 +320,58 @@ function PreferencesPanel({
     if (inView && inView !== activeRoom) setActiveRoom(inView);
   };
 
+  // Keyboard model (slice 4): Escape clears a search, backs out a pending
+  // uninstall confirm, then closes; "/" and Ctrl/Cmd+F focus search; arrows
+  // rove inside a pill group or the scope tabs like native radios.
+  const focusSearch = (select = false) => {
+    const input = searchRef.current;
+    if (!input) return;
+    input.focus();
+    if (select) input.select();
+  };
   const handleKeyDown = (e) => {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    // A pending uninstall confirm is the only thing Escape backs out of
-    // before it closes the panel.
-    if (confirmingUninstall) {
-      setConfirmingUninstall(null);
+    const inTextField = e.target.closest('input, select, textarea');
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (hasQuery && e.target === searchRef.current) {
+        setQuery('');
+        return;
+      }
+      if (confirmingUninstall) {
+        setConfirmingUninstall(null);
+        return;
+      }
+      onClose();
       return;
     }
-    onClose();
+    if (e.key === '/' && !inTextField) {
+      e.preventDefault();
+      focusSearch();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      focusSearch(true);
+      return;
+    }
+    const delta = ROVING_KEYS[e.key];
+    if (delta === undefined || inTextField) return;
+    const group = e.target.closest('[role="radiogroup"], [role="tablist"]');
+    const current = e.target.closest('button');
+    if (!group || !current || !group.contains(current)) return;
+    const options = Array.from(group.querySelectorAll('button:not(:disabled)'));
+    const next = rovingTarget(options.indexOf(current), options.length, delta);
+    if (next === null) return;
+    e.preventDefault();
+    // Moving IS choosing, for pills and tabs alike.
+    options[next].click();
+    options[next].focus();
   };
+
+  // Search hits render as <mark>; everything else passes through.
+  const renderHighlighted = (text) => highlight(text, query).map((segment, i) => (
+    segment.hit ? <mark key={i} className="pf-mark">{segment.text}</mark> : <span key={i}>{segment.text}</span>
+  ));
 
   // -- Renderers --
   const renderChoices = (entry, current, onSelect) => (
@@ -395,8 +449,8 @@ function PreferencesPanel({
   const renderRow = (entry, control, layer = null) => (
     <div className="pf-row" key={entry.key}>
       <div className="pf-row-text">
-        <span className="pf-row-label">{entry.label}</span>
-        <span className="pf-row-caption">{entry.caption}</span>
+        <span className="pf-row-label">{renderHighlighted(entry.label)}</span>
+        <span className="pf-row-caption">{renderHighlighted(entry.caption)}</span>
         {entry.comingSoon && <span className="pf-row-soon">{entry.comingSoon}</span>}
         {layer}
       </div>
@@ -455,7 +509,9 @@ function PreferencesPanel({
   // Themes room (ADR-019 Library): definitions live here, surfaces only
   // select. In-app only — library editing needs the live workspace theme
   // state. The launcher says where it lives instead of hiding the room.
-  const renderThemesRoom = () => renderRoom(THEMES_ROOM, hasLibrary ? (
+  const renderThemesRoom = () => renderRoom(THEMES_ROOM, !themesMatch ? (
+    <div className="pf-room-empty">no matches</div>
+  ) : hasLibrary ? (
     <>
       <div className="pf-row">
         <div className="pf-row-text">
@@ -542,11 +598,11 @@ function PreferencesPanel({
       <div key={row.languageId} className="pf-srv">
         <div>
           <div className="pf-srv-head">
-            <span className="pf-srv-name">{row.name}</span>
+            <span className="pf-srv-name">{renderHighlighted(row.name)}</span>
             <span className={`pf-tier ${tierClass(row)}`}>{tierBadge(row)}</span>
             {row.updateAvailable && <span className="pf-tier is-update">Update available</span>}
           </div>
-          <div className="pf-srv-status">{rowStatusLine(row)}</div>
+          <div className="pf-srv-status">{renderHighlighted(rowStatusLine(row))}</div>
         </div>
         <div className="pf-srv-actions">
           {actions.includes('install') && (
@@ -623,6 +679,7 @@ function PreferencesPanel({
     return renderRoom(SERVERS_ROOM, (
       <>
         {!servers && !serversError && <div className="pf-caption-line">Loading…</div>}
+        {hasQuery && servers && serverRows.length === 0 && <div className="pf-room-empty">no matches</div>}
         {[...groups.installed, ...groups.available].map(renderServerRow)}
         {servers && total ? <div className="pf-caption-line">Managed disk usage: {total}.</div> : null}
         {serverNotice && <div className="pf-caption-line">{serverNotice}</div>}
@@ -649,7 +706,9 @@ function PreferencesPanel({
         <div className="pf-header">
           <div className="pf-title-row">
             <h2 className="pf-title" id="pf-title" ref={titleRef} tabIndex={-1}>Preferences</h2>
-            <span className="pf-title-sub">{settingCount} settings</span>
+            <span className="pf-title-sub">
+              {hasQuery ? `${matchCount} of ${totalCount} match \u201C${query.trim()}\u201D` : `${settingCount} settings`}
+            </span>
           </div>
           <div className="pf-scope-row" role="tablist" aria-label="Preference scope">
             <button
@@ -679,6 +738,19 @@ function PreferencesPanel({
               {projectContext && <span className="pf-scope-name">· {projectContext.name}</span>}
             </button>
             <span className="pf-scope-note">{scopeNote}</span>
+            <label className="pf-search">
+              <Search size={15} aria-hidden="true" />
+              <input
+                ref={searchRef}
+                className="pf-search-input"
+                type="search"
+                value={query}
+                placeholder="Find a setting\u2026"
+                aria-label="Find a setting"
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <kbd className="pf-key pf-search-key" aria-hidden="true">/</kbd>
+            </label>
           </div>
         </div>
 
@@ -692,13 +764,13 @@ function PreferencesPanel({
                 <button
                   key={room.id}
                   type="button"
-                  className="pf-rail-item"
+                  className={`pf-rail-item${hasQuery && room.count === 0 ? ' is-empty' : ''}`}
                   aria-current={currentRoom === room.id}
                   onClick={() => jumpToRoom(room.id)}
                 >
                   {Icon && <Icon size={14} aria-hidden="true" />}
                   {room.label}
-                  <span className="pf-rail-n">{room.count}</span>
+                  <span className="pf-rail-n">{hasQuery ? `${room.count}/${room.total}` : room.total}</span>
                 </button>
               );
             })}
@@ -706,9 +778,11 @@ function PreferencesPanel({
           <div className="pf-body" ref={bodyRef} onScroll={handleBodyScroll}>
             {registryRooms.map((room) => renderRoom(
               room,
-              room.entries.map((entry) => (inProject
-                ? renderProjectRow(entry)
-                : renderRow(entry, renderGlobalControl(entry))))
+              room.entries.length === 0
+                ? <div className="pf-room-empty">no matches</div>
+                : room.entries.map((entry) => (inProject
+                  ? renderProjectRow(entry)
+                  : renderRow(entry, renderGlobalControl(entry))))
             ))}
             {!inProject && renderThemesRoom()}
             {!inProject && renderServersRoom()}
