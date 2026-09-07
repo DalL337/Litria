@@ -797,6 +797,7 @@ function NewProjectWizard({
               {/* Framework — filtered by compatibility matrix. For Python the
                   tier holds archetypes, so the label tells the truth. */}
               <div className={`npw-subsection${showFramework ? ' visible' : ''}`}>
+                <div className="npw-subsection-inner">
                 <div className="npw-section-label">{isPython ? 'Project Type' : 'Framework'}</div>
                 <div className="npw-card-row">
                   {FRAMEWORKS.filter((fw) => availableFrameworks.includes(fw.id)).map((fw) => (
@@ -812,10 +813,12 @@ function NewProjectWizard({
                     </div>
                   ))}
                 </div>
+                </div>
               </div>
 
               {/* Language — filtered by compatibility matrix */}
               <div className={`npw-subsection${showLang ? ' visible' : ''}`}>
+                <div className="npw-subsection-inner">
                 <div className="npw-section-label">Language</div>
                 <div className="npw-card-row">
                   {LANGUAGES.filter((l) => availableLangs.includes(l.id)).map((l) => {
@@ -840,10 +843,12 @@ function NewProjectWizard({
                     {LANGUAGES.find((l) => l.id === lockedLang)?.name}-only
                   </div>
                 )}
+                </div>
               </div>
 
               {/* Backend (Web Only) */}
               <div className={`npw-subsection${showBackend ? ' visible' : ''}`}>
+                <div className="npw-subsection-inner">
                 <div className="npw-section-label">Backend</div>
                 <div className="npw-card-row">
                   {BACKENDS.map((b) => (
@@ -860,10 +865,12 @@ function NewProjectWizard({
                     </div>
                   ))}
                 </div>
+                </div>
               </div>
 
               {/* Addons — filtered by compatibility matrix */}
               <div className={`npw-subsection${showAddons ? ' visible' : ''}`}>
+                <div className="npw-subsection-inner">
                 <div className="npw-section-label">Add-ons</div>
                 <div className="npw-card-row">
                   {ADDONS.filter((a) => availableAddons.includes(a.id)).map((a) => {
@@ -885,12 +892,14 @@ function NewProjectWizard({
                     );
                   })}
                 </div>
+                </div>
               </div>
 
               {/* Environment strip — Python only (ADR-020). One visible line
                   with an always-visible caption; engine + existing-env live
                   in the expandable detail. Never blocks creation. */}
               <div className={`npw-subsection npw-env-section${showPythonEnv ? ' visible' : ''}`}>
+                <div className="npw-subsection-inner">
                 <div className="npw-section-label">Environment</div>
                 {pyProbe.status === 'loading' && (
                   <div className="npw-env-caption">Scanning this machine for Python…</div>
@@ -988,6 +997,7 @@ function NewProjectWizard({
                     </button>
                   </div>
                 )}
+                </div>
               </div>
 
               {/* Package Manager — meaningless for Blank (no npm involved) */}
