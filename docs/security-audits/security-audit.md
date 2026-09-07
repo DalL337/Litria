@@ -1,7 +1,15 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-08-30 — **checklist close-out (PRs #4–#8)**: every
+> **Last reviewed**: 2026-09-07 — **dependency + once-over pass after v1.0.3/1.0.4**
+> (wizard v2 #21–#24, Preferences v2 #25–#27, Windows patch #28–#29). Scans
+> refreshed (npm 0 / cargo 0 vulns); two in-range Rust advisories cleared (PR #30,
+> one of which had been mis-recorded as blocked); dev-only browserslist cleared
+> (PR #31); the latent `where` first-line finding hardened (PR #32); CI actions
+> pinned to SHAs (PR #33); **Dependabot alerts enabled** (were off); the website's
+> Astro line bumped for eight advisories (litria.dev PR #1). New register entries
+> 22–26. Preceded by:
+> 2026-08-30 — **checklist close-out (PRs #4–#8)**: every
 > remaining actionable finding closed (#17b, #18b, #19, #21) and the `quick-xml`
 > HIGH advisory cleared, which turned out not to be blocked upstream any more.
 > **The Master Remediation Checklist now has no open code findings.** Preceded
@@ -21,6 +29,22 @@
 ## Dependency Supply Chain
 
 ### npm (234 packages audited)
+- [x] **0 vulnerabilities — rescanned 2026-09-07.** Production-only was 0; the
+  full tree carried **1 high**, `browserslist <=4.28.6` (GHSA-c83g-rgw3-j3cx
+  unbounded cache growth; GHSA-73wf-gq98-2v4g prototype write via untrusted
+  stats), transitive dev dependency of the CSS toolchain. Same call as nanoid:
+  `npm audit fix`, lockfile only, **PR #31**. 1102 JS tests + 6 guards green.
+- [x] **Website (`litria.dev`, separate repo) — 3 findings, all fixed only by a
+  major:** astro 5.18.2 carried eight advisories (XSS via define:vars, spread
+  attribute names, view-transition values and slot names; server-island replay;
+  Host-header SSRF in the prerendered error-page fetch), sharp 0.34 inherited
+  four libvips CVEs, esbuild had a dev-server file read. Bumped to astro 7.3.1 /
+  @astrojs/react 6.0.5 / sharp 0.35.4 → **npm audit 0**; one breakage (the data
+  layer's site-root lookup assumed a depth Astro 7 no longer has) fixed.
+  **litria.dev PR #1, owner review** — a major on the public site does not go
+  straight to `main`. Residual: the site renders repo-owned markdown through
+  `set:html` without sanitisation; accepted because the source is this repo and
+  every change to it is owner-merged.
 - [x] **0 vulnerabilities — rescanned 2026-08-28.** Production-only
   (`npm audit --omit=dev`) was already 0; the full tree carried **1 high**,
   `nanoid <3.3.18` (GHSA-2v37-7h3g-55p8 — custom generators loop indefinitely
@@ -32,6 +56,22 @@
   by `npm audit fix` in PR #152. 2026-03-28 scanned 0 vulns across 263 packages.
 
 ### Cargo (586 crate dependencies)
+- [x] **0 vulnerabilities — rescanned 2026-09-07.** 22 warnings, every one
+  re-probed (not re-read) this pass:
+  - **Moved (PR #30, lockfile only):** `anyhow 1.0.100 → 1.0.104`
+    (RUSTSEC-2026-0190, patched ≥1.0.103) and `event-listener 5.4.1 → 5.4.2`
+    (RUSTSEC-2026-0221, patched ≥5.4.2). **`anyhow` was recorded below as
+    "blocked on Tauri upstream" on 2026-07-16 — it never was; a plain
+    `cargo update -p anyhow` moved it.** Second instance of the quick-xml
+    lesson: a blocked-upstream note without a probe date is a claim, not a fact.
+  - **Still blocked, probe dated 2026-09-07:** `glib 0.18.5` (RUSTSEC-2024-0429,
+    fix is 0.20 and arrives with a tauri/gtk move); `rand 0.7.3` + `0.8.5`
+    (RUSTSEC-2026-0097; build-dependencies of `phf_generator` under
+    `tauri-utils` / `markup5ever`, not Litria's own `rand 0.9`); the
+    unmaintained gtk-rs 0.18 GTK3 bindings (tauri's Linux backend), `fxhash`
+    (via `kuchikiki`), `proc-macro-error`, `unic-*`. Re-probe = the two
+    `cargo update -p` lines above plus `cargo tree -i <crate>`; the next pass
+    runs them, it does not re-read this paragraph.
 - [x] **0 vulnerabilities — cleared 2026-08-30.** `cargo audit` reports no
   advisories. The two HIGH `quick-xml 0.38.4` findings below are retired.
 - [x] **2 HIGH vulnerabilities (raised 2026-07-16, CLEARED 2026-08-30)** —
@@ -165,6 +205,38 @@ the finding was first raised.
   Startup measured on both tiers (rust-analyzer + bundled pyright): handshake
   byte-identical with and without it — see the ISSUE 17b live-evidence table.**
 
+### Audit pass 2026-09-07 (issues 22–26) — dependency + once-over after 1.0.4
+
+Scope: dependency scans (product npm + cargo, website npm), repo/CI supply-chain
+settings, a re-probe of every item the last pass left latent or blocked, and a
+sink pass over the surfaces added since 2026-08-30 (wizard v2, Preferences v2 +
+search, `platform::hidden_command`). No external scanner: CodeRabbit is gone, so
+this is one pair of eyes.
+
+- [ ] **ISSUE 22** — `where` first line is not the executable → **PR #32 open**
+  (`pick_executable_line`, PATHEXT-aware, unit-tested).
+- [x] **ISSUE 23** — child processes opened console windows on release builds →
+  **shipped in v1.0.4 (PR #29)**: `platform::hidden_command` + guard test.
+- [ ] **ISSUE 24** — CI actions pinned by mutable tag → **PR #33 open** (commit
+  SHAs, tag kept as comment; `rust-toolchain` given an explicit channel).
+- [x] **ISSUE 25** — Dependabot alerts were disabled → **enabled 2026-09-07**
+  (`PUT /repos/DalL337/Litria/vulnerability-alerts`). GitHub's first report
+  matched `npm audit` exactly (the browserslist high). No `dependabot.yml` yet —
+  version-update PRs are the owner's call on noise.
+- [ ] **ISSUE 26** — bundled LSP pins behind npm: pyright 1.1.411 → 1.1.413
+  (patch, routine: `versions.rs` + `npm run bundle` + parity pass);
+  typescript-language-server 5.3.0 → 6.0.0 and typescript 5.9.3 → 7.0.2 are
+  majors and a decision, not a chore (see the note at the pin site). **Not bumped
+  this pass; owner to schedule.**
+- [x] Once-over, no finding: capabilities still minimal (`core:*` window +
+  `dialog:default`, no fs/shell/opener IPC — `capabilityScope.test.mjs`); CSP
+  present (`cspPosture.test.mjs`); no `innerHTML` / `dangerouslySetInnerHTML` /
+  `eval` in `src/`; new modules are pure (`wizardNavigation.js`,
+  `preferences/search.js`) or React-escaped (Preferences rows render highlight
+  segments as elements, never HTML); `release.yml` permissions are
+  `contents: write` only; the guard workflow runs PR code with the default token
+  and no secrets.
+
 ### Accepted / not independently actionable
 
 - [x] **#3** — Path-resolution TOCTOU — accepted (single-user desktop; revisit
@@ -231,7 +303,7 @@ Language packs are `&'static str` in Rust source. Not loaded from config files, 
 ### Python creation (ADR-020) — SAFE by design *(audited 2026-07-16)*
 `python_scaffold.rs` writes every file itself; the only subprocess is local env creation (`<interpreter> -m venv` / `uv venv`). Zero network, zero third-party code execution at create time. dist-name/module-name/floor validators enforced.
 
-### Frontend HTML injection — NONE *(audited 2026-07-16)*
+### Frontend HTML injection — NONE *(audited 2026-07-16; re-checked 2026-09-07 after the wizard/Preferences rewrites)*
 No `innerHTML` / `outerHTML` / `dangerouslySetInnerHTML` / `document.write` / `eval` / `new Function` anywhere in `src/`, and no markdown-to-HTML rendering library. React's default escaping is the only rendering path. (This is what makes the missing CSP — ISSUE 10 — a latent gap rather than an active hole.)
 
 ### SQL — parameterized *(audited 2026-07-16)*
@@ -947,3 +1019,45 @@ vulnerabilities and `npm audit` = 0; the `quick-xml` HIGH advisory and the low
 | 2026-08-27 | External automated scan (CodeRabbit) + same-session remediation | Sink-reachability pass over `src-tauri/`; renderer, dependencies, and logic flaws NOT covered | 7 new issues (15-21), 0 false positives, 0 in 42.6k lines of frontend JS. 3 were ground the whole-repo pass missed (15, 17, 20). **#17 was the significant one** - opening an untrusted repo containing `rust-analyzer.bat` executed it (Windows cwd-before-PATH); confirmed by live demonstration, and the fix surfaced that `env_clear()` had been stripping `NoDefaultCurrentDirectoryInExePath`, plus a latent bug where the Unix arm discarded the GOPATH fallback's absolute path. 4 fixed on branch (15/17/18/20), 1 re-affirmed accepted (16), 2 open (19/21, both hostile-renderer-gated). Design finding recorded under #20: zip's declared uncompressed size is unusable as a bomb guard (`.take(compressed_size)`), so the guard measures real expansion. Full triage: `.research/2026-08-27-coderabbit-security-scan-triage.md`. |
 | 2026-08-28 | External review of the remediation itself (CodeRabbit on PR #1, posted post-merge) + refreshed dependency scans | LSP resolution across platforms, archive entry limits, npm + cargo advisories | Review raised 3 Major code findings; 2 valid and fixed in PR #3. **#17 scope was wrong** — the claim "Unix execvp never searches the cwd" ignored that PATH may hold `.` or an empty entry, which POSIX defines as the cwd and which is consulted after the child chdir's into the project root; resolution is now absolute on both platforms (plus canonicalization of a relative `which` answer, and the same fix for `resolve_node`, which the bundled tier spawns with the same cwd). **#20's documented tar entry-count gap closed** with a counting pass. Third finding (zip pre-parse allocation) verified against zip 2.4.2 and recorded as an accepted Low with evidence — its suggested fix is not implementable via the crate's public API. Verified negative also recorded: Rust's `Command::new(<bare name>)` does NOT search the child's `current_dir` on Windows, so the bundled `node` spawn was never exposed there. Scans: npm 1 high (`nanoid`) found and cleared to **0**; cargo unchanged at 2 blocked-upstream HIGH, warnings 21 → 22 (`fxhash` newly unmaintained). |
 | 2026-08-30 | Owner-requested close-out of the Master Remediation Checklist | The four remaining actionable findings (#18b, #19, #21, #17b) plus a re-probe of every dependency line | **Checklist closed: no open code findings.** #18b (PR #4) — package-manager shim resolved to an absolute path; both halves of the cmd.exe probe re-run rather than trusted, and a trap surfaced: `where npm` answers with the non-executable extension-less script first, so a naive first-line resolver would have broken the global-npm path (the same `.lines().next()` shape sits in `lsp/resolver.rs`, latent). #19 (PR #5) — session-scoped 16-record / 4 MiB budget on the renderer path alone, adding no directory I/O, panic hook untouched. #21 (PR #6) — validated against a canonical root rather than re-keyed, so the IPC surface is unchanged; caps 8/root, 24 global, 4 concurrent starts; quota policy extracted as a pure function so all seven cases test without spawning a server. #17b (PR #8) — owner ruled ship; `NoDefaultCurrentDirectoryInExePath=1` on the LSP child, restoring what `env_clear()` had been stripping. **quick-xml (PR #7) — the six-week-old "blocked upstream" line was stale**: plist 1.10.0 had shipped, `cargo update -p plist` removes quick-xml 0.38.4 outright, and `cargo audit` went 2 → **0**. Method lesson recorded: re-probe blocked-upstream items, never re-read them. `npm audit` re-verified 0, retiring the stale `@babel/core` line. Integrated `main`: 257 Rust tests, 1037 JS tests, 5 guards, 0 build warnings. Owner acceptance step outstanding: a live LSP session pass (start / hover / diagnostics / stop) covering #21 + #17b. Full journal: `.research/2026-08-30-master-remediation-finish.md`. |
+
+### ISSUE 22: `absolute_path_on_path` trusts the first line of `where`
+**Severity:** Low (correctness / latent) · **Found:** 2026-08-30 (noted latent) · **Re-probed:** 2026-09-07 · **Status:** PR #32 open
+`where <cmd>` lists every match in PATH order; for an npm shim the extension-less
+Unix wrapper (`…\npm\pyright-langserver`) sorts before `pyright-langserver.cmd`.
+The global tier took line one, so it resolved a file that exists, passes
+`is_file()`, and cannot be spawned. Not exploitable — every candidate is on the
+user's own PATH — and masked in practice by transport.rs's `.cmd → node script`
+mapping. Fix: `pick_executable_line` prefers the first line whose extension is
+in PATHEXT (case-insensitive, default `.COM;.EXE;.BAT;.CMD`), falls back to line
+one; pure and unit-tested against the real `where npm` output.
+
+### ISSUE 23: child processes open console windows on Windows release builds
+**Severity:** Medium (UX / trust; not a vulnerability) · **Found:** 2026-09-07 (first-run report) · **Status:** shipped v1.0.4 (PR #29)
+A release build is a GUI-subsystem process; every console child spawned without
+`CREATE_NO_WINDOW` (server probes on Preferences open, prerequisite probes, the
+language-server launch itself, scaffold `where`/`which`) opened a console window.
+`tauri dev` masks it because children inherit the dev console. Fix:
+`platform::hidden_command` is the one way to build a Command;
+`windowsHiddenSpawns.test.mjs` fails on a bare `Command::new` in non-test Rust.
+Residual: verified by the flag, not yet by a run of the 1.0.4 release build.
+
+### ISSUE 24: CI actions referenced by mutable tag
+**Severity:** Medium (supply chain) · **Found:** 2026-09-07 · **Status:** PR #33 open
+`actions/checkout@v7` etc. resolve at run time; a moved tag runs foreign code with
+`contents: write` on the release job. Every `uses:` now names the commit the tag
+resolved to on 2026-09-07 (tag kept as a comment). Residual: pins go stale
+silently without a `dependabot.yml` for `github-actions`.
+
+### ISSUE 25: Dependabot alerts disabled
+**Severity:** Low (posture) · **Found:** 2026-09-07 · **Status:** enabled 2026-09-07
+The repo had no GitHub-side advisory reporting; every scan depended on someone
+running `npm audit` / `cargo audit` by hand. Enabled via the REST API; the first
+alert matched the local scan. Version-update PRs (`dependabot.yml`) not enabled —
+owner decision on PR noise.
+
+### ISSUE 26: bundled LSP pins behind upstream
+**Severity:** Low (freshness) · **Found:** session hook, 2026-09-07 · **Status:** open, owner to schedule
+pyright 1.1.411 (latest 1.1.413), typescript-language-server 5.3.0 (6.0.0),
+typescript 5.9.3 (7.0.2). The patch is routine; the two majors are integration
+decisions (the TS 7 native port in particular). No advisory is attached to the
+pinned versions; this is drift, not exposure.
