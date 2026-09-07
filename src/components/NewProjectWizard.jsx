@@ -1,6 +1,6 @@
-import { useReducer, useState, useCallback, useEffect } from 'react';
+import { Fragment, useReducer, useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { MoreHorizontal, Copy, FileDown } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, MoreHorizontal, Copy, FileDown } from 'lucide-react';
 import { getFrameworks, getLanguages, getAddons, getAddonDeps, isLanguageLocked } from '../scaffold/compatibility-matrix';
 import { pinnedCreateSpec, pinnedAddonSpecs, previewCreateLabel, SCAFFOLD_POSTURE_NOTE } from '../scaffold/create-cli-versions';
 import {
@@ -17,6 +17,14 @@ import {
   pickDefaultInterpreter,
 } from '../scaffold/pythonWizardModel';
 import { isDestinationError } from '../scaffold/creationErrors';
+import {
+  WIZARD_STEPS,
+  stepState,
+  canAdvance,
+  isWizardDirty,
+  ROVING_KEYS,
+  rovingTarget,
+} from '../scaffold/wizardNavigation';
 import { THEME_ACCENT_SWATCHES } from '../app/themeDomain';
 import { BUILTIN_THEME_IDS } from '../theme/themeDefaults';
 import { getLastProjectDir, rememberProjectDir } from '../utils/lastProjectDir';
@@ -99,7 +107,7 @@ const NODE_COLOR_MODES = [
   { id: 'custom', name: 'Custom default', icon: '◆', desc: 'New standalone pieces start with one chosen color.' },
 ];
 
-const PAGE_COUNT = 4;
+const PAGE_COUNT = WIZARD_STEPS.length;
 
 // ---------------------------------------------------------------------------
 // State reducer — cascade resets on parent tier changes
@@ -345,7 +353,17 @@ function NewProjectWizard({
     theme: BUILTIN_THEME_IDS.includes(initialTheme) ? initialTheme : INITIAL_STATE.theme,
   });
   const [page, setPage] = useState(0);
+  // Highest step reached: every step up to it stays jumpable from the
+  // stepper, so going back to fix one choice never discards the rest.
+  const [maxReached, setMaxReached] = useState(0);
   const [direction, setDirection] = useState('forward');
+  // Cancel on a dirty wizard confirms inline in the footer (never a modal).
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const titleRef = useRef(null);
+  const bodyRef = useRef(null);
+  const nameInputRef = useRef(null);
+  const keepEditingRef = useRef(null);
+  const cancelRef = useRef(null);
   const [isScaffolding, setIsScaffolding] = useState(false);
   const [progressLines, setProgressLines] = useState([]);
   const [error, setError] = useState('');
@@ -371,15 +389,10 @@ function NewProjectWizard({
     uvAvailable: false,
   });
 
-  // -- Page validation --
-  const page0Valid = state.name.trim() !== '' && state.folder.trim() !== '';
+  // -- Page validation (the rules live in scaffold/wizardNavigation) --
   const isBlank = state.wrapper === 'blank';
   const isPython = isPythonWrapper(state.wrapper);
-  // Blank needs no stack: the wrapper choice alone completes the page.
-  // Python never blocks on interpreter state (ADR-020: creation proceeds
-  // files-only when no Python exists) — archetype + auto-locked language
-  // complete the page exactly like any other stack.
-  const page1Valid = isBlank || (state.wrapper !== null && state.framework !== null && state.lang !== null);
+  const advanceReady = canAdvance(state, page);
 
   // -- Python interpreter probe --
   const runPythonProbe = useCallback(async () => {
@@ -414,8 +427,33 @@ function NewProjectWizard({
   }, [isPython, pyProbe.status, runPythonProbe]);
 
   // -- Navigation --
-  const goNext = () => { setDirection('forward'); setPage((p) => p + 1); setError(''); setErrorIsDestination(false); };
-  const goBack = () => { setDirection('backward'); setPage((p) => p - 1); setError(''); setErrorIsDestination(false); };
+  // One mover for Next, Back and the stepper. Moving never resets state, so
+  // jumping back to fix one choice keeps everything else.
+  const goToPage = useCallback((target) => {
+    setDirection(target > page ? 'forward' : 'backward');
+    setPage(target);
+    setMaxReached((reached) => Math.max(reached, target));
+    setError('');
+    setErrorIsDestination(false);
+    setConfirmingCancel(false);
+  }, [page]);
+  const goNext = () => { if (page < PAGE_COUNT - 1 && advanceReady) goToPage(page + 1); };
+  const goBack = () => { if (page > 0) goToPage(page - 1); };
+
+  // Focus follows the step: Identity lands in the name field (what you type
+  // first); every other step focuses the title so assistive tech announces
+  // where you are. The body starts at the top either way.
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+    const target = page === 0 ? nameInputRef.current : titleRef.current;
+    target?.focus({ preventScroll: true });
+  }, [page]);
+
+  // The inline cancel confirm hands focus to "Keep editing" (the safe
+  // choice); dismissing it hands focus back to Cancel.
+  useEffect(() => {
+    if (confirmingCancel) keepEditingRef.current?.focus();
+  }, [confirmingCancel]);
 
   // -- Folder picker --
   const handlePickFolder = useCallback(async () => {
@@ -685,11 +723,69 @@ function NewProjectWizard({
   }, [buildLogDomain, runBlankCreate, state.framework, state.name]);
 
   // -- Cancel --
-  const handleCancel = useCallback(() => {
-    if (isScaffolding) return;
+  // A dirty wizard confirms inline in the footer; an untouched one closes at
+  // once — no click tax when there is nothing to lose.
+  const discardWizard = useCallback(() => {
     dispatch({ type: 'RESET' });
     onCancel();
-  }, [isScaffolding, onCancel]);
+  }, [onCancel]);
+  const handleCancel = useCallback(() => {
+    if (isScaffolding) return;
+    if (isWizardDirty(state, page)) {
+      setConfirmingCancel(true);
+      return;
+    }
+    discardWizard();
+  }, [discardWizard, isScaffolding, page, state]);
+  const handleKeepEditing = useCallback(() => {
+    setConfirmingCancel(false);
+    // Runs after the Cancel button is back in the DOM.
+    requestAnimationFrame(() => cancelRef.current?.focus());
+  }, []);
+
+  // -- Keyboard model --
+  // Enter advances (creates on the last step) unless a control that owns
+  // Enter has focus; Escape cancels (confirm first when dirty); Alt+arrows
+  // step; plain arrows move selection inside a card group like a native
+  // radio group. Cards are real buttons, so Tab / Space / Enter work for free.
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      if (isScaffolding) return;
+      e.preventDefault();
+      if (confirmingCancel) handleKeepEditing();
+      else handleCancel();
+      return;
+    }
+    if (e.key === 'Enter') {
+      if (e.target.closest('button, select, textarea, summary')) return;
+      e.preventDefault();
+      if (page < PAGE_COUNT - 1) {
+        goNext();
+        return;
+      }
+      if (!isScaffolding && !pendingDone && !confirmingCancel) handleDone();
+      return;
+    }
+    const delta = ROVING_KEYS[e.key];
+    if (delta === undefined) return;
+    if (e.altKey) {
+      e.preventDefault();
+      if (delta > 0) goNext();
+      else goBack();
+      return;
+    }
+    const group = e.target.closest('[role="radiogroup"], [role="group"]');
+    const current = e.target.closest('button');
+    if (!group || !current || !group.contains(current)) return;
+    const options = Array.from(group.querySelectorAll('button:not(:disabled)'));
+    const next = rovingTarget(options.indexOf(current), options.length, delta);
+    if (next === null) return;
+    e.preventDefault();
+    const target = options[next];
+    // Radio semantics: moving IS choosing. Multi-select groups only move.
+    if (group.getAttribute('role') === 'radiogroup') target.click();
+    target.focus();
+  };
 
   // -- Render helpers --
   const commandPreview = isPython
@@ -715,34 +811,43 @@ function NewProjectWizard({
   const availableAddons = state.framework ? getAddons(state.framework) : [];
   const lockedLang = state.framework ? isLanguageLocked(state.framework) : null;
 
-  // -- Step dots --
-  const dots = Array.from({ length: PAGE_COUNT }, (_, i) => {
-    let cls = 'npw-dot';
-    if (i === page) cls += ' active';
-    else if (i < page) cls += ' done';
-    return <div key={i} className={cls} />;
-  });
-
-  // -- Page titles --
-  const titles = [
-    { title: "Let's start here.", sub: 'Name it. Place it. Let\u2019s build.' },
-    { title: 'Pick your stack.', sub: 'Choose what powers your project.' },
-    { title: 'Shape the workspace.', sub: 'Set the visual defaults before you touch the desk.' },
-    { title: 'Ready to create.', sub: 'This is the project Litria is about to make.' },
-  ];
-
   return (
-    <div className="npw-overlay" role="dialog" aria-modal="true">
-      <div className="npw-modal">
-        {/* ---- Header ---- */}
+    <div className="npw-overlay" role="dialog" aria-modal="true" aria-labelledby="npw-title">
+      <div className="npw-modal" onKeyDown={handleKeyDown}>
+        {/* ---- Header: labelled stepper + pinned title ----
+            Reached steps are buttons (jump back, state kept); the current
+            one carries aria-current; future ones are disabled. */}
         <div className="npw-header">
-          <div className="npw-dots">{dots}</div>
-          <div className="npw-title">{titles[page].title}</div>
-          <div className="npw-subtitle">{titles[page].sub}</div>
+          <div className="npw-stepper" role="group" aria-label="Wizard steps">
+            {WIZARD_STEPS.map((step, i) => {
+              const status = stepState(i, page, maxReached);
+              const jumpable = status === 'done' && !isScaffolding;
+              return (
+                <Fragment key={step.key}>
+                  {i > 0 && <span className={`npw-step-sep${i <= page ? ' done' : ''}`} aria-hidden="true" />}
+                  <button
+                    type="button"
+                    className="npw-step"
+                    data-state={status}
+                    aria-current={status === 'current' ? 'step' : undefined}
+                    disabled={!jumpable}
+                    onClick={() => goToPage(i)}
+                  >
+                    <span className="npw-step-n" aria-hidden="true">
+                      {status === 'done' ? <Check size={11} strokeWidth={2.5} /> : i + 1}
+                    </span>
+                    <span className="npw-step-label">{step.label}</span>
+                  </button>
+                </Fragment>
+              );
+            })}
+          </div>
+          <h2 className="npw-title" id="npw-title" ref={titleRef} tabIndex={-1}>{WIZARD_STEPS[page].title}</h2>
+          <div className="npw-subtitle">{WIZARD_STEPS[page].sub}</div>
         </div>
 
         {/* ---- Body ---- */}
-        <div className="npw-body">
+        <div className="npw-body" ref={bodyRef}>
           {page === 0 && (
             <div className={`npw-page ${direction === 'backward' ? 'backward' : ''}`} key="page0">
               <div className="npw-field">
@@ -753,6 +858,7 @@ function NewProjectWizard({
                   value={state.name}
                   onChange={(e) => dispatch({ type: 'SET_NAME', value: e.target.value })}
                   placeholder="my-awesome-app"
+                  ref={nameInputRef}
                   autoFocus
                 />
               </div>
@@ -778,19 +884,22 @@ function NewProjectWizard({
             <div className={`npw-page ${direction === 'backward' ? 'backward' : ''}`} key="page1">
               {/* Wrapper */}
               <div className="npw-section-label">Runtime Wrapper</div>
-              <div className="npw-card-row">
+              <div className="npw-card-row" role="radiogroup" aria-label="Runtime wrapper">
                 {WRAPPERS.map((w) => (
-                  <div
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={state.wrapper === w.id}
                     key={w.id}
                     className={`npw-card${state.wrapper === w.id ? ' selected' : ''}`}
                     onClick={() => dispatch({ type: 'SET_WRAPPER', value: w.id })}
                   >
                     <span className="npw-card-check">{'\u2713'}</span>
-                    <div className={`npw-card-icon ${w.tier}`}>{w.icon}</div>
-                    <div className="npw-card-name">{w.name}</div>
-                    <div className="npw-card-desc">{w.desc}</div>
+                    <span className={`npw-card-icon ${w.tier}`}>{w.icon}</span>
+                    <span className="npw-card-name">{w.name}</span>
+                    <span className="npw-card-desc">{w.desc}</span>
                     <span className={`npw-badge ${w.badgeClass}`}>{w.badge}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
 
@@ -799,18 +908,21 @@ function NewProjectWizard({
               <div className={`npw-subsection${showFramework ? ' visible' : ''}`}>
                 <div className="npw-subsection-inner">
                 <div className="npw-section-label">{isPython ? 'Project Type' : 'Framework'}</div>
-                <div className="npw-card-row">
+                <div className="npw-card-row" role="radiogroup" aria-label={isPython ? 'Project type' : 'Framework'}>
                   {FRAMEWORKS.filter((fw) => availableFrameworks.includes(fw.id)).map((fw) => (
-                    <div
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={state.framework === fw.id}
                       key={fw.id}
                       className={`npw-card${state.framework === fw.id ? ' selected' : ''}`}
                       onClick={() => dispatch({ type: 'SET_FRAMEWORK', value: fw.id })}
                     >
                       <span className="npw-card-check">{'\u2713'}</span>
-                      <div className="npw-card-icon" style={{ background: fw.bg }}>{fw.icon}</div>
-                      <div className="npw-card-name">{fw.name}</div>
-                      <div className="npw-card-desc">{fw.desc}</div>
-                    </div>
+                      <span className="npw-card-icon" style={{ background: fw.bg }}>{fw.icon}</span>
+                      <span className="npw-card-name">{fw.name}</span>
+                      <span className="npw-card-desc">{fw.desc}</span>
+                    </button>
                   ))}
                 </div>
                 </div>
@@ -820,20 +932,24 @@ function NewProjectWizard({
               <div className={`npw-subsection${showLang ? ' visible' : ''}`}>
                 <div className="npw-subsection-inner">
                 <div className="npw-section-label">Language</div>
-                <div className="npw-card-row">
+                <div className="npw-card-row" role="radiogroup" aria-label="Language">
                   {LANGUAGES.filter((l) => availableLangs.includes(l.id)).map((l) => {
                     const isLocked = lockedLang === l.id;
                     return (
-                      <div
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={state.lang === l.id}
+                        disabled={isLocked}
                         key={l.id}
                         className={`npw-card${state.lang === l.id ? ' selected' : ''}${isLocked ? ' dep-locked' : ''}`}
                         onClick={() => !isLocked && dispatch({ type: 'SET_LANG', value: l.id })}
                       >
                         <span className="npw-card-check">{'\u2713'}</span>
-                        <div className="npw-card-icon" style={{ background: l.bg }}>{l.icon}</div>
-                        <div className="npw-card-name">{l.name}</div>
-                        <div className="npw-card-desc">{l.desc}</div>
-                      </div>
+                        <span className="npw-card-icon" style={{ background: l.bg }}>{l.icon}</span>
+                        <span className="npw-card-name">{l.name}</span>
+                        <span className="npw-card-desc">{l.desc}</span>
+                      </button>
                     );
                   })}
                 </div>
@@ -850,19 +966,22 @@ function NewProjectWizard({
               <div className={`npw-subsection${showBackend ? ' visible' : ''}`}>
                 <div className="npw-subsection-inner">
                 <div className="npw-section-label">Backend</div>
-                <div className="npw-card-row">
+                <div className="npw-card-row" role="radiogroup" aria-label="Backend">
                   {BACKENDS.map((b) => (
-                    <div
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={state.backend === b.id}
                       key={b.id}
                       className={`npw-card${state.backend === b.id ? ' selected' : ''}`}
                       onClick={() => dispatch({ type: 'SET_BACKEND', value: b.id })}
                     >
                       <span className="npw-card-check">{'\u2713'}</span>
-                      <div className="npw-card-icon" style={{ background: b.bg }}>{b.icon}</div>
-                      <div className="npw-card-name">{b.name}</div>
-                      <div className="npw-card-desc">{b.desc}</div>
+                      <span className="npw-card-icon" style={{ background: b.bg }}>{b.icon}</span>
+                      <span className="npw-card-name">{b.name}</span>
+                      <span className="npw-card-desc">{b.desc}</span>
                       {b.badge && <span className={`npw-badge ${b.badgeClass}`}>{b.badge}</span>}
-                    </div>
+                    </button>
                   ))}
                 </div>
                 </div>
@@ -872,23 +991,25 @@ function NewProjectWizard({
               <div className={`npw-subsection${showAddons ? ' visible' : ''}`}>
                 <div className="npw-subsection-inner">
                 <div className="npw-section-label">Add-ons</div>
-                <div className="npw-card-row">
+                <div className="npw-card-row" role="group" aria-label="Add-ons">
                   {ADDONS.filter((a) => availableAddons.includes(a.id)).map((a) => {
                     const isSelected = state.addons.includes(a.id);
                     const depParent = state.addons.find((sel) => getAddonDeps(sel).includes(a.id));
                     const isDepLocked = !!depParent;
                     return (
-                      <div
+                      <button
+                        type="button"
+                        aria-pressed={isSelected}
                         key={a.id}
                         className={`npw-card${isSelected ? ' selected' : ''}${isDepLocked ? ' dep-locked' : ''}`}
                         onClick={() => dispatch({ type: 'TOGGLE_ADDON', value: a.id })}
                       >
                         <span className="npw-card-check">{'\u2713'}</span>
-                        <div className="npw-card-icon" style={{ background: a.bg }}>{a.icon}</div>
-                        <div className="npw-card-name">{a.name}</div>
-                        <div className="npw-card-desc">{a.desc}</div>
-                        {isDepLocked && <div className="npw-dep-hint">required by {ADDONS.find((x) => x.id === depParent)?.name}</div>}
-                      </div>
+                        <span className="npw-card-icon" style={{ background: a.bg }}>{a.icon}</span>
+                        <span className="npw-card-name">{a.name}</span>
+                        <span className="npw-card-desc">{a.desc}</span>
+                        {isDepLocked && <span className="npw-dep-hint">required by {ADDONS.find((x) => x.id === depParent)?.name}</span>}
+                      </button>
                     );
                   })}
                 </div>
@@ -1042,18 +1163,22 @@ function NewProjectWizard({
                 {/* Base theme (top-left) */}
                 <div className="npw-style-theme">
                   <div className="npw-section-label">Base Theme</div>
-                  <div className="npw-theme-row">
+                  <div className="npw-theme-row" role="radiogroup" aria-label="Base theme">
                     {THEMES.map((t) => (
-                      <div
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={state.theme === t.id}
+                        disabled={Boolean(t.locked)}
                         key={t.id}
                         className={`npw-theme-card${state.theme === t.id ? ' selected' : ''}${t.locked ? ' locked' : ''}`}
                         onClick={() => !t.locked && dispatch({ type: 'SET_THEME', value: t.id })}
                       >
                         {t.locked && <span className="npw-theme-lock">SOON</span>}
-                        <div className="npw-theme-preview" style={{ background: t.gradient }} />
-                        <div className="npw-theme-name">{t.name}</div>
-                        <div className="npw-theme-tag">{t.tag}</div>
-                      </div>
+                        <span className="npw-theme-preview" style={{ background: t.gradient }} />
+                        <span className="npw-theme-name">{t.name}</span>
+                        <span className="npw-theme-tag">{t.tag}</span>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -1082,17 +1207,20 @@ function NewProjectWizard({
                 {/* Folder group colors (bottom-left) */}
                 <div className="npw-style-group">
                   <div className="npw-section-label">Folder Group Colors</div>
-                  <div className="npw-mode-row">
+                  <div className="npw-mode-row" role="radiogroup" aria-label="Folder group colors">
                     {GROUP_COLOR_MODES.map((m) => (
-                      <div
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={state.groupColorMode === m.id}
                         key={m.id}
                         className={`npw-mode-card${state.groupColorMode === m.id ? ' selected' : ''}`}
                         onClick={() => dispatch({ type: 'SET_GROUP_COLOR_MODE', value: m.id })}
                       >
                         <span className="npw-mode-icon">{m.icon}</span>
-                        <div className="npw-mode-name">{m.name}</div>
-                        <div className="npw-mode-desc">{m.desc}</div>
-                      </div>
+                        <span className="npw-mode-name">{m.name}</span>
+                        <span className="npw-mode-desc">{m.desc}</span>
+                      </button>
                     ))}
                   </div>
                   {state.groupColorMode === 'custom' && (
@@ -1115,17 +1243,20 @@ function NewProjectWizard({
                 {/* Single piece colors (bottom-right) */}
                 <div className="npw-style-pieces">
                   <div className="npw-section-label">Single Piece Colors</div>
-                  <div className="npw-mode-row">
+                  <div className="npw-mode-row" role="radiogroup" aria-label="Single piece colors">
                     {NODE_COLOR_MODES.map((m) => (
-                      <div
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={state.nodeColorMode === m.id}
                         key={m.id}
                         className={`npw-mode-card${state.nodeColorMode === m.id ? ' selected' : ''}`}
                         onClick={() => dispatch({ type: 'SET_NODE_COLOR_MODE', value: m.id })}
                       >
                         <span className="npw-mode-icon">{m.icon}</span>
-                        <div className="npw-mode-name">{m.name}</div>
-                        <div className="npw-mode-desc">{m.desc}</div>
-                      </div>
+                        <span className="npw-mode-name">{m.name}</span>
+                        <span className="npw-mode-desc">{m.desc}</span>
+                      </button>
                     ))}
                   </div>
                   {state.nodeColorMode === 'custom' && (
@@ -1283,7 +1414,7 @@ function NewProjectWizard({
                       <button
                         className="npw-btn-done npw-fallback-btn"
                         type="button"
-                        onClick={() => { setError(''); setErrorIsDestination(false); setPage(0); }}
+                        onClick={() => goToPage(0)}
                       >
                         {'\u{1F4C1}'} Choose a different location
                       </button>
@@ -1311,16 +1442,34 @@ function NewProjectWizard({
           )}
         </div>
 
-        {/* ---- Footer ---- */}
+        {/* ---- Footer: pinned. Buttons say what they do and show their key;
+            a dirty wizard confirms Cancel inline, never in a second modal. ---- */}
         <div className="npw-footer">
-          <button
-            className="npw-btn-cancel"
-            type="button"
-            onClick={handleCancel}
-            disabled={isScaffolding}
-          >
-            Cancel
-          </button>
+          {confirmingCancel ? (
+            <div className="npw-confirm" role="group" aria-label="Discard this project?">
+              <span className="npw-confirm-text">Discard this project?</span>
+              <button className="npw-btn-cancel" type="button" onClick={discardWizard}>
+                Discard
+              </button>
+              <button className="npw-btn-nav" type="button" onClick={handleKeepEditing} ref={keepEditingRef}>
+                Keep editing
+              </button>
+            </div>
+          ) : (
+            <button
+              className="npw-btn-cancel"
+              type="button"
+              onClick={handleCancel}
+              disabled={isScaffolding}
+              aria-keyshortcuts="Escape"
+              ref={cancelRef}
+            >
+              Cancel<kbd className="npw-key">Esc</kbd>
+            </button>
+          )}
+          <div className="npw-footer-counter" aria-live="polite">
+            Step {page + 1} of {PAGE_COUNT} · {WIZARD_STEPS[page].label}
+          </div>
           <div className="npw-nav-group">
             <button
               className="npw-btn-nav"
@@ -1328,27 +1477,33 @@ function NewProjectWizard({
               onClick={goBack}
               disabled={page === 0 || isScaffolding}
             >
-              {'\u2190'}
+              <ChevronLeft size={15} aria-hidden="true" />
+              Back
             </button>
             {page < PAGE_COUNT - 1 ? (
               <button
-                className={`npw-btn-nav${(page === 0 && page0Valid) || (page === 1 && page1Valid) || page === 2 ? ' active' : ''}`}
+                className={`npw-btn-nav${advanceReady ? ' active' : ''}`}
                 type="button"
                 onClick={goNext}
-                disabled={(page === 0 && !page0Valid) || (page === 1 && !page1Valid)}
+                disabled={!advanceReady}
+                aria-keyshortcuts="Enter"
               >
-                {'\u2192'}
+                Next
+                <ChevronRight size={15} aria-hidden="true" />
+                <kbd className="npw-key">{'\u21B5'}</kbd>
               </button>
             ) : (
               <button
                 className="npw-btn-done"
                 type="button"
                 onClick={handleDone}
-                disabled={isScaffolding}
+                disabled={isScaffolding || pendingDone !== null}
+                aria-keyshortcuts="Enter"
               >
                 {isScaffolding
                   ? (isBlank || isPython ? '\u2726 Creating...' : '\u2726 Scaffolding...')
                   : '\u2726 Create Project'}
+                {!isScaffolding && !pendingDone && <kbd className="npw-key">{'\u21B5'}</kbd>}
               </button>
             )}
           </div>
