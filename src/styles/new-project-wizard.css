@@ -1,6 +1,11 @@
 /* ================================================================
-   New Project Wizard — 3-page modal for project creation
+   New Project Wizard — 4-page modal for project creation
    Prefix: .npw-  (new project wizard)
+
+   Layout contract (brief-wizard-robustness.md, slice 1): the modal is
+   bounded to the window, the header and footer are pinned, and .npw-body
+   is the ONLY scrolling region. The test in
+   test/domains/wizardLayoutContract.test.mjs holds this file to it.
    ================================================================ */
 
 /* ── Overlay + Modal Container ── */
@@ -12,11 +17,23 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Breathing room that also bounds the modal: max-height 100% below is
+     100% of this content box, so the dialog can never outgrow the window. */
+  padding: 24px;
   background: rgba(0, 0, 0, 0.5);
 }
 
 .npw-modal {
-  width: min(720px, calc(100vw - 48px));
+  /* Opaque twin of the modal background — the scroll shadows in .npw-body
+     paint with it so they blend into the surface instead of banding. */
+  --npw-surface: rgb(15, 17, 26);
+  width: min(720px, 100%);
+  /* A stable height page to page, but never taller than the window. The
+     shipped bug was an unbounded modal: the centred overlay clipped the
+     header AND the footer together once the Stack page grew past the
+     viewport (macOS canary, 2026-09-07). */
+  min-height: min(560px, 100%);
+  max-height: 100%;
   border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(15, 17, 26, 0.97);
@@ -29,6 +46,7 @@
 }
 
 .npw-header {
+  flex: 0 0 auto;
   padding: 24px 32px 0;
   display: flex;
   flex-direction: column;
@@ -36,17 +54,43 @@
 }
 
 .npw-body {
-  padding: 16px 32px 0;
-  min-height: 400px;
-  flex: 1;
+  padding: 16px 32px 16px;
+  /* min-height 0 lets the body shrink inside the bounded modal — without it
+     flex children refuse to go below their content height and the footer
+     is pushed out of the box again. */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  /* Scroll shadows, CSS only: the two covers scroll with the content
+     (attachment: local) and slide off the shadows that stay put, so a
+     shadow shows exactly when there is more content in that direction. */
+  background:
+    linear-gradient(var(--npw-surface) 30%, transparent),
+    linear-gradient(transparent, var(--npw-surface) 70%) 0 100%,
+    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.5), transparent),
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.5), transparent) 0 100%;
+  background-repeat: no-repeat;
+  background-size: 100% 28px, 100% 28px, 100% 12px, 100% 12px;
+  background-attachment: local, local, scroll, scroll;
 }
 
 .npw-footer {
+  flex: 0 0 auto;
   padding: 16px 32px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* Short windows (13" laptop with a menu bar, 125–150% scaling): tighten the
+   chrome so the body keeps as much of the height as possible. */
+@media (max-height: 640px) {
+  .npw-overlay { padding: 16px; }
+  .npw-header { padding-top: 16px; }
+  .npw-title { font-size: 20px; }
+  .npw-subtitle { display: none; }
+  .npw-dots { margin-bottom: 10px; }
+  .npw-footer { padding: 10px 32px 14px; }
 }
 
 /* ── Step Dots ── */
@@ -297,29 +341,32 @@
 .npw-tier-blank    { background: rgba(163, 230, 53, 0.10); }
 .npw-tier-python   { background: rgba(53, 114, 165, 0.14); }
 
-/* ── Subsection Collapse/Expand ── */
+/* ── Subsection Collapse/Expand ──
+   Animated with grid-template-rows 0fr → 1fr, never a px max-height cap:
+   the old 220px/420px caps silently clipped anything taller (a wrapped
+   card row, the no-Python guidance). The single .npw-subsection-inner
+   child is what the 0fr row measures. */
 
 .npw-subsection {
-  overflow: hidden;
-  max-height: 0;
+  display: grid;
+  grid-template-rows: 0fr;
   opacity: 0;
   transform: translateY(-14px);
   transition:
-    max-height 0.4s cubic-bezier(0.0, 0.0, 0.2, 1),
+    grid-template-rows 0.4s cubic-bezier(0.0, 0.0, 0.2, 1),
     opacity 0.32s cubic-bezier(0.0, 0.0, 0.2, 1) 0.06s,
     transform 0.4s cubic-bezier(0.0, 0.0, 0.2, 1) 0.04s;
 }
 
-.npw-subsection.visible {
-  max-height: 220px;
-  opacity: 1;
-  transform: translateY(0);
+.npw-subsection-inner {
+  min-height: 0;
+  overflow: hidden;
 }
 
-/* The Python environment strip carries selects + caption + expandable
-   detail (or the no-Python guidance) — taller than a card row. */
-.npw-subsection.npw-env-section.visible {
-  max-height: 420px;
+.npw-subsection.visible {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* ── Dependency Hint ── */
