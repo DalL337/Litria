@@ -62,3 +62,41 @@ export function rovingTarget(index, count, delta) {
   if (index < 0 || count < 2 || !delta) return null;
   return (index + delta + count) % count;
 }
+
+// ---------------------------------------------------------------------------
+// Advanced folds (slice 3). A fold header counts its non-default choices so a
+// collapsed fold can never hide a surprise. Only what the fold actually
+// holds for this stack is counted.
+// ---------------------------------------------------------------------------
+
+/** Stack step fold: package manager, backend (web), Python environment engine. */
+export function countAdvancedChanges(state) {
+  if (!state.wrapper || state.wrapper === 'blank') return 0;
+  if (state.wrapper === 'python') {
+    let n = state.pyEnvEngine !== 'auto' ? 1 : 0;
+    if (state.pyEnvMode === 'existing' && (state.pyExistingEnv ?? '').trim() !== '') n += 1;
+    return n;
+  }
+  let n = state.manager !== 'npm' ? 1 : 0;
+  if (state.wrapper === 'web' && state.backend !== 'none') n += 1;
+  return n;
+}
+
+/** Workspace step fold: folder-group and single-piece colour modes. */
+export function countColorChanges(state) {
+  return (state.groupColorMode !== 'auto' ? 1 : 0) + (state.nodeColorMode !== 'inherit' ? 1 : 0);
+}
+
+// Review rows whose value lives inside the Stack step's Advanced fold: the
+// Edit jump opens the fold so the control is on screen, not behind a click.
+const ADVANCED_ROW_KEYS = new Set(['Backend', 'Package Manager', 'Environment']);
+
+/**
+ * Where a review-row Edit control jumps: the owning step, and which fold to
+ * open there (or null). Keys are the review-card labels.
+ */
+export function reviewRowTarget(key) {
+  if (key === 'Project' || key === 'Location') return { step: 0, fold: null };
+  if (key === 'Workspace') return { step: 2, fold: null };
+  return { step: 1, fold: ADVANCED_ROW_KEYS.has(key) ? 'advanced' : null };
+}

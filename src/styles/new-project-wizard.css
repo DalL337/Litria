@@ -528,15 +528,6 @@
 .npw-env-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .npw-env-empty .npw-browse-btn { margin-top: 6px; }
 
-.npw-env-details { margin-top: 8px; }
-
-.npw-env-details summary {
-  font-size: 10.5px;
-  color: rgba(255, 255, 255, 0.7);
-  cursor: pointer;
-  user-select: none;
-}
-
 .npw-env-engine-row {
   display: flex;
   gap: 12px;
@@ -571,6 +562,7 @@
   margin-top: 12px;
   align-items: center;
 }
+.npw-fold-section .npw-pm-row { margin-top: 0; }
 
 .npw-pm-label {
   font-size: 11px;
@@ -692,7 +684,9 @@
 .npw-review-row {
   display: flex;
   justify-content: space-between;
-  padding: 5px 0;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
   font-size: 12px;
   font-family: 'JetBrains Mono', monospace;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -708,7 +702,40 @@
 
 .npw-review-val {
   color: #fff;
+  /* The Edit control sits at the far edge; the value takes what is left. */
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+.npw-review-edit {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--cm-indigo-light);
+  opacity: 0.6;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: opacity var(--cm-transition-fast), border-color var(--cm-transition-fast),
+              box-shadow var(--cm-transition-fast);
+}
+.npw-review-edit:hover:not(:disabled) {
+  opacity: 1;
+  border-color: var(--cm-indigo-light);
+  box-shadow: 0 0 6px var(--cm-glow-hover);
+}
+.npw-review-edit:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--cm-electric-blue);
+  outline-offset: 2px;
+}
+.npw-review-edit:disabled { opacity: 0.2; cursor: default; }
 
 /* ── Navigation Buttons ──
    Back / Next / Create say what they do and show their key (the launcher
@@ -1032,15 +1059,12 @@ button:disabled .npw-key { display: none; }
 .npw-style-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-areas:
-    'theme   preview'
-    'group   pieces';
+  grid-template-areas: 'theme preview';
   gap: 18px;
+  margin-bottom: 14px;
 }
 .npw-style-theme { grid-area: theme; }
 .npw-style-preview { grid-area: preview; }
-.npw-style-group { grid-area: group; }
-.npw-style-pieces { grid-area: pieces; }
 
 .npw-section-label {
   font-size: 12px;
@@ -1210,3 +1234,115 @@ button:disabled .npw-key { display: none; }
 }
 .npw-capstone-left { display: flex; flex-direction: column; gap: 14px; }
 .npw-capstone-right { display: flex; flex-direction: column; gap: 14px; }
+
+
+/* =========================================================================
+   Slice 3 — section rules, Advanced folds, seed note
+   (brief-wizard-robustness.md §4 "Progressive disclosure").
+   ========================================================================= */
+
+/* Section labels become rules: the label, then a hairline to the edge, so
+   the cascade reads as separated sections instead of a stack of headings. */
+.npw-section-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.npw-section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Fold: a <details> with a summary that carries an icon, the label, an
+   optional "n changed" chip, the items it holds, and a chevron. */
+.npw-fold {
+  margin-top: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.npw-fold-summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: rgba(255, 255, 255, 0.8);
+  border-radius: 12px;
+  transition: background var(--cm-transition-fast);
+}
+.npw-fold-summary::-webkit-details-marker { display: none; }
+.npw-fold-summary:hover { background: rgba(255, 255, 255, 0.03); }
+.npw-fold-summary:focus-visible {
+  outline: 2px solid var(--cm-electric-blue);
+  outline-offset: -2px;
+}
+.npw-fold-summary > svg { color: var(--cm-indigo-light); flex: 0 0 auto; }
+
+.npw-fold-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* "n changed": non-default choices inside a collapsed fold stay visible. */
+.npw-fold-count {
+  margin-top: 0;
+  color: #818cf8;
+  background: rgba(99, 102, 241, 0.15);
+}
+
+.npw-fold-items {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: right;
+}
+
+.npw-fold-chevron {
+  transition: transform 160ms ease;
+}
+.npw-fold[open] .npw-fold-chevron { transform: rotate(180deg); }
+
+.npw-fold-body {
+  padding: 4px 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.npw-fold-section { padding-top: 12px; }
+.npw-fold-section .npw-card-row { margin-bottom: 0; }
+
+/* Workspace colours: two columns inside the fold. */
+.npw-fold-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.npw-fold-columns > * { padding-top: 12px; }
+
+/* ADR-019 ownership note under the Workspace step. */
+.npw-seed-note {
+  margin-top: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(92, 107, 192, 0.3);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.68);
+}
+.npw-seed-note > svg { flex: 0 0 auto; margin-top: 2px; color: var(--cm-indigo-light); }
+.npw-seed-note b { color: rgba(255, 255, 255, 0.9); font-weight: 600; }
