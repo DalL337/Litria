@@ -1,6 +1,6 @@
 # Litria — Capabilities & Features
 
-> **Version**: 1.0.2 | **Date**: 2026-08-31 | **Status**: Public Beta (MIT)
+> **Version**: 1.0.3 | **Date**: 2026-09-07 | **Status**: Public Beta (MIT)
 
 ## How to read this document
 
@@ -278,7 +278,11 @@ guard makes hard-coding a settings key a build failure.
 
 **Features**
 - Preferences panel on the Launcher (global) and in-app via File menu
-  (global + per-project overrides with reset-to-global)
+  (global + per-project overrides with reset-to-global); v1.0.3: settings
+  grouped into rooms (Appearance / Project creation / Behavior / Themes /
+  Language servers) declared in the registry, a rail that tracks the room
+  in view, scope pills, and "Find a setting" search (`/`) with highlighted
+  matches
 - Live-inherit vs seed-at-creation propagation, stated in the UI
 - Current registry: theme, energy (Live/Calm, project-overridable), wire
   drop behavior (project-overridable), default project location, default
@@ -348,7 +352,11 @@ scripts stay off, with explicit consent to run them.
 **Features**
 - 4-page New Project wizard: runtime → framework → language → addons →
   backend, matrix-validated; workspace-style page with live preview through
-  the real color/material pipeline
+  the real color/material pipeline; v1.0.3: bounded to the window with a
+  pinned header/footer, labelled clickable steps, a keyboard model (Enter /
+  Esc / arrows, keys shown on the buttons), Advanced folds that count their
+  non-default choices, review-row edit jumps, and Lucide glyphs in place of
+  emoji (no brand logos)
 - Framework coverage: Tauri / Vite / Electron wrappers × React, Svelte,
   Vue, Angular, Solid (matrix-pruned combinations); Tailwind/shadcn/router
   addons; Express/Fastify backends

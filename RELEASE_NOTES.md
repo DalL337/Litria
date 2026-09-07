@@ -1,5 +1,127 @@
 # Release Notes
 
+## v1.0.3 — Wizard and Preferences, redesigned
+
+**Date:** 2026-09-07 (PRs #21–#27)
+
+The first release shaped by outside feedback. The macOS tester who found the
+v1.0.2 blocker sent two more notes with it: the New Project wizard's buttons fell
+off the bottom of a small window, and its emoji icons made it look generated.
+Fixing the first turned into a redesign of the wizard, and the same treatment
+then went to the Preferences panel, which had grown into a flat list of small
+grey text.
+
+> **Platform status is unchanged.** Every artifact is **unsigned** — SmartScreen
+> and Gatekeeper will object, and on macOS you still need
+> `xattr -dr com.apple.quarantine /Applications/litria.app`. macOS has been run by
+> a tester on one machine; Linux compiles and passes CI but no human has launched
+> it. The redesigned wizard and Preferences panel were verified in headless
+> rendering and on the Windows build; their behaviour at small window heights on
+> macOS with the menu bar, and on Windows at 125–150% display scaling, is
+> awaiting a live pass.
+
+---
+
+### Fixed — the wizard on short windows
+
+On a window shorter than the Stack step's content, the wizard's **Create button
+was unreachable**. The dialog had no maximum height, and because the overlay
+centres it, a dialog taller than the window was clipped at *both* ends — the
+title disappeared off the top and the buttons off the bottom, with nothing to
+scroll. Resizing the window was the only way out.
+
+The dialog is now bounded to the window. The header and the buttons stay pinned;
+only the middle scrolls, with a shadow at whichever edge has more content behind
+it. Short windows tighten the header to give the content the room.
+
+A second, quieter truncation went with it: the cascading sections of the Stack
+step (framework, language, add-ons) animated open to a fixed pixel height, and
+anything taller — a row of cards that wrapped — was silently cut off. They now
+open to whatever height they need.
+
+### Changed — the New Project wizard
+
+**Steps have names.** Identity → Stack → Workspace → Create replace the row of
+dots. Steps you have reached are buttons: click one to go back and fix a choice
+without losing anything else. The current step is announced to screen readers.
+
+**Buttons say what they do, and show their key.** Back, Next and Create Project
+carry a small chip with the key that triggers them: Enter moves forward when the
+step is complete (and creates the project on the last step), Escape asks —
+inline, in the footer, never in a second dialog — before discarding anything you
+have typed. Arrow keys move within a row of cards like a native radio group;
+Alt+arrows step. Every card is a real button, so Tab, Space and Enter work as
+they should.
+
+**Advanced choices fold away.** Package manager, backend and the Python
+environment engine live under one **Advanced** fold on the Stack step; the
+colour modes under **Advanced · Colors** on the Workspace step. A collapsed fold
+shows how many of its choices are non-default, so nothing is hidden by
+surprise. Section labels carry a rule to the edge so the cascade reads as
+separated sections.
+
+**The review step can send you back.** Every row on the Create step has an edit
+control that jumps to the owning step and opens the owning fold. The review
+card also gained the Workspace row (theme and energy) it had been missing.
+
+**Icons are drawn, not typed.** Every emoji is replaced with a Lucide glyph
+through one icon map. There are deliberately no brand logos: category glyphs
+keep every card the same visual weight, and no mark needs a trademark review.
+
+### Changed — Preferences
+
+**Rooms.** Settings are grouped into Appearance, Project creation, Behavior,
+Themes and Language servers. A rail on the left lists them, tracks the room in
+view while you scroll, and jumps on click. Each room explains itself in a line.
+
+**Scope you can see.** Global and This project are pills in the same style as
+the wizard's steps. In the launcher the project pill is present but disabled,
+with the reason beside it — open a project to set per-project overrides. In a
+project, the tab shows which layer supplies each value, a one-click reset to
+global, and how many settings are global only.
+
+**Rows you can read.** Larger labels, captions at a readable line height, more
+room per row, and a fixed control column so every control lines up down one
+edge.
+
+**Search.** "Find a setting" in the header — press `/` — filters by label and
+caption, highlights the matches, counts them per room, and says "no matches" in
+a room that has none rather than making it vanish.
+
+**The footer says what the panel does.** Changes save as you go; the footer says
+so, and flashes "Saved …" after each one. Done carries its Escape chip.
+
+### Fixed — Preferences
+
+- In the project tab, the *Wire drop on collapsed group* row was wired to the
+  **energy** setter: choosing an override there would have changed the
+  project's energy level instead. The row now renders disabled with a caption
+  saying its per-project override is not wired yet.
+- A lone **Install** button in the Language servers list stretched to the full
+  width of the row.
+
+### Internal
+
+- Every preference in the registry now declares its room, and the settings-key
+  guard refuses a roomless entry.
+- The wizard's navigation rules, the Preferences search, and both panels'
+  layout contracts have their own tests (1100 in the domain suite, up from
+  1037).
+
+### Known limitations
+
+- **Per-project override for "Wire drop on collapsed group" is not wired.** The
+  row says so and follows the global value.
+- **macOS Dock icon shows a black square.** The source artwork is opaque with no
+  transparency, and macOS does not round app icons itself.
+- Import de-duplication treats `./thing` and `./thing/index` as different modules,
+  so connecting a wire can write a redundant (harmless) import.
+- The Python import writer can still insert inside a parenthesised
+  `from x import ( … )`.
+- Collapsed group pills can report a file count that does not match the project.
+
+---
+
 ## v1.0.2 — macOS project creation
 
 **Date:** 2026-08-31 (PRs #18–#20)
