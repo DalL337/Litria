@@ -403,14 +403,8 @@ fn absolute_path_on_path(command: &str) -> Option<PathBuf> {
     if !output.status.success() {
         return None;
     }
-    let first = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()?
-        .trim()
-        .to_string();
-    if first.is_empty() {
-        return None;
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first = pick_executable_line(&stdout, cfg!(windows), std::env::var("PATHEXT").ok().as_deref())?;
     let path = PathBuf::from(first);
 
     // A PATH holding `.` or an empty entry makes `which` answer with a RELATIVE
@@ -424,6 +418,46 @@ fn absolute_path_on_path(command: &str) -> Option<PathBuf> {
         std::fs::canonicalize(&path).ok()?
     };
     path.is_file().then_some(path)
+}
+
+/// The line of `where`/`which` output to trust as the executable.
+///
+/// `where` lists EVERY matching file in PATH order, and for an npm shim the
+/// extension-less Unix wrapper script (`…\npm\pyright-langserver`) sorts
+/// BEFORE `pyright-langserver.cmd`. Taking the first line blindly hands back a
+/// file that exists, passes `is_file()`, and cannot be spawned (os error 193).
+/// On Windows prefer the first line whose extension is in PATHEXT — the set
+/// the OS itself would execute — and fall back to the first line only when
+/// none qualifies. Unix `which` returns one line; the first is right.
+/// (Latent finding from the 2026-08-30 audit, verified live on 2026-09-07:
+/// `where npm` still answers `npm` before `npm.cmd`.)
+fn pick_executable_line(stdout: &str, windows: bool, pathext: Option<&str>) -> Option<String> {
+    let lines: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if !windows {
+        return lines.first().map(|line| line.to_string());
+    }
+    let exts: Vec<String> = pathext
+        .unwrap_or(".COM;.EXE;.BAT;.CMD")
+        .split(';')
+        .map(|ext| ext.trim().to_ascii_uppercase())
+        .filter(|ext| !ext.is_empty())
+        .collect();
+    let executable = |line: &&str| {
+        std::path::Path::new(line)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| exts.iter().any(|allowed| allowed.trim_start_matches('.') == ext.to_ascii_uppercase()))
+            .unwrap_or(false)
+    };
+    lines
+        .iter()
+        .find(executable)
+        .or_else(|| lines.first())
+        .map(|line| line.to_string())
 }
 
 /// Return true if the given command name can be found by the OS.
@@ -552,6 +586,35 @@ mod tests {
     #[test]
     fn probe_command_runs_rejects_nonexistent_command() {
         assert!(!probe_command_runs("__litria_nonexistent_command_42__", "--version"));
+    }
+
+    #[test]
+    fn pick_executable_line_prefers_pathext_over_the_first_where_line() {
+        // The real `where npm` shape on a machine with the Node installer.
+        let stdout = "C:\\Program Files\\nodejs\\npm\r\nC:\\Program Files\\nodejs\\npm.cmd\r\nC:\\Users\\alice\\AppData\\Roaming\\npm\\npm.cmd\r\n";
+        assert_eq!(
+            pick_executable_line(stdout, true, Some(".COM;.EXE;.BAT;.CMD")).as_deref(),
+            Some("C:\\Program Files\\nodejs\\npm.cmd")
+        );
+        // A native binary is already first.
+        assert_eq!(
+            pick_executable_line("C:\\Program Files\\nodejs\\node.exe\r\n", true, None).as_deref(),
+            Some("C:\\Program Files\\nodejs\\node.exe")
+        );
+        // PATHEXT is case-insensitive and may be lower-case on the machine.
+        assert_eq!(
+            pick_executable_line("C:\\x\\tool\r\nC:\\x\\tool.CMD\r\n", true, Some(".exe;.cmd")).as_deref(),
+            Some("C:\\x\\tool.CMD")
+        );
+        // Nothing qualifies: fall back to the first line rather than nothing.
+        assert_eq!(
+            pick_executable_line("C:\\x\\tool\r\n", true, None).as_deref(),
+            Some("C:\\x\\tool")
+        );
+        // Blank output is a miss.
+        assert_eq!(pick_executable_line("\r\n", true, None), None);
+        // Unix: which prints one line; PATHEXT is irrelevant.
+        assert_eq!(pick_executable_line("/usr/bin/node\n", false, None).as_deref(), Some("/usr/bin/node"));
     }
 
     #[test]
