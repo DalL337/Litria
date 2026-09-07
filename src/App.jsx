@@ -145,6 +145,7 @@ import './styles/monaco-overrides.css';
 import './styles/modals.css';
 import './styles/context-menus.css';
 import './styles/launch.css';
+import './styles/preferences.css';
 import './styles/new-project-wizard.css';
 import './styles/status-bar.css';
 import './styles/search.css';
