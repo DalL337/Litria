@@ -1,5 +1,67 @@
 # Release Notes
 
+## v1.0.4 — Two things a first run on Windows found
+
+**Date:** 2026-09-07 (PRs #28–#29)
+
+A patch release, hours after 1.0.3, for two reports from someone running the
+Windows build for the first time. One was a visual slip in the redesigned
+wizard. The other turned out to be a class of bug that has been in every
+release so far and that no one developing Litria could see.
+
+> **Platform status is unchanged from v1.0.3.** Unsigned artifacts everywhere;
+> macOS run once by a tester; Linux never launched by a human. The fix below
+> for console windows is confirmed by the process flag, not yet by a run of
+> this build — please say so if a window still flashes.
+
+---
+
+### Fixed — console windows flashing on Windows
+
+Opening Preferences "ran a script window and closed it" — several times — and
+did it again while settings were being changed.
+
+Opening the panel loads the language-server inventory, which works out how each
+server would be found today. Per server that means a few short child processes
+(`where node`, `node --version`, `go env GOPATH`). None of them asked Windows
+to hide its console, and a release build of Litria is a windowed application
+with no console of its own — so each child got a brand-new console window for
+the fraction of a second it ran. Five servers with a timeout each explain the
+burst on open and the stragglers a moment later.
+
+Nobody developing Litria ever saw it. The development build runs under a
+console, its children inherit that console, and nothing flashes. That is why
+the report needed a first-run user on a release build.
+
+Every child process now goes through one place that sets the hide-console
+flag, and a test fails the build on any new spawn that does not. The sweep
+found a bigger one on the way: the **language servers themselves** were
+launched the same way, so on a release build every running server would have
+owned a visible console window for as long as it ran.
+
+### Fixed — a white box around the theme previews
+
+The wizard's Workspace step showed a white box behind each theme card. The
+cards became real buttons in 1.0.3 (so keyboard and screen readers can use
+them) and were the one card kind that never declared a background, so the
+browser's default button face painted through. One line.
+
+### Known limitations
+
+Unchanged from v1.0.3:
+
+- **Per-project override for "Wire drop on collapsed group" is not wired.** The
+  row says so and follows the global value.
+- **macOS Dock icon shows a black square.** The source artwork is opaque with no
+  transparency, and macOS does not round app icons itself.
+- Import de-duplication treats `./thing` and `./thing/index` as different modules,
+  so connecting a wire can write a redundant (harmless) import.
+- The Python import writer can still insert inside a parenthesised
+  `from x import ( … )`.
+- Collapsed group pills can report a file count that does not match the project.
+
+---
+
 ## v1.0.3 — Wizard and Preferences, redesigned
 
 **Date:** 2026-09-07 (PRs #21–#27)
