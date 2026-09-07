@@ -89,44 +89,98 @@
   .npw-header { padding-top: 16px; }
   .npw-title { font-size: 20px; }
   .npw-subtitle { display: none; }
-  .npw-dots { margin-bottom: 10px; }
+  .npw-stepper { margin-bottom: 8px; }
   .npw-footer { padding: 10px 32px 14px; }
 }
 
-/* ── Step Dots ── */
+/* ── Stepper (slice 2) ──
+   Labelled steps replace the dots. data-state: current | done | todo. Done
+   steps are buttons that jump back with state intact; todo steps are
+   disabled; the current one carries aria-current="step". */
 
-.npw-dots {
+.npw-stepper {
   display: flex;
-  gap: 6px;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 12px;
 }
 
-.npw-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15);
-  transition: all 0.3s ease;
+.npw-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: none;
+  color: rgba(255, 255, 255, 0.5);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  cursor: default;
+  transition: color var(--cm-transition-fast), border-color var(--cm-transition-fast),
+              background var(--cm-transition-fast), box-shadow var(--cm-transition-fast);
 }
 
-.npw-dot.active {
-  background: var(--cm-indigo);
-  box-shadow: 0 0 8px rgba(99, 102, 241, 0.6);
+.npw-step[data-state="todo"] { opacity: 0.55; }
+
+.npw-step-n {
   width: 20px;
-  border-radius: 3px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-.npw-dot.done {
-  background: rgba(20, 184, 166, 0.6);
+.npw-step[data-state="done"] {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.78);
 }
+.npw-step[data-state="done"] .npw-step-n {
+  border-color: rgba(99, 102, 241, 0.6);
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+}
+.npw-step[data-state="done"]:hover {
+  border-color: rgba(121, 134, 203, 0.6);
+  color: #fff;
+  box-shadow: 0 0 8px var(--cm-glow-hover);
+}
+
+.npw-step[data-state="current"] {
+  color: #fff;
+  border-color: rgba(99, 102, 241, 0.6);
+  background: rgba(99, 102, 241, 0.1);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.25);
+}
+.npw-step[data-state="current"] .npw-step-n {
+  background: var(--cm-indigo);
+  border-color: var(--cm-indigo);
+  color: #fff;
+}
+
+.npw-step-sep {
+  width: 14px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.npw-step-sep.done { background: rgba(99, 102, 241, 0.6); }
 
 /* ── Page Title ── */
 
 .npw-title {
+  margin: 0;
   font-size: 28px;
   font-weight: 400;
   color: #fff;
   letter-spacing: -0.02em;
+  /* Programmatic focus target on step change — no ring for a heading. */
+  outline: none;
 }
 
 .npw-subtitle {
@@ -231,13 +285,45 @@
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* ── Card Grid ── */
+/* ── Card Grid ──
+   Cards are <button>s (slice 2): Tab reaches them, Space/Enter select, and
+   arrow keys rove inside a row. The resets below make a button box paint
+   exactly like the old div. Inner name/desc are spans (button content
+   model), so they take display: block. */
 
 .npw-card-row {
   display: flex;
   gap: 10px;
   margin-bottom: 6px;
   flex-wrap: wrap;
+}
+
+.npw-card,
+.npw-theme-card,
+.npw-mode-card {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  /* A button centres its content vertically; grid + align-content: start
+     keeps the icon/name/desc stack at the top like the old div did, so
+     a short card next to a tall one does not float its content mid-card. */
+  display: grid;
+  align-content: start;
+}
+/* Grid items stretch by default; a badge chip keeps its own width. */
+.npw-card .npw-badge { justify-self: start; }
+
+.npw-card:focus-visible,
+.npw-theme-card:focus-visible,
+.npw-mode-card:focus-visible,
+.npw-step:focus-visible,
+.npw-btn-nav:focus-visible,
+.npw-btn-cancel:focus-visible,
+.npw-btn-done:focus-visible {
+  outline: 2px solid var(--cm-electric-blue);
+  outline-offset: 2px;
 }
 
 .npw-card {
@@ -269,6 +355,8 @@
   background: rgba(99, 102, 241, 0.05);
   cursor: default;
 }
+/* A locked language card is disabled yet IS the (auto) selection. */
+.npw-card:disabled { opacity: 1; }
 
 .npw-card.disabled {
   opacity: 0.3;
@@ -287,6 +375,7 @@
 }
 
 .npw-card-name {
+  display: block;
   font-size: 13px;
   font-weight: 500;
   color: #fff;
@@ -294,6 +383,7 @@
 }
 
 .npw-card-desc {
+  display: block;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.6);
   font-family: 'JetBrains Mono', monospace;
@@ -372,6 +462,7 @@
 /* ── Dependency Hint ── */
 
 .npw-dep-hint {
+  display: block;
   font-size: 10px;
   color: rgba(99, 102, 241, 0.6);
   font-family: 'JetBrains Mono', monospace;
@@ -545,18 +636,21 @@
 }
 
 .npw-theme-preview {
+  display: block;
   height: 48px;
   border-radius: 8px;
   margin-bottom: 10px;
 }
 
 .npw-theme-name {
+  display: block;
   font-size: 13px;
   color: #fff;
   margin-bottom: 2px;
 }
 
 .npw-theme-tag {
+  display: block;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.6);
   font-family: 'JetBrains Mono', monospace;
@@ -616,7 +710,9 @@
   color: #fff;
 }
 
-/* ── Navigation Buttons ── */
+/* ── Navigation Buttons ──
+   Back / Next / Create say what they do and show their key (the launcher
+   pills' letter-hint idiom). The counter between them announces the step. */
 
 .npw-nav-group {
   display: flex;
@@ -624,18 +720,49 @@
   align-items: center;
 }
 
+.npw-footer-counter {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+}
+
+.npw-key {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  opacity: 0.55;
+  margin-left: 6px;
+}
+button:disabled .npw-key { display: none; }
+
+.npw-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.npw-confirm-text {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
 .npw-btn-nav {
-  width: 40px;
   height: 40px;
+  padding: 0 14px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.7);
-  font-size: 18px;
+  font: inherit;
+  font-size: 13px;
   cursor: pointer;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   transition: all 0.2s ease;
 }
 
@@ -662,8 +789,11 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
   color: rgba(255, 255, 255, 0.7);
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
   transition: all 0.2s ease;
 }
 
@@ -679,7 +809,11 @@
   border: none;
   background: linear-gradient(135deg, #6366f1, #4f46e5);
   color: #fff;
+  font: inherit;
   font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
@@ -937,8 +1071,8 @@
   background: rgba(92, 107, 192, 0.12);
 }
 .npw-mode-icon { font-size: 15px; color: #9fa8da; }
-.npw-mode-name { font-size: 13px; font-weight: 600; color: #ececf2; margin-top: 4px; }
-.npw-mode-desc { font-size: 11px; color: rgba(200, 200, 210, 0.55); margin-top: 3px; line-height: 1.35; }
+.npw-mode-name { display: block; font-size: 13px; font-weight: 600; color: #ececf2; margin-top: 4px; }
+.npw-mode-desc { display: block; font-size: 11px; color: rgba(200, 200, 210, 0.55); margin-top: 3px; line-height: 1.35; }
 
 /* -- Swatch grid (mirrors ColorPickerPopup) -- */
 .npw-swatch-grid {
