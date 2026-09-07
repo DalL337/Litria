@@ -27,7 +27,8 @@ const ALLOWED = [];
 const DOT_EXEMPT = new Set(['appearance', 'energyLevel']);
 
 const registry = await import(pathToFileURL(path.join(ROOT, REGISTRY_REL)).href);
-const { PREFERENCE_REGISTRY, PREF_KEYS, PREFERENCE_SCOPES, PREFERENCE_PROPAGATIONS } = registry;
+const { PREFERENCE_REGISTRY, PREF_KEYS, PREFERENCE_SCOPES,
+  PREFERENCE_ROOM_IDS, PREFERENCE_PROPAGATIONS } = registry;
 
 const violations = [];
 
@@ -51,6 +52,9 @@ for (const entry of PREFERENCE_REGISTRY ?? []) {
   }
   if (!PREFERENCE_PROPAGATIONS.includes(entry.propagation)) {
     violations.push(`${REGISTRY_REL}: ${k}: invalid propagation '${entry.propagation}'`);
+  }
+  if (!PREFERENCE_ROOM_IDS.includes(entry.room)) {
+    violations.push(`${REGISTRY_REL}: ${k}: room must be a PREFERENCE_ROOMS id (got '${entry.room}') — a roomless entry has no home in the panel`);
   }
   if (typeof entry.label !== 'string' || !entry.label) {
     violations.push(`${REGISTRY_REL}: ${k}: label required`);

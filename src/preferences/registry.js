@@ -8,6 +8,10 @@
  *
  * Field contract:
  * - key          identity, unique
+ * - room         which room of the Preferences panel the entry lives in — a
+ *                PREFERENCE_ROOMS id. Rooms give the panel its flow
+ *                (brief-preferences-panel-v2.md); the panel renders
+ *                entriesByRoom(), never a hand-placed list.
  * - scope        'global' | 'project'  (which preferences file owns it)
  * - propagation  'inherit' (live-follow; change ripples to projects unless
  *                overridden) | 'seed' (copied at project creation, never
@@ -31,9 +35,35 @@ import { BUILTIN_THEME_IDS } from '../theme/themeDefaults.js';
 export const PREFERENCE_SCOPES = ['global', 'project'];
 export const PREFERENCE_PROPAGATIONS = ['inherit', 'seed'];
 
+/**
+ * The rooms of the Preferences panel, in display order. A room is a
+ * heading with a one-line description; the entries below it come from the
+ * registry, grouped by their `room`. Only preference rooms live here — the
+ * Themes (library) and Language servers rooms hold definitions and machine
+ * state, not preferences, and the panel renders them itself after these.
+ * Behavior stays brutally small by ADR-019's admission bar: two reasonable
+ * users differ AND Litria cannot infer.
+ */
+export const PREFERENCE_ROOMS = Object.freeze([
+  { id: 'appearance', label: 'Appearance', description: 'How the canvas and chrome look.' },
+  {
+    id: 'projectCreation',
+    label: 'Project creation',
+    description: 'What the New Project wizard starts from and what happens when it finishes.'
+  },
+  {
+    id: 'behavior',
+    label: 'Behavior',
+    description: 'The few things reasonable people want differently and Litria cannot infer.'
+  }
+]);
+
+export const PREFERENCE_ROOM_IDS = Object.freeze(PREFERENCE_ROOMS.map((room) => room.id));
+
 export const PREFERENCE_REGISTRY = [
   {
     key: 'appearance',
+    room: 'appearance',
     scope: 'global',
     propagation: 'inherit',
     type: 'json',
@@ -48,6 +78,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'energyLevel',
+    room: 'appearance',
     scope: 'global',
     propagation: 'inherit',
     type: 'enum',
@@ -60,6 +91,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'wireDropOnCollapsedGroup',
+    room: 'behavior',
     scope: 'global',
     propagation: 'inherit',
     type: 'enum',
@@ -72,6 +104,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'defaultProjectLocation',
+    room: 'projectCreation',
     scope: 'global',
     propagation: 'seed',
     type: 'text',
@@ -83,6 +116,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'defaultBaseTheme',
+    room: 'projectCreation',
     scope: 'global',
     propagation: 'seed',
     type: 'enum',
@@ -95,6 +129,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'splashScreen',
+    room: 'behavior',
     scope: 'global',
     propagation: 'inherit',
     type: 'boolean',
@@ -107,6 +142,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'buildTracePause',
+    room: 'projectCreation',
     scope: 'global',
     propagation: 'inherit',
     type: 'enum',
@@ -121,6 +157,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'buildLogAutoSend',
+    room: 'projectCreation',
     scope: 'global',
     propagation: 'inherit',
     type: 'boolean',
@@ -132,6 +169,7 @@ export const PREFERENCE_REGISTRY = [
   },
   {
     key: 'terminalDrawerClose',
+    room: 'behavior',
     scope: 'global',
     propagation: 'inherit',
     type: 'enum',
@@ -170,4 +208,17 @@ export function entriesForPlace(place, state = {}, registry = PREFERENCE_REGISTR
   return registry.filter(
     (entry) => entry.place.includes(place) && (typeof entry.when !== 'function' || entry.when(state))
   );
+}
+
+/**
+ * The same query, grouped for the panel: rooms in PREFERENCE_ROOMS order,
+ * each with its entries in registry order. Rooms with nothing to show for
+ * this place are omitted, so the project scope lists only the rooms that
+ * hold an overridable entry.
+ */
+export function entriesByRoom(place, state = {}, registry = PREFERENCE_REGISTRY, rooms = PREFERENCE_ROOMS) {
+  const entries = entriesForPlace(place, state, registry);
+  return rooms
+    .map((room) => ({ ...room, entries: entries.filter((entry) => entry.room === room.id) }))
+    .filter((room) => room.entries.length > 0);
 }
