@@ -840,16 +840,18 @@ pub(crate) fn detect_prerequisites(
 }
 
 fn probe_prerequisite(prereq: &crate::lsp::packs::Prerequisite) -> PrerequisiteProbeResult {
-    use std::process::Command;
+    use crate::platform::hidden_command;
 
     // On Windows, npm-installed tools (pyright, tsc, etc.) are .cmd scripts.
     // Command::new() only resolves .exe — use cmd /C to find .cmd/.bat as well.
+    // hidden_command: a release build has no console, so a bare spawn would
+    // open one per probe.
     let output = if cfg!(windows) {
-        Command::new("cmd")
+        hidden_command("cmd")
             .args(["/C", prereq.command, prereq.version_arg])
             .output()
     } else {
-        Command::new(prereq.command)
+        hidden_command(prereq.command)
             .arg(prereq.version_arg)
             .output()
     };

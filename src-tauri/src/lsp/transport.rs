@@ -12,6 +12,11 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+
+// A language server is a console child of a GUI process: on a Windows
+// release build a bare spawn opens a console window for as long as the
+// server lives. hidden_command carries CREATE_NO_WINDOW.
+use crate::platform::hidden_command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -212,12 +217,12 @@ pub(crate) fn spawn_server(
             // `Command::new(pack.command)` here threw away, guaranteeing a spawn
             // failure for exactly the case `probe_gopath_bin` exists to serve.
             #[cfg(not(windows))]
-            { Command::new(&resolved.executable) }
+            { hidden_command(&resolved.executable) }
             #[cfg(windows)]
             {
                 match resolve_cmd_to_node(pack.command) {
                     Some((node_exe, script_path)) => {
-                        let mut c = Command::new(node_exe);
+                        let mut c = hidden_command(node_exe);
                         c.arg(script_path);
                         c
                     }
@@ -233,7 +238,7 @@ pub(crate) fn spawn_server(
                         // std::process runs a `.cmd`/`.bat` target itself, with
                         // correct argument escaping since Rust 1.77.2, so shims
                         // keep working without our own cmd /C.
-                        Command::new(&resolved.executable)
+                        hidden_command(&resolved.executable)
                     }
                 }
             }
@@ -242,7 +247,7 @@ pub(crate) fn spawn_server(
             // Managed/bundled: executable is a fully resolved path (e.g.
             // node.exe for JS servers).  prefix_args carries the script path.
             // No .cmd resolution needed — we already know the exact paths.
-            let mut c = Command::new(&resolved.executable);
+            let mut c = hidden_command(&resolved.executable);
             for arg in &resolved.prefix_args {
                 c.arg(arg);
             }

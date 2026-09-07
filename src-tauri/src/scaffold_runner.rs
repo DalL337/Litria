@@ -10,7 +10,11 @@
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+// Every spawn goes through hidden_command: on Windows a release build has
+// no console, and a bare `Command::new` would open one per process.
+use crate::platform::hidden_command;
 use std::sync::mpsc;
 
 use tauri::ipc::Channel;
@@ -331,13 +335,13 @@ fn check_command_tool(command: &str, display_name: &str) -> ToolStatus {
 /// Return true if the given command can be found by the OS.
 fn probe_command_exists(command: &str) -> bool {
     let result = if cfg!(windows) {
-        Command::new("where")
+        hidden_command("where")
             .arg(command)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
     } else {
-        Command::new("which")
+        hidden_command("which")
             .arg(command)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -354,14 +358,8 @@ fn probe_command_exists(command: &str) -> bool {
 /// `cmd /C` behind is how the next argument finds its way into a second parse.
 fn get_command_version(command: &str, version_arg: &str) -> Option<String> {
     let exe = absolute_pm_path(command)?;
-    let mut cmd = Command::new(&exe);
+    let mut cmd = hidden_command(&exe);
     cmd.arg(version_arg);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     let output = cmd.output();
     output.ok().and_then(|o| {
         if o.status.success() {
@@ -458,20 +456,14 @@ fn resolve_global_pm(name: &str) -> Result<ResolvedPM, String> {
 /// Deliberately invoked from Litria's own cwd, never the project location.
 fn absolute_pm_path(name: &str) -> Option<PathBuf> {
     let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("where");
+        let mut c = hidden_command("where");
         c.arg(name);
         c
     } else {
-        let mut c = Command::new("which");
+        let mut c = hidden_command("which");
         c.arg(name);
         c
     };
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
@@ -777,7 +769,7 @@ enum AgeGateFetchError {
 fn fetch_view_time_json(app: &AppHandle, name: &str) -> Result<String, AgeGateFetchError> {
     let pm = resolve_npm(app)
         .map_err(|e| AgeGateFetchError::Unreachable(format!("npm unavailable: {e}")))?;
-    let mut cmd = Command::new(&pm.executable);
+    let mut cmd = hidden_command(&pm.executable);
     cmd.args(&pm.prefix_args);
     cmd.args([
         "view",
@@ -795,12 +787,6 @@ fn fetch_view_time_json(app: &AppHandle, name: &str) -> Result<String, AgeGateFe
         "--fetch-retry-mintimeout=1000",
         "--fetch-retry-maxtimeout=5000",
     ]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     match cmd.output() {
         Err(e) => Err(AgeGateFetchError::Unreachable(format!(
             "could not run npm: {e}"
@@ -910,17 +896,11 @@ fn run_captured(
     extra_args: &[&str],
     cwd: &Path,
 ) -> Result<(bool, String), String> {
-    let mut cmd = Command::new(&pm.executable);
+    let mut cmd = hidden_command(&pm.executable);
     cmd.args(&pm.prefix_args);
     cmd.args(extra_args);
     cmd.current_dir(cwd);
     cmd.env("CI", "true");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     match cmd.output() {
         Err(e) => Err(format!("could not run {}: {e}", pm.executable)),
         Ok(out) => {
@@ -1335,7 +1315,7 @@ fn apply_scripts_off(steps: &mut [ScaffoldStep], manager: &PackageManager) {
 /// Spawn a process, stream its stdout/stderr line-by-line through the Tauri
 /// `Channel`, and return `Ok(())` on success or `Err(message)` on non-zero exit.
 fn run_step_command(step: &ScaffoldStep, channel: &Channel<ScaffoldEvent>) -> Result<(), String> {
-    let mut cmd = Command::new(&step.executable);
+    let mut cmd = hidden_command(&step.executable);
     cmd.args(&step.args)
         .current_dir(&step.cwd)
         .stdin(Stdio::null())    // No interactive prompts — EOF on stdin
@@ -1344,13 +1324,6 @@ fn run_step_command(step: &ScaffoldStep, channel: &Channel<ScaffoldEvent>) -> Re
         .env("CI", "true")       // Node.js tools skip prompts when CI=true
         .envs(step.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
 
-    // Windows: suppress console window flash.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
 
     let mut child = cmd
         .spawn()
