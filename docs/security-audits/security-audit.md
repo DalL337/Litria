@@ -6,7 +6,7 @@
 > refreshed (npm 0 / cargo 0 vulns); two in-range Rust advisories cleared (PR #30,
 > one of which had been mis-recorded as blocked); dev-only browserslist cleared
 > (PR #31); the latent `where` first-line finding hardened (PR #32); CI actions
-> pinned to SHAs (PR #33); **Dependabot alerts enabled** (were off); the website's
+> pinned to SHAs (PR #33) — **#30–#33 all merged 2026-09-07**; **Dependabot alerts enabled** (were off); the website's
 > Astro line bumped for eight advisories (litria.dev PR #1). New register entries
 > 22–26. Preceded by:
 > 2026-08-30 — **checklist close-out (PRs #4–#8)**: every
@@ -33,7 +33,7 @@
   full tree carried **1 high**, `browserslist <=4.28.6` (GHSA-c83g-rgw3-j3cx
   unbounded cache growth; GHSA-73wf-gq98-2v4g prototype write via untrusted
   stats), transitive dev dependency of the CSS toolchain. Same call as nanoid:
-  `npm audit fix`, lockfile only, **PR #31**. 1102 JS tests + 6 guards green.
+  `npm audit fix`, lockfile only, **merged PR #31 (2026-09-07)**. 1102 JS tests + 6 guards green.
 - [x] **Website (`litria.dev`, separate repo) — 3 findings, all fixed only by a
   major:** astro 5.18.2 carried eight advisories (XSS via define:vars, spread
   attribute names, view-transition values and slot names; server-island replay;
@@ -58,7 +58,7 @@
 ### Cargo (586 crate dependencies)
 - [x] **0 vulnerabilities — rescanned 2026-09-07.** 22 warnings, every one
   re-probed (not re-read) this pass:
-  - **Moved (PR #30, lockfile only):** `anyhow 1.0.100 → 1.0.104`
+  - **Moved (merged PR #30, 2026-09-07; lockfile only):** `anyhow 1.0.100 → 1.0.104`
     (RUSTSEC-2026-0190, patched ≥1.0.103) and `event-listener 5.4.1 → 5.4.2`
     (RUSTSEC-2026-0221, patched ≥5.4.2). **`anyhow` was recorded below as
     "blocked on Tauri upstream" on 2026-07-16 — it never was; a plain
@@ -213,11 +213,11 @@ sink pass over the surfaces added since 2026-08-30 (wizard v2, Preferences v2 +
 search, `platform::hidden_command`). No external scanner: CodeRabbit is gone, so
 this is one pair of eyes.
 
-- [ ] **ISSUE 22** — `where` first line is not the executable → **PR #32 open**
+- [x] **ISSUE 22** — `where` first line is not the executable → **merged PR #32 (2026-09-07)**
   (`pick_executable_line`, PATHEXT-aware, unit-tested).
 - [x] **ISSUE 23** — child processes opened console windows on release builds →
   **shipped in v1.0.4 (PR #29)**: `platform::hidden_command` + guard test.
-- [ ] **ISSUE 24** — CI actions pinned by mutable tag → **PR #33 open** (commit
+- [x] **ISSUE 24** — CI actions pinned by mutable tag → **merged PR #33 (2026-09-07)** (commit
   SHAs, tag kept as comment; `rust-toolchain` given an explicit channel).
 - [x] **ISSUE 25** — Dependabot alerts were disabled → **enabled 2026-09-07**
   (`PUT /repos/DalL337/Litria/vulnerability-alerts`). GitHub's first report
@@ -1021,7 +1021,7 @@ vulnerabilities and `npm audit` = 0; the `quick-xml` HIGH advisory and the low
 | 2026-08-30 | Owner-requested close-out of the Master Remediation Checklist | The four remaining actionable findings (#18b, #19, #21, #17b) plus a re-probe of every dependency line | **Checklist closed: no open code findings.** #18b (PR #4) — package-manager shim resolved to an absolute path; both halves of the cmd.exe probe re-run rather than trusted, and a trap surfaced: `where npm` answers with the non-executable extension-less script first, so a naive first-line resolver would have broken the global-npm path (the same `.lines().next()` shape sits in `lsp/resolver.rs`, latent). #19 (PR #5) — session-scoped 16-record / 4 MiB budget on the renderer path alone, adding no directory I/O, panic hook untouched. #21 (PR #6) — validated against a canonical root rather than re-keyed, so the IPC surface is unchanged; caps 8/root, 24 global, 4 concurrent starts; quota policy extracted as a pure function so all seven cases test without spawning a server. #17b (PR #8) — owner ruled ship; `NoDefaultCurrentDirectoryInExePath=1` on the LSP child, restoring what `env_clear()` had been stripping. **quick-xml (PR #7) — the six-week-old "blocked upstream" line was stale**: plist 1.10.0 had shipped, `cargo update -p plist` removes quick-xml 0.38.4 outright, and `cargo audit` went 2 → **0**. Method lesson recorded: re-probe blocked-upstream items, never re-read them. `npm audit` re-verified 0, retiring the stale `@babel/core` line. Integrated `main`: 257 Rust tests, 1037 JS tests, 5 guards, 0 build warnings. Owner acceptance step outstanding: a live LSP session pass (start / hover / diagnostics / stop) covering #21 + #17b. Full journal: `.research/2026-08-30-master-remediation-finish.md`. |
 
 ### ISSUE 22: `absolute_path_on_path` trusts the first line of `where`
-**Severity:** Low (correctness / latent) · **Found:** 2026-08-30 (noted latent) · **Re-probed:** 2026-09-07 · **Status:** PR #32 open
+**Severity:** Low (correctness / latent) · **Found:** 2026-08-30 (noted latent) · **Re-probed:** 2026-09-07 · **Status:** merged PR #32 (2026-09-07)
 `where <cmd>` lists every match in PATH order; for an npm shim the extension-less
 Unix wrapper (`…\npm\pyright-langserver`) sorts before `pyright-langserver.cmd`.
 The global tier took line one, so it resolved a file that exists, passes
@@ -1042,7 +1042,7 @@ language-server launch itself, scaffold `where`/`which`) opened a console window
 Residual: verified by the flag, not yet by a run of the 1.0.4 release build.
 
 ### ISSUE 24: CI actions referenced by mutable tag
-**Severity:** Medium (supply chain) · **Found:** 2026-09-07 · **Status:** PR #33 open
+**Severity:** Medium (supply chain) · **Found:** 2026-09-07 · **Status:** merged PR #33 (2026-09-07)
 `actions/checkout@v7` etc. resolve at run time; a moved tag runs foreign code with
 `contents: write` on the release job. Every `uses:` now names the commit the tag
 resolved to on 2026-09-07 (tag kept as a comment). Residual: pins go stale
