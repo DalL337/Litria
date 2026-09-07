@@ -1,5 +1,44 @@
 # Release Notes
 
+## v1.0.5 — Runtime and dependency updates
+
+**Date:** 2026-09-07 (PRs #30–#35)
+
+> Platform status unchanged from v1.0.4: unsigned artifacts everywhere; macOS run
+> once by a tester; Linux never launched by a human.
+
+### Changed
+
+- **Tauri 2.9.5 → 2.11.5.** Picks up the fix for GHSA-7gmj-67g7-phm9, where on
+  Windows a remote page at `http://<scheme>.evil.com/` could count as the app's
+  own origin and call local-only commands. Litria never navigates its window to a
+  remote page, so no path to it was known — the runtime is updated anyway.
+- **Language servers on Windows:** the resolver now picks a real executable
+  (`.exe` / `.cmd`) from `where` output instead of its first line, which for npm
+  shims was the extension-less wrapper script.
+
+### Internal
+
+- Dependency updates: `anyhow`, `event-listener`, `serde_with`, `rand` (0.8 line),
+  `browserslist` (dev). `npm audit` and `cargo audit` report 0 vulnerabilities.
+- GitHub Actions pinned to commit SHAs. Dependabot alerts enabled.
+
+### Known limitations
+
+Unchanged from v1.0.4:
+
+- **Per-project override for "Wire drop on collapsed group" is not wired.** The
+  row says so and follows the global value.
+- **macOS Dock icon shows a black square.** The source artwork is opaque with no
+  transparency, and macOS does not round app icons itself.
+- Import de-duplication treats `./thing` and `./thing/index` as different modules,
+  so connecting a wire can write a redundant (harmless) import.
+- The Python import writer can still insert inside a parenthesised
+  `from x import ( … )`.
+- Collapsed group pills can report a file count that does not match the project.
+
+---
+
 ## v1.0.4 — Two things a first run on Windows found
 
 **Date:** 2026-09-07 (PRs #28–#29)

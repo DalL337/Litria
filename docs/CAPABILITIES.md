@@ -1,6 +1,6 @@
 # Litria — Capabilities & Features
 
-> **Version**: 1.0.4 | **Date**: 2026-09-07 | **Status**: Public Beta (MIT)
+> **Version**: 1.0.5 | **Date**: 2026-09-07 | **Status**: Public Beta (MIT)
 
 ## How to read this document
 
