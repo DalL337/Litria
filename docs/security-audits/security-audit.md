@@ -228,15 +228,14 @@ this is one pair of eyes.
   typescript-language-server 5.3.0 → 6.0.0 and typescript 5.9.3 → 7.0.2 are
   majors and a decision, not a chore (see the note at the pin site). **Not bumped
   this pass; owner to schedule.**
-- [ ] **ISSUE 27** — `tauri 2.9.5` origin confusion (GHSA-7gmj-67g7-phm9,
+- [x] **ISSUE 27** — `tauri 2.9.5` origin confusion (GHSA-7gmj-67g7-phm9,
   moderate): on Windows/Android `is_local_url()` matched only the first domain
   label, so `http://<scheme>.evil.com/` passed as a local origin and could call
-  local-only IPC. Fixed in tauri 2.11.1; **moved to 2.11.5 — PR open**
-  (`chore/tauri-2.11`). Surfaced by Dependabot within minutes of being enabled;
+  local-only IPC. Fixed in tauri 2.11.1; **moved to 2.11.5 — merged PR #34 (2026-09-07)**. Surfaced by Dependabot within minutes of being enabled;
   `cargo audit` had no entry for it. Exposure was low — Litria never navigates
   its webview to a remote page — but the IPC surface is exactly this repo's
   threat model, and the fix is a lockfile move.
-- [ ] **ISSUE 28** — `serde_with 3.16.1` KeyValueMap serialization panic
+- [x] **ISSUE 28** — `serde_with 3.16.1` KeyValueMap serialization panic
   (GHSA-7gcf-g7xr-8hxj, moderate; transitive via tauri-utils): **moved to
   3.22.0 in the same PR.** Litria does not use KeyValueMap.
 - [x] Once-over, no finding: capabilities still minimal (`core:*` window +
@@ -1074,7 +1073,7 @@ decisions (the TS 7 native port in particular). No advisory is attached to the
 pinned versions; this is drift, not exposure.
 
 ### ISSUE 27: Tauri origin confusion lets remote pages invoke local-only IPC
-**Severity:** Medium (GHSA-7gmj-67g7-phm9) · **Found:** 2026-09-07 (Dependabot, minutes after alerts were enabled) · **Status:** tauri 2.9.5 → 2.11.5, PR open
+**Severity:** Medium (GHSA-7gmj-67g7-phm9) · **Found:** 2026-09-07 (Dependabot, minutes after alerts were enabled) · **Status:** tauri 2.9.5 → 2.11.5, merged PR #34 (2026-09-07)
 On Windows and Android Tauri serves custom schemes as `http://<scheme>.localhost/`,
 and `is_local_url()` compared only the first domain label — `http://tauri.evil.com/`
 read as local, so a page there could call commands restricted to the app's own
@@ -1090,6 +1089,6 @@ and a `tauri build --no-bundle` release binary. cargo audit after the move: 0
 vulnerabilities, 20 warnings (17 unmaintained, 3 unsound — all dated blocked).
 
 ### ISSUE 28: serde_with KeyValueMap panic
-**Severity:** Medium (GHSA-7gcf-g7xr-8hxj) · **Found:** 2026-09-07 (Dependabot) · **Status:** 3.16.1 → 3.22.0, same PR
+**Severity:** Medium (GHSA-7gcf-g7xr-8hxj) · **Found:** 2026-09-07 (Dependabot) · **Status:** 3.16.1 → 3.22.0, merged PR #34 (2026-09-07)
 Transitive through tauri-utils; Litria does not use `KeyValueMap`. Moved because
 the fix is free and the alert would otherwise sit open.
