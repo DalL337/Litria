@@ -64,10 +64,15 @@
     "blocked on Tauri upstream" on 2026-07-16 — it never was; a plain
     `cargo update -p anyhow` moved it.** Second instance of the quick-xml
     lesson: a blocked-upstream note without a probe date is a claim, not a fact.
+  - **Also moved (merged PR #35, 2026-09-07):** `rand 0.8.5 → 0.8.8`
+    (RUSTSEC-2026-0097 / GHSA-cq8v-f236-94qc had an in-range patch at 0.8.6).
   - **Still blocked, probe dated 2026-09-07:** `glib 0.18.5` (RUSTSEC-2024-0429,
-    fix is 0.20 and arrives with a tauri/gtk move); `rand 0.7.3` + `0.8.5`
-    (RUSTSEC-2026-0097; build-dependencies of `phf_generator` under
-    `tauri-utils` / `markup5ever`, not Litria's own `rand 0.9`); the
+    fix is 0.20 = the GTK4 generation of gtk-rs; arrives only when tauri's Linux
+    backend leaves GTK3 — `cargo tree -i glib@0.18.5 --target
+    x86_64-unknown-linux-gnu` shows gtk 0.18 ← tao/wry/webkit2gtk/muda ← tauri);
+    `rand 0.7.3` (no patched 0.7 exists; build-dependency of `phf_generator 0.8`
+    ← `phf_codegen 0.8` ← `selectors 0.24` ← `kuchikiki` ← `tauri-utils` — clears
+    when tauri moves its HTML tooling; never runs in the shipped app); the
     unmaintained gtk-rs 0.18 GTK3 bindings (tauri's Linux backend), `fxhash`
     (via `kuchikiki`), `proc-macro-error`, `unic-*`. Re-probe = the two
     `cargo update -p` lines above plus `cargo tree -i <crate>`; the next pass
