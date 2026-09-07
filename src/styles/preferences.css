@@ -150,6 +150,80 @@
   color: rgba(255, 255, 255, 0.55);
 }
 
+/* Search (slice 4): sits at the right of the scope row. The "/" chip is the
+   visible half of the shortcut; it hides while the field has focus. */
+.pf-search {
+  margin-left: auto;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.pf-search > svg {
+  position: absolute;
+  left: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+
+.pf-search-input {
+  height: 32px;
+  width: 220px;
+  padding: 0 30px 0 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--cm-transition-fast), box-shadow var(--cm-transition-fast), width 160ms ease;
+}
+
+.pf-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.pf-search-input:focus {
+  border-color: var(--cm-electric-blue);
+  box-shadow: 0 0 8px var(--cm-glow-active);
+  width: 260px;
+}
+
+.pf-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.pf-search-key {
+  position: absolute;
+  right: 10px;
+  margin-left: 0;
+  pointer-events: none;
+}
+
+.pf-search-input:focus ~ .pf-search-key {
+  display: none;
+}
+
+.pf-mark {
+  background: rgba(41, 121, 255, 0.28);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.pf-rail-item.is-empty {
+  opacity: 0.4;
+}
+
+.pf-room-empty {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 10px 0;
+}
+
 /* ── Body: rooms rail + scrolling sections ── */
 
 .pf-body-wrap {
@@ -714,6 +788,8 @@
 /* Narrow windows: the rail folds away; rows stack. */
 @media (max-width: 720px) {
   .pf-rail { display: none; }
+  .pf-search { margin-left: 0; width: 100%; }
+  .pf-search-input, .pf-search-input:focus { width: 100%; }
   .pf-row { grid-template-columns: 1fr; gap: 8px; }
   .pf-row-ctl { justify-content: flex-start; }
 }
