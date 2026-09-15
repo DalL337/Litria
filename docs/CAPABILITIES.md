@@ -1,6 +1,6 @@
 # Litria — Capabilities & Features
 
-> **Version**: 1.0.5 | **Date**: 2026-09-07 | **Status**: Public Beta (MIT)
+> **Version**: 1.0.6 | **Date**: 2026-09-15 | **Status**: Public Beta (MIT)
 
 ## How to read this document
 
@@ -263,9 +263,14 @@ TOML for preferences — every kind of state has one physical home, and
 - Recents with pinning; project switcher in the title bar
 - Preferences in `preferences/*.litria.toml` (global + per-project layers);
   repo `litria.toml` stays sparse project truth (never preferences)
-- Schema v3; migrations run idempotently on open
+- Schema v3; migrations run idempotently on open, each version step in one
+  transaction, and a file left half-migrated by an older build heals itself
+- Open-time health: integrity check on every open, zero-byte files refused,
+  corruption reported with the recovery step (rebuild from `litria.toml`)
+- Read-only workspaces open for viewing with a canvas pill; failed layout
+  writes surface as rate-limited notices instead of console lines
 
-*Built on:* ADR-015, ADR-016, ADR-019 (stores split).
+*Built on:* ADR-015, ADR-016, ADR-019 (stores split), ADR-026 (durability).
 
 ---
 

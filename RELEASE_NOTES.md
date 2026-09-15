@@ -1,5 +1,76 @@
 # Release Notes
 
+## v1.0.6 — Workspace database durability
+
+**Date:** 2026-09-15 (PRs #36–#37)
+
+> Platform status unchanged from v1.0.5: unsigned artifacts everywhere; macOS run
+> once by a tester; Linux never launched by a human.
+
+A focused release from an audit of the per-project workspace database
+(`.litria/workspace.db`, the file that holds your canvas layout). The audit found
+no data loss and no injection surface, but three ways a project could become
+permanently unopenable or silently stop saving. All three are fixed, and the
+database layer now says what is wrong instead of failing quietly. No schema
+change: existing projects open exactly as before.
+
+### Fixed
+
+- **A crash during a schema migration no longer bricks the project.** Each
+  migration step now runs as one transaction, and a file left half-migrated by an
+  earlier build heals on the next open instead of failing with
+  `duplicate column name` forever.
+- **A project interrupted during creation opens again.** If Litria died between
+  creating `workspace.db` and writing the project row, every later open failed
+  with `Query returned no rows`. Such a file is now rebuilt in place, keeping any
+  layout it already held.
+- **Read-only workspaces are visible.** When `workspace.db` cannot be opened for
+  writing (read-only media, a locked checkout, a read-only attribute), the canvas
+  shows a pill at the top edge: *Read-only workspace — layout changes won't be
+  saved.* Everything still works — moving nodes, zooming, panning, editing and
+  saving files — only the layout is not written back. Previously the session's
+  layout changes vanished with no indication.
+- **Failed saves are shown, not swallowed.** Any failed layout write (busy
+  database, corruption mid-session, permission change) now surfaces as a notice
+  in the same spot, rate-limited to one per ten seconds, instead of a console
+  line nobody sees.
+- **Corruption is named, with the way out.** A damaged or truncated
+  `workspace.db` produces one clear error that says what to do: move or delete
+  the project's `.litria` folder and Litria rebuilds the workspace from
+  `litria.toml`; your files are untouched, only the canvas layout resets. Litria
+  never deletes or rewrites the file itself. An empty (zero-byte) `workspace.db`
+  is refused rather than silently reinitialised.
+- **`.litria/` stays out of git.** Opening a repository that has no `.gitignore`
+  now creates one containing `.litria/`; before, only an existing `.gitignore` was
+  amended.
+
+### Internal
+
+- Database errors are classified by SQLite result code (`db.corrupt`,
+  `db.read_only`, `db.busy`) instead of by message text.
+- Database paths are always literal filenames; a `file:` URI-style path is
+  refused.
+- 18 new Rust tests reproduce the audit's failure cases against real files; 11 new
+  JavaScript tests cover the notice logic.
+
+### Known limitations
+
+Unchanged from v1.0.5:
+
+- **Per-project override for "Wire drop on collapsed group" is not wired.** The
+  row says so and follows the global value.
+- **macOS Dock icon shows a black square.** The source artwork is opaque with no
+  transparency, and macOS does not round app icons itself.
+- Import de-duplication treats `./thing` and `./thing/index` as different modules,
+  so connecting a wire can write a redundant (harmless) import.
+- The Python import writer can still insert inside a parenthesised
+  `from x import ( … )`.
+- Collapsed group pills can report a file count that does not match the project.
+- A failed *file* save (as opposed to a layout write) still only logs to the
+  console; the notice above covers the workspace database only.
+
+---
+
 ## v1.0.5 — Runtime and dependency updates
 
 **Date:** 2026-09-07 (PRs #30–#35)
