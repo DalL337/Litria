@@ -90,21 +90,7 @@ const INJECTED_COUPLING_FILES = new Set([
 ]);
 
 // Debt, not grants. Each entry names its fix. Shrink this list.
-const TEMP_ALLOWED_DOM_COUPLING = new Map([
-  [
-    'src/app/interactionDomain.js',
-    "isEditableTarget() tests closest('.monaco-editor') to decide whether a " +
-    'bare-letter shortcut should fire. The fix is NOT a swap to ' +
-    "'.editor-monaco-shell': that shell wraps the whole pane including the " +
-    'hover card and its buttons, so it would broaden what counts as ' +
-    'editable. Needs an engine-provided containsTextFocus(el) capability.'
-  ],
-  [
-    'src/app/useGlobalShortcuts.js',
-    'Same predicate, second copy (isInMonaco). Should consume the same ' +
-    'engine capability as interactionDomain once it exists.'
-  ]
-]);
+const TEMP_ALLOWED_DOM_COUPLING = new Map();
 
 // Members observed on injected engine objects -- collected for the report.
 const INJECTED_MEMBER_PATTERN = /\b(?:model|monaco|position)\.[A-Za-z][A-Za-z0-9_.]*/g;
@@ -291,12 +277,10 @@ function run() {
     }
   }
 
-  if (debtReport.length > 0) {
-    console.log('');
-    console.log(`  TEMP debt (${debtReport.length}) -- engine DOM coupling awaiting a capability:`);
-    for (const entry of debtReport) {
-      console.log(`    ${entry}`);
-    }
+  console.log('');
+  console.log(`  TEMP debt (${debtReport.length}) -- engine DOM coupling awaiting a capability:`);
+  for (const entry of debtReport) {
+    console.log(`    ${entry}`);
   }
 }
 
