@@ -9,6 +9,7 @@ import {
   subscribeMarkerFeed
 } from '../editor/monacoWorkspace';
 import EditorMonacoPane from './EditorMonacoPane';
+import { registerEngineCapabilities } from '../editor/engineCapabilities.js';
 
 /**
  * Editor container (ADR-017 split panes): renders one EditorMonacoPane per
@@ -40,6 +41,10 @@ function EditorMonaco({
   const rowRef = useRef(null);
   const slotRefs = useRef({});
   const dragRatioRef = useRef(null);
+
+  useEffect(() => registerEngineCapabilities({
+    containsTextFocus: (element) => Boolean(element?.closest?.('.monaco-editor'))
+  }), []);
 
   const applySlotWidths = (ratio) => {
     const first = slotRefs.current[1];

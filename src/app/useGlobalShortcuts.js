@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import { isPrimaryModifier } from '../platform/modifierKeys';
+import { containsTextFocus } from '../editor/engineCapabilities.js';
 
 /**
  * useGlobalShortcuts — owns the window-level keydown listener and the
@@ -14,8 +15,8 @@ import { isPrimaryModifier } from '../platform/modifierKeys';
  * inline callbacks each render without re-binding the listener.
  *
  * Focus guards are part of the dispatch, not the callers:
- * - Monaco keeps its own keybindings — shortcuts marked `monacoGuard`
- *   never fire while focus is inside a Monaco editor.
+ * - The editor engine keeps its own keybindings; canvas shortcuts never fire
+ *   while the registered engine owns text focus.
  * - Select-all never steals from text-editing surfaces (inputs,
  *   textareas, contentEditable — which covers the xterm helper textarea).
  */
@@ -24,7 +25,7 @@ export function useGlobalShortcuts(actions) {
   actionsRef.current = actions;
 
   useEffect(() => {
-    const isInMonaco = () => Boolean(document.activeElement?.closest('.monaco-editor'));
+    const isInTextEditor = () => containsTextFocus(document.activeElement);
 
     const handleKeyDown = (e) => {
       if (!isPrimaryModifier(e)) return;
@@ -41,29 +42,27 @@ export function useGlobalShortcuts(actions) {
       }
 
       if (e.key === '0' && !e.shiftKey) {
-        if (isInMonaco()) return;
+        if (isInTextEditor()) return;
         e.preventDefault();
         act.fitContent();
       }
 
       if (e.key === '0' && e.shiftKey) {
-        if (isInMonaco()) return;
+        if (isInTextEditor()) return;
         e.preventDefault();
         act.fitSelection();
       }
 
       if (e.key === 'p') {
-        if (isInMonaco()) return;
+        if (isInTextEditor()) return;
         e.preventDefault();
         act.toggleNodeSearch();
       }
 
       if (e.key === 'a') {
-        // Never steal select-all from text editing surfaces (inputs, Monaco,
-        // the xterm helper textarea).
-        const target = e.target;
-        if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) return;
-        if (isInMonaco()) return;
+        // Never steal select-all from a registered editor or portable text
+        // surface (including the xterm helper textarea).
+        if (isInTextEditor()) return;
         e.preventDefault();
         act.selectAllVisible();
       }

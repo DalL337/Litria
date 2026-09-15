@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCanvasInteractionController } from '../behaviors/useCanvasInteractionController';
 import { createInteractionModeDomain } from './interactionModeDomain.js';
 import { DEFAULT_SUB_MODE, TOKEN_FOR_BINDING } from './actionTokens.js';
+import { containsTextFocus } from '../editor/engineCapabilities.js';
 
 // Mode toggle key (ADR-013 §User remapping — `E` is the default, unbound today).
 const MODE_TOGGLE_KEY = 'e';
@@ -10,10 +11,7 @@ const MODE_TOGGLE_KEY = 'e';
 // useCanvasHud) so all bare-letter shortcuts share one editable-target rule.
 export function isEditableTarget() {
   const el = typeof document !== 'undefined' ? document.activeElement : null;
-  if (!el) return false;
-  if (el.closest?.('.monaco-editor')) return true;
-  if (el.isContentEditable) return true;
-  return /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || '');
+  return containsTextFocus(el);
 }
 
 export function useInteractionDomain(params) {
