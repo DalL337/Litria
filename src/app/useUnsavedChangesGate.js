@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { canProceedAfterSave } from '../editor/saveCoordinator.js';
 
 // Per-flow prompt copy, keyed by the `kind` passed to guardUnsavedChanges.
 export const UNSAVED_CHANGES_PROMPT_COPY = {
@@ -83,8 +84,7 @@ export function useUnsavedChangesGate({ hasDirtyTabs, discardAllTabs, saveAllTab
     if (!resolve) return;
     // saveAllTabs resolves false when an untitled session's Save As dialog
     // was canceled — the user backed out of the save, so abort the transition.
-    const result = await saveAllTabs();
-    resolve(result !== false);
+    resolve(await canProceedAfterSave(saveAllTabs));
   }, [claimResolver, saveAllTabs]);
 
   return {

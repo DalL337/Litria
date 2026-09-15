@@ -15,9 +15,10 @@ import { normalizePath, getBasename } from '../utils/path';
  * over a ref that useFilesystemWriteManager keeps pointed at the latest
  * manager instance.
  *
- * Signature matches the storage-layer writer these call sites previously
- * received — (rootPath, relativePath, contents) → boolean — so it drops in
- * under the same prop. The rootPath argument is ignored: the manager
+ * `writeContentFile` keeps the boolean signature used by syntax and scaffold
+ * consumers. `writeContentFileWithResult` exposes the manager's structured
+ * result to persistence so a failed save retains its typed reason. The
+ * rootPath argument is ignored: the manager
  * resolves its own root, and every consumer's root is the same
  * projectInstance.rootPath the manager reads. Writes opt out of syntax
  * notification and scaffold refresh ({ notify: false, skipScaffold: true }):
@@ -27,13 +28,22 @@ import { normalizePath, getBasename } from '../utils/path';
  */
 export function useManagerFileWriter() {
   const managerRef = useRef(null);
-  const writeContentFile = useCallback(async (_rootPath, relativePath, contents) => {
+  const writeContentFileWithResult = useCallback(async (_rootPath, relativePath, contents) => {
     const manager = managerRef.current;
-    if (!manager) return false;
-    const result = await manager.writeFile(relativePath, contents, { notify: false, skipScaffold: true });
-    return result.success === true;
+    if (!manager) {
+      return {
+        success: false,
+        code: 'fs.no_manager',
+        error: 'The filesystem write manager is unavailable.'
+      };
+    }
+    return manager.writeFile(relativePath, contents, { notify: false, skipScaffold: true });
   }, []);
-  return { managerRef, writeContentFile };
+  const writeContentFile = useCallback(async (...args) => {
+    const result = await writeContentFileWithResult(...args);
+    return result.success === true;
+  }, [writeContentFileWithResult]);
+  return { managerRef, writeContentFile, writeContentFileWithResult };
 }
 
 /**

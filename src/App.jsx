@@ -424,7 +424,11 @@ function App() {
   // Identity-stable manager-backed content writer for consumers composed
   // before the manager itself (persistence saves, syntax adapter); the
   // manager hook below keeps fsManagerRef current.
-  const { managerRef: fsManagerRef, writeContentFile } = useManagerFileWriter();
+  const {
+    managerRef: fsManagerRef,
+    writeContentFile,
+    writeContentFileWithResult
+  } = useManagerFileWriter();
 
   // Launcher "New File": Save As resolver that materializes the project root
   // on first save of an untitled single-file session (see useUntitledSaveAs).
@@ -474,7 +478,7 @@ function App() {
     setConnections: connections.setConnections,
     getNextConnectionIdValue: connections.getNextConnectionIdValue,
     setNextConnectionIdValue: connections.setNextConnectionIdValue,
-    writeProjectFile: writeContentFile,
+    writeProjectFile: writeContentFileWithResult,
     resolveUntitledSave
   });
 

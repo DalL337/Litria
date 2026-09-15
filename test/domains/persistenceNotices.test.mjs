@@ -85,6 +85,31 @@ test('describeWriteFailure: classified codes get user wording, others keep the b
   assert.equal(empty.message, 'Layout change not saved: unknown error');
 });
 
+test('describeWriteFailure: file save names the path and promises the buffer remains', () => {
+  const failure = describeWriteFailure('file.save', {
+    category: 'AccessDenied',
+    code: 'project_file.write.failed',
+    message: 'Permission denied.',
+    relativePath: 'src/main.js'
+  });
+  assert.equal(failure.code, 'project_file.write.failed');
+  assert.equal(
+    failure.message,
+    "Couldn't save \"src/main.js\": Permission denied. Your edits are still in the editor."
+  );
+});
+
+test('reduceWriteFailure: read-only layout mode does not suppress file-save failures', () => {
+  const state = createNoticeState();
+  const fileFailure = describeWriteFailure('file.save', {
+    code: 'db.read_only',
+    message: 'File is read-only',
+    relativePath: 'src/main.js'
+  });
+  const next = reduceWriteFailure(state, fileFailure, { now: 1000, readOnly: true });
+  assert.notEqual(next.notice, null);
+});
+
 test('reduceWriteFailure: first failure shows a notice stamped at now', () => {
   const failure = describeWriteFailure('db_save_viewport', busyError);
   const next = reduceWriteFailure(createNoticeState(), failure, { now: 1000 });

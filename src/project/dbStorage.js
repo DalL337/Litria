@@ -7,29 +7,13 @@
 
 import { crumb } from '../crash/breadcrumbs.js';
 import { isPersistenceWrite } from './persistenceNotices.js';
+import { emitPersistenceWriteFailure } from './persistenceFailures.js';
 
 // Write-failure observer (ADR-026 decision 3): every persistence write in the
 // app passes through `invokeDb`, so this is the one place a failed write can
 // be seen without touching each call site. `usePersistenceNotices` subscribes
 // for the session; callers keep their own catch/warn as the secondary trace.
-const writeFailureListeners = new Set();
-
-/** Subscribe to failed persistence writes. Returns the unsubscribe function. */
-export function onPersistenceWriteFailure(listener) {
-  writeFailureListeners.add(listener);
-  return () => writeFailureListeners.delete(listener);
-}
-
-function reportWriteFailure(command, error) {
-  if (!isPersistenceWrite(command)) return;
-  for (const listener of writeFailureListeners) {
-    try {
-      listener({ command, error });
-    } catch {
-      // A listener must never turn one failed write into a second failure.
-    }
-  }
-}
+export { onPersistenceWriteFailure } from './persistenceFailures.js';
 
 async function getInvoke() {
   try {
@@ -63,7 +47,9 @@ async function invokeDb(command, payload = {}) {
     return result;
   } catch (error) {
     if (CRUMB_KEEP.has(command)) crumb('command', `${command}:err`);
-    reportWriteFailure(command, error);
+    if (isPersistenceWrite(command)) {
+      emitPersistenceWriteFailure({ command, error });
+    }
     throw error;
   }
 }

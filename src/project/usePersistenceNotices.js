@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onPersistenceWriteFailure } from './dbStorage.js';
+import { onPersistenceWriteFailure } from './persistenceFailures.js';
 import {
   NOTICE_RATE_LIMIT_MS,
   clearNotices,

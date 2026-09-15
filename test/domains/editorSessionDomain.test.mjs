@@ -366,11 +366,14 @@ test('reset-session clears pane state', () => {
 
 /* ── SAVE_TAB savedCode baseline (untitled Save As support) ── */
 
-test('save-tab without savedCode baselines to live workingCode (sync save contract)', () => {
+test('save-tab without savedCode cannot advance the saved baseline', () => {
   let s = openPieces(initial, piece(1, 'a.py'));
+  const baseline = s.tabsById[1].code;
   s = reduce(s, { type: 'UPDATE_WORKING_CODE', tabId: 1, workingCode: 'edited' });
+  const before = s;
   s = reduce(s, { type: 'SAVE_TAB', tabId: 1 });
-  assert.equal(s.tabsById[1].code, 'edited');
+  assert.equal(s, before);
+  assert.equal(s.tabsById[1].code, baseline);
 });
 
 test('save-tab with savedCode baselines to the written snapshot, keeping later edits dirty', () => {
@@ -384,9 +387,12 @@ test('save-tab with savedCode baselines to the written snapshot, keeping later e
   assert.equal(s.tabsById[1].workingCode, 'AB'); // still dirty
 });
 
-test('save-tab with a non-string savedCode falls back to live workingCode', () => {
+test('save-tab with a non-string savedCode cannot advance the saved baseline', () => {
   let s = openPieces(initial, piece(1, 'a.py'));
+  const baseline = s.tabsById[1].code;
   s = reduce(s, { type: 'UPDATE_WORKING_CODE', tabId: 1, workingCode: 'edited' });
+  const before = s;
   s = reduce(s, { type: 'SAVE_TAB', tabId: 1, savedCode: null });
-  assert.equal(s.tabsById[1].code, 'edited');
+  assert.equal(s, before);
+  assert.equal(s.tabsById[1].code, baseline);
 });

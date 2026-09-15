@@ -16,6 +16,7 @@ import {
   MAIN_PANE,
   SIDE_PANE
 } from './editorSessionDomain.js';
+import { saveOneTab, saveTabsFromBatch, saveTabsSequentially } from './saveCoordinator.js';
 
 const EditorSessionContext = createContext(null);
 
@@ -101,22 +102,20 @@ export function EditorSessionProvider({ children }) {
     const tab = state.tabsById[tabId];
     if (!tab) return null;
     // Untitled session (launcher New File): the resolver owns the disk write —
-    // Save As dialog until a root exists. Unlike the normal optimistic path
-    // below, the tab is only marked clean on confirmed success: a canceled
+    // Save As dialog until a root exists. The tab is only marked clean on
+    // confirmed success: a canceled
     // dialog or failed write must leave it dirty.
     const resolveUntitledSave = persistenceRef.current?.onResolveUntitledSave;
     if (resolveUntitledSave) {
       // savedCode = the snapshot the resolver writes; edits typed during the
       // async dialog/write must stay dirty (the reducer diffs against it).
-      const savedCode = tab.workingCode ?? '';
-      return Promise.resolve(resolveUntitledSave(tab)).then((saved) => {
-        if (saved) dispatch({ type: 'SAVE_TAB', tabId, savedCode });
-        return saved;
-      });
+      return saveOneTab({ tab, persist: resolveUntitledSave, dispatch });
     }
-    const result = persistenceRef.current?.onSaveTab?.(tab) ?? null;
-    dispatch({ type: 'SAVE_TAB', tabId });
-    return result;
+    return saveOneTab({
+      tab,
+      persist: persistenceRef.current?.onSaveTab,
+      dispatch
+    });
   }, [state.tabsById]);
 
   const discardTab = useCallback((tabId) => {
@@ -132,20 +131,13 @@ export function EditorSessionProvider({ children }) {
     // marked clean individually so a mid-sequence cancel keeps the rest dirty.
     const resolveUntitledSave = persistenceRef.current?.onResolveUntitledSave;
     if (resolveUntitledSave) {
-      return (async () => {
-        let allSaved = true;
-        for (const tab of dirtyTabs) {
-          const savedCode = tab.workingCode ?? '';
-          const saved = await resolveUntitledSave(tab);
-          if (saved) dispatch({ type: 'SAVE_TAB', tabId: tab.id, savedCode });
-          else allSaved = false;
-        }
-        return allSaved;
-      })();
+      return saveTabsSequentially({ tabs: dirtyTabs, persist: resolveUntitledSave, dispatch });
     }
-    const result = persistenceRef.current?.onSaveAllTabs?.(dirtyTabs) ?? null;
-    dispatch({ type: 'SAVE_ALL' });
-    return result;
+    return saveTabsFromBatch({
+      tabs: dirtyTabs,
+      persistAll: persistenceRef.current?.onSaveAllTabs,
+      dispatch
+    });
   }, [state.tabsById]);
 
   const updateTabFilename = useCallback((tabId, filename) => {

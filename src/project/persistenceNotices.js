@@ -9,8 +9,10 @@
  *      or anything else), latest message wins inside the window.
  *
  * No React, no I/O: `usePersistenceNotices` drives this from the write-failure
- * observer in `dbStorage.js`, and `useProjectPersistence` uses `canPersist`
- * to skip its debounced writes on a read-only instance. Node-tested in
+ * observer in `persistenceFailures.js`, and `useProjectPersistence` uses
+ * `canPersist` to skip its debounced database writes on a read-only instance.
+ * File saves use the same observer but remain available in read-only-layout
+ * mode. Node-tested in
  * test/domains/persistenceNotices.test.mjs.
  *
  * Owner rulings (brief §4, 2026-09-14): pill at the canvas top edge; read-only
@@ -54,12 +56,15 @@ function errorParts(error) {
     const message = typeof error.message === 'string' && error.message.trim()
       ? error.message.trim()
       : null;
-    return { code, message };
+    const relativePath = typeof error.relativePath === 'string' && error.relativePath.trim()
+      ? error.relativePath.trim()
+      : null;
+    return { code, message, relativePath };
   }
   if (typeof error === 'string' && error.trim()) {
-    return { code: null, message: error.trim() };
+    return { code: null, message: error.trim(), relativePath: null };
   }
-  return { code: null, message: null };
+  return { code: null, message: null, relativePath: null };
 }
 
 /**
@@ -68,9 +73,18 @@ function errorParts(error) {
  * code, message }`); anything else degrades to its text.
  */
 export function describeWriteFailure(command, error) {
-  const { code, message } = errorParts(error);
+  const { code, message, relativePath } = errorParts(error);
   const detail = message ?? 'unknown error';
   let text;
+  if (command === 'file.save') {
+    const path = relativePath ?? 'unknown file';
+    const reason = detail.replace(/[.!?]+$/, '');
+    return {
+      command,
+      code,
+      message: `Couldn't save "${path}": ${reason}. Your edits are still in the editor.`
+    };
+  }
   switch (code) {
     case DB_CODE_READ_ONLY:
       text = 'Layout change not saved: the workspace is read-only.';
@@ -104,7 +118,7 @@ export function createNoticeState() {
  */
 export function reduceWriteFailure(state, failure, { now, readOnly = false } = {}) {
   if (!failure) return state;
-  if (readOnly && failure.code === DB_CODE_READ_ONLY) return state;
+  if (readOnly && failure.command !== 'file.save' && failure.code === DB_CODE_READ_ONLY) return state;
 
   const withinWindow = state.lastShownAt !== null
     && now - state.lastShownAt < NOTICE_RATE_LIMIT_MS;
