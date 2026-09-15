@@ -1,7 +1,8 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-09-07 — **dependency + once-over pass after v1.0.3/1.0.4**
+> **Last reviewed**: 2026-09-15 — **targeted dependency fix + re-probe (PR #43)**: `cargo audit` surfaced RUSTSEC-2026-0285 (rustls 0.23.41, TLS 1.3 handshake, medium, published 2026-09-14) on the runtime path (`ureq` ← `lsp/download.rs`, `commands.rs`); Dependabot showed only the two Tauri-blocked items (RustSec ≠ GHSA, again). Lockfile-only bump to rustls 0.23.45 + rustls-webpki 0.103.15; cargo audit back to 0 vulnerabilities. `glib 0.18.5` and `rand 0.7.3` re-probed with `cargo tree` — still Tauri-transitive, chains unchanged. Preceded by:
+> 2026-09-07 — **dependency + once-over pass after v1.0.3/1.0.4**
 > (wizard v2 #21–#24, Preferences v2 #25–#27, Windows patch #28–#29). Scans
 > refreshed (npm 0 / cargo 0 vulns); two in-range Rust advisories cleared (PR #30,
 > one of which had been mis-recorded as blocked); dev-only browserslist cleared
@@ -66,7 +67,11 @@
     lesson: a blocked-upstream note without a probe date is a claim, not a fact.
   - **Also moved (merged PR #35, 2026-09-07):** `rand 0.8.5 → 0.8.8`
     (RUSTSEC-2026-0097 / GHSA-cq8v-f236-94qc had an in-range patch at 0.8.6).
-  - **Still blocked, probe dated 2026-09-07:** `glib 0.18.5` (RUSTSEC-2024-0429,
+  - **Moved (PR #43, 2026-09-15; lockfile only):** `rustls 0.23.41 → 0.23.45` +
+    `rustls-webpki 0.103.13 → 0.103.15` (RUSTSEC-2026-0285, TLS 1.3 handshake, 5.3 medium,
+    published 2026-09-14; runtime path `rustls ← ureq 3.3 ← litria` = managed LSP
+    downloads). **Found by `cargo audit`, not Dependabot** — run both, every pass.
+  - **Still blocked, re-probed 2026-09-15 (unchanged since 2026-09-07):** `glib 0.18.5` (RUSTSEC-2024-0429,
     fix is 0.20 = the GTK4 generation of gtk-rs; arrives only when tauri's Linux
     backend leaves GTK3 — `cargo tree -i glib@0.18.5 --target
     x86_64-unknown-linux-gnu` shows gtk 0.18 ← tao/wry/webkit2gtk/muda ← tauri);
