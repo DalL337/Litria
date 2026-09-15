@@ -1,5 +1,6 @@
 use crate::db::schema;
 use crate::db::types::RecentProject;
+use crate::db::DbError;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -57,18 +58,17 @@ pub(crate) fn app_data_dir() -> Result<PathBuf, String> {
 
 /// Open (or create) the app-level database at `~/.litria/litria.db`
 /// (platform-appropriate location).
-pub(crate) fn open_app_db() -> Result<(), String> {
+pub(crate) fn open_app_db() -> Result<(), DbError> {
     let dir = app_data_dir()?;
     if !dir.exists() {
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Failed to create app data directory: {e}"))?;
     }
     let db_path = dir.join("litria.db");
-    let conn = Connection::open(&db_path)
-        .map_err(|e| format!("Failed to open app database: {e}"))?;
+    let conn = super::open_connection(&db_path, "app database")?;
 
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-        .map_err(|e| format!("Failed to set app database pragmas: {e}"))?;
+    conn.execute_batch(super::CONNECTION_PRAGMAS)
+        .map_err(DbError::sqlite("Failed to set app database pragmas"))?;
 
     schema::initialize_app_schema(&conn)?;
 

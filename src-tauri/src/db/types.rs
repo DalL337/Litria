@@ -89,6 +89,10 @@ pub(crate) struct ProjectState {
     pub editor_state: HashMap<String, String>,
     pub hidden_paths: Vec<String>,
     pub viewport: Option<Viewport>,
+    /// True when `workspace.db` opened read-only (ADR-026 decision 3): the
+    /// canvas is viewable but every persistence write will fail with `db.read_only`.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 // ---------------------------------------------------------------------------

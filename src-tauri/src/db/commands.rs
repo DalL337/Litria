@@ -100,29 +100,38 @@ pub(crate) fn db_bootstrap_project(
         ));
     }
 
-    db::open_workspace_db(project_root).map_err(CommandError::from_text)?;
+    let read_only = db::open_workspace_db(project_root)?;
 
     // Insert project metadata
     let now = chrono::Utc::now().to_rfc3339();
     let instance_id = format!("litria-{}", uuid_v4_simple());
     let app_version = env!("CARGO_PKG_VERSION").to_string();
 
+    // Clear-then-insert inside one transaction: the table is single-row by
+    // construction (ADR-026 decision 2, audit H5), and a death mid-way leaves
+    // no row rather than a half-written one.
     db::with_workspace_db(|conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO project (instance_id, name, app_version, language, framework, created_at, updated_at)
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(db::DbError::sqlite("Failed to begin project bootstrap"))?;
+        tx.execute("DELETE FROM project", [])
+            .map_err(db::DbError::sqlite("Failed to clear project metadata"))?;
+        tx.execute(
+            "INSERT INTO project (instance_id, name, app_version, language, framework, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![instance_id, name, app_version, language, framework, now, now],
         )
-        .map_err(|e| format!("Failed to insert project metadata: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to insert project metadata"))?;
+        tx.commit()
+            .map_err(db::DbError::sqlite("Failed to commit project metadata"))?;
         Ok(())
-    })
-    .map_err(CommandError::from_text)?;
+    })?;
 
     // Write litria.toml marker
     write_litria_toml(project_root, &name, environment_python.as_deref())
-        .map_err(CommandError::from_text)?;
+        .map_err(CommandError::from)?;
 
-    // Add .litria/ to .gitignore if one exists
+    // Keep workspace.db out of the repository (ADR-026 decision 7).
     add_litria_to_gitignore(project_root);
 
     // Register in app-level database
@@ -146,6 +155,7 @@ pub(crate) fn db_bootstrap_project(
         editor_state: HashMap::new(),
         hidden_paths: vec![],
         viewport: None,
+        read_only,
     })
 }
 
@@ -166,9 +176,24 @@ pub(crate) fn db_open_project(path: String) -> CommandResult<ProjectState> {
     // 3. Neither exists → fresh bootstrap (open-any-folder flow)
 
     if db::workspace_db_exists(project_root) {
-        db::open_workspace_db(project_root).map_err(CommandError::from_text)?;
-        let state = load_full_state().map_err(CommandError::from_text)?;
-        let _ = app_db::register_project(&path, &state.project.name, state.project.framework.as_deref());
+        let read_only = db::open_workspace_db(project_root)?;
+        if project_row_count()? > 0 {
+            let mut state = load_full_state()?;
+            state.read_only = read_only;
+            let _ = app_db::register_project(&path, &state.project.name, state.project.framework.as_deref());
+            return Ok(state);
+        }
+
+        // A workspace without a project row is a bootstrap target, never an
+        // error (ADR-026 decision 2, audit S2/T9): an older build died between
+        // creating the file and inserting the row. Re-run bootstrap (it only
+        // touches `project`), then return whatever rows the file already holds.
+        db::close_workspace_db()?;
+        let name = read_litria_toml_name(project_root)
+            .unwrap_or_else(|| folder_name(project_root));
+        db_bootstrap_project(path, name, None, None, None)?;
+        let mut state = load_full_state()?;
+        state.read_only = read_only;
         return Ok(state);
     }
 
@@ -187,7 +212,7 @@ pub(crate) fn db_open_project(path: String) -> CommandResult<ProjectState> {
 /// Close the currently open project.
 #[tauri::command]
 pub(crate) fn db_close_project() -> CommandResult<()> {
-    db::close_workspace_db().map_err(CommandError::from_text)
+    db::close_workspace_db().map_err(CommandError::from)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -218,10 +243,10 @@ pub(crate) fn db_create_piece(
                 is_hidden.unwrap_or(false) as i32,
             ],
         )
-        .map_err(|e| format!("Failed to create piece: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to create piece"))?;
         Ok(conn.last_insert_rowid())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -230,14 +255,14 @@ pub(crate) fn db_create_pieces_batch(pieces: Vec<PieceInput>) -> CommandResult<V
         let mut ids = Vec::with_capacity(pieces.len());
         let tx = conn
             .unchecked_transaction()
-            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to begin transaction"))?;
         {
             let mut stmt = tx
                 .prepare(
                     "INSERT INTO pieces (file_path, label, x, y, scale, color, is_hidden)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )
-                .map_err(|e| format!("Failed to prepare batch insert: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare batch insert"))?;
 
             for p in &pieces {
                 stmt.execute(params![
@@ -249,15 +274,15 @@ pub(crate) fn db_create_pieces_batch(pieces: Vec<PieceInput>) -> CommandResult<V
                     p.color,
                     p.is_hidden.unwrap_or(false) as i32,
                 ])
-                .map_err(|e| format!("Failed to insert piece '{}': {e}", p.file_path))?;
+                .map_err(db::DbError::sqlite(format!("Failed to insert piece '{}'", p.file_path)))?;
                 ids.push(tx.last_insert_rowid());
             }
         }
         tx.commit()
-            .map_err(|e| format!("Failed to commit batch: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to commit batch"))?;
         Ok(ids)
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -265,22 +290,22 @@ pub(crate) fn db_batch_move_pieces(moves: Vec<PieceMove>) -> CommandResult<()> {
     db::with_workspace_db(|conn| {
         let tx = conn
             .unchecked_transaction()
-            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to begin transaction"))?;
         {
             let mut stmt = tx
                 .prepare("UPDATE pieces SET x = ?1, y = ?2 WHERE id = ?3")
-                .map_err(|e| format!("Failed to prepare batch move: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare batch move"))?;
 
             for m in &moves {
                 stmt.execute(params![m.x, m.y, m.id])
-                    .map_err(|e| format!("Failed to move piece {}: {e}", m.id))?;
+                    .map_err(db::DbError::sqlite(format!("Failed to move piece {}", m.id)))?;
             }
         }
         tx.commit()
-            .map_err(|e| format!("Failed to commit moves: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to commit moves"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -330,20 +355,20 @@ pub(crate) fn db_update_piece(id: i64, fields: PieceUpdate) -> CommandResult<()>
 
         let params_ref: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|b| b.as_ref()).collect();
         conn.execute(&sql, params_ref.as_slice())
-            .map_err(|e| format!("Failed to update piece {id}: {e}"))?;
+            .map_err(db::DbError::sqlite(format!("Failed to update piece {id}")))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub(crate) fn db_delete_piece(id: i64) -> CommandResult<()> {
     db::with_workspace_db(|conn| {
         conn.execute("DELETE FROM pieces WHERE id = ?1", [id])
-            .map_err(|e| format!("Failed to delete piece {id}: {e}"))?;
+            .map_err(db::DbError::sqlite(format!("Failed to delete piece {id}")))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -370,10 +395,10 @@ pub(crate) fn db_create_group(group: GroupInput) -> CommandResult<()> {
                 group.seed_h,
             ],
         )
-        .map_err(|e| format!("Failed to create group: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to create group"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -425,20 +450,20 @@ pub(crate) fn db_update_group(id: String, fields: GroupUpdate) -> CommandResult<
         let sql = format!("UPDATE groups SET {} WHERE id = ?", sets.join(", "));
         let params_ref: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|b| b.as_ref()).collect();
         conn.execute(&sql, params_ref.as_slice())
-            .map_err(|e| format!("Failed to update group {id}: {e}"))?;
+            .map_err(db::DbError::sqlite(format!("Failed to update group {id}")))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub(crate) fn db_delete_group(id: String) -> CommandResult<()> {
     db::with_workspace_db(|conn| {
         conn.execute("DELETE FROM groups WHERE id = ?1", [&id])
-            .map_err(|e| format!("Failed to delete group {id}: {e}"))?;
+            .map_err(db::DbError::sqlite(format!("Failed to delete group {id}")))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -448,10 +473,10 @@ pub(crate) fn db_add_piece_to_group(group_id: String, piece_id: i64) -> CommandR
             "INSERT OR IGNORE INTO group_pieces (group_id, piece_id) VALUES (?1, ?2)",
             params![group_id, piece_id],
         )
-        .map_err(|e| format!("Failed to add piece to group: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to add piece to group"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -461,10 +486,10 @@ pub(crate) fn db_remove_piece_from_group(group_id: String, piece_id: i64) -> Com
             "DELETE FROM group_pieces WHERE group_id = ?1 AND piece_id = ?2",
             params![group_id, piece_id],
         )
-        .map_err(|e| format!("Failed to remove piece from group: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to remove piece from group"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -485,10 +510,10 @@ pub(crate) fn db_create_connection(
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![from_piece_id, to_piece_id, source_side, target_side, r#type],
         )
-        .map_err(|e| format!("Failed to create connection: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to create connection"))?;
         Ok(conn.last_insert_rowid())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -502,10 +527,10 @@ pub(crate) fn db_save_editor_state(key: String, value: String) -> CommandResult<
             "INSERT OR REPLACE INTO editor_state (key, value) VALUES (?1, ?2)",
             params![key, value],
         )
-        .map_err(|e| format!("Failed to save editor state: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to save editor state"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -513,18 +538,18 @@ pub(crate) fn db_load_editor_state() -> CommandResult<HashMap<String, String>> {
     db::with_workspace_db(|conn| {
         let mut stmt = conn
             .prepare("SELECT key, value FROM editor_state")
-            .map_err(|e| format!("Failed to prepare editor state query: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to prepare editor state query"))?;
         let rows = stmt
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-            .map_err(|e| format!("Failed to query editor state: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to query editor state"))?;
         let mut map = HashMap::new();
         for row in rows {
-            let (k, v) = row.map_err(|e| format!("Failed to read editor state: {e}"))?;
+            let (k, v) = row.map_err(db::DbError::sqlite("Failed to read editor state"))?;
             map.insert(k, v);
         }
         Ok(map)
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -534,10 +559,10 @@ pub(crate) fn db_save_viewport(x: f64, y: f64, scale: f64) -> CommandResult<()> 
             "INSERT OR REPLACE INTO viewport (id, x, y, scale) VALUES (1, ?1, ?2, ?3)",
             params![x, y, scale],
         )
-        .map_err(|e| format!("Failed to save viewport: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to save viewport"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -547,20 +572,20 @@ pub(crate) fn db_add_hidden_path(path: String) -> CommandResult<()> {
             "INSERT OR IGNORE INTO hidden_paths (path) VALUES (?1)",
             [&path],
         )
-        .map_err(|e| format!("Failed to add hidden path: {e}"))?;
+        .map_err(db::DbError::sqlite("Failed to add hidden path"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub(crate) fn db_remove_hidden_path(path: String) -> CommandResult<()> {
     db::with_workspace_db(|conn| {
         conn.execute("DELETE FROM hidden_paths WHERE path = ?1", [&path])
-            .map_err(|e| format!("Failed to remove hidden path: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to remove hidden path"))?;
         Ok(())
     })
-    .map_err(CommandError::from_text)
+    .map_err(CommandError::from)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -569,7 +594,7 @@ pub(crate) fn db_remove_hidden_path(path: String) -> CommandResult<()> {
 
 #[tauri::command]
 pub(crate) fn db_list_recent_projects() -> CommandResult<Vec<RecentProject>> {
-    app_db::list_recent_projects().map_err(CommandError::from_text)
+    app_db::list_recent_projects().map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -578,35 +603,43 @@ pub(crate) fn db_register_project(
     name: String,
     framework: Option<String>,
 ) -> CommandResult<()> {
-    app_db::register_project(&path, &name, framework.as_deref()).map_err(CommandError::from_text)
+    app_db::register_project(&path, &name, framework.as_deref()).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub(crate) fn db_remove_project(path: String) -> CommandResult<()> {
-    app_db::remove_project(&path).map_err(CommandError::from_text)
+    app_db::remove_project(&path).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub(crate) fn db_pin_project(path: String, pinned: bool) -> CommandResult<()> {
-    app_db::pin_project(&path, pinned).map_err(CommandError::from_text)
+    app_db::pin_project(&path, pinned).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub(crate) fn db_save_preference(key: String, value: String) -> CommandResult<()> {
-    app_db::save_preference(&key, &value).map_err(CommandError::from_text)
+    app_db::save_preference(&key, &value).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub(crate) fn db_load_preferences() -> CommandResult<HashMap<String, String>> {
-    app_db::load_preferences().map_err(CommandError::from_text)
+    app_db::load_preferences().map_err(CommandError::from)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INTERNAL HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Number of rows in `project` (0 means a half-bootstrapped file).
+fn project_row_count() -> Result<i64, db::DbError> {
+    db::with_workspace_db(|conn| {
+        conn.query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
+            .map_err(db::DbError::sqlite("Failed to count project rows"))
+    })
+}
+
 /// Load full project state from the open workspace database.
-fn load_full_state() -> Result<ProjectState, String> {
+fn load_full_state() -> Result<ProjectState, db::DbError> {
     db::with_workspace_db(|conn| {
         // Project metadata
         let project = conn
@@ -626,13 +659,13 @@ fn load_full_state() -> Result<ProjectState, String> {
                     })
                 },
             )
-            .map_err(|e| format!("Failed to load project metadata: {e}"))?;
+            .map_err(db::DbError::sqlite("Failed to load project metadata"))?;
 
         // Pieces
         let pieces = {
             let mut stmt = conn
                 .prepare("SELECT id, file_path, label, x, y, scale, color, is_hidden FROM pieces")
-                .map_err(|e| format!("Failed to prepare pieces query: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare pieces query"))?;
             let rows = stmt
                 .query_map([], |row| {
                     Ok(Piece {
@@ -646,10 +679,10 @@ fn load_full_state() -> Result<ProjectState, String> {
                         is_hidden: row.get::<_, i32>(7)? != 0,
                     })
                 })
-                .map_err(|e| format!("Failed to query pieces: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to query pieces"))?;
             let mut v = Vec::new();
             for row in rows {
-                v.push(row.map_err(|e| format!("Failed to read piece: {e}"))?);
+                v.push(row.map_err(db::DbError::sqlite("Failed to read piece"))?);
             }
             v
         };
@@ -658,7 +691,7 @@ fn load_full_state() -> Result<ProjectState, String> {
         let groups = {
             let mut stmt = conn
                 .prepare("SELECT id, name, folder_path, is_collapsed, parent_id, theme_id, color, seed_x, seed_y, seed_w, seed_h FROM groups")
-                .map_err(|e| format!("Failed to prepare groups query: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare groups query"))?;
             let rows = stmt
                 .query_map([], |row| {
                     Ok(Group {
@@ -675,10 +708,10 @@ fn load_full_state() -> Result<ProjectState, String> {
                         seed_h: row.get(10)?,
                     })
                 })
-                .map_err(|e| format!("Failed to query groups: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to query groups"))?;
             let mut v = Vec::new();
             for row in rows {
-                v.push(row.map_err(|e| format!("Failed to read group: {e}"))?);
+                v.push(row.map_err(db::DbError::sqlite("Failed to read group"))?);
             }
             v
         };
@@ -687,7 +720,7 @@ fn load_full_state() -> Result<ProjectState, String> {
         let group_pieces = {
             let mut stmt = conn
                 .prepare("SELECT group_id, piece_id FROM group_pieces")
-                .map_err(|e| format!("Failed to prepare group_pieces query: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare group_pieces query"))?;
             let rows = stmt
                 .query_map([], |row| {
                     Ok(GroupPiece {
@@ -695,10 +728,10 @@ fn load_full_state() -> Result<ProjectState, String> {
                         piece_id: row.get(1)?,
                     })
                 })
-                .map_err(|e| format!("Failed to query group_pieces: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to query group_pieces"))?;
             let mut v = Vec::new();
             for row in rows {
-                v.push(row.map_err(|e| format!("Failed to read group_piece: {e}"))?);
+                v.push(row.map_err(db::DbError::sqlite("Failed to read group_piece"))?);
             }
             v
         };
@@ -710,7 +743,7 @@ fn load_full_state() -> Result<ProjectState, String> {
                     "SELECT id, from_piece_id, to_piece_id, source_side, target_side, type
                      FROM connections",
                 )
-                .map_err(|e| format!("Failed to prepare connections query: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare connections query"))?;
             let rows = stmt
                 .query_map([], |row| {
                     Ok(Connection {
@@ -722,10 +755,10 @@ fn load_full_state() -> Result<ProjectState, String> {
                         r#type: row.get(5)?,
                     })
                 })
-                .map_err(|e| format!("Failed to query connections: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to query connections"))?;
             let mut v = Vec::new();
             for row in rows {
-                v.push(row.map_err(|e| format!("Failed to read connection: {e}"))?);
+                v.push(row.map_err(db::DbError::sqlite("Failed to read connection"))?);
             }
             v
         };
@@ -734,13 +767,13 @@ fn load_full_state() -> Result<ProjectState, String> {
         let editor_state = {
             let mut stmt = conn
                 .prepare("SELECT key, value FROM editor_state")
-                .map_err(|e| format!("Failed to prepare editor_state query: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare editor_state query"))?;
             let rows = stmt
                 .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-                .map_err(|e| format!("Failed to query editor_state: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to query editor_state"))?;
             let mut map = HashMap::new();
             for row in rows {
-                let (k, v) = row.map_err(|e| format!("Failed to read editor_state: {e}"))?;
+                let (k, v) = row.map_err(db::DbError::sqlite("Failed to read editor_state"))?;
                 map.insert(k, v);
             }
             map
@@ -750,13 +783,13 @@ fn load_full_state() -> Result<ProjectState, String> {
         let hidden_paths = {
             let mut stmt = conn
                 .prepare("SELECT path FROM hidden_paths")
-                .map_err(|e| format!("Failed to prepare hidden_paths query: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to prepare hidden_paths query"))?;
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|e| format!("Failed to query hidden_paths: {e}"))?;
+                .map_err(db::DbError::sqlite("Failed to query hidden_paths"))?;
             let mut v = Vec::new();
             for row in rows {
-                v.push(row.map_err(|e| format!("Failed to read hidden_path: {e}"))?);
+                v.push(row.map_err(db::DbError::sqlite("Failed to read hidden_path"))?);
             }
             v
         };
@@ -785,6 +818,8 @@ fn load_full_state() -> Result<ProjectState, String> {
             editor_state,
             hidden_paths,
             viewport,
+            // The open path knows the probe result and overwrites this.
+            read_only: false,
         })
     })
 }
@@ -818,10 +853,19 @@ fn rand_u16() -> u16 {
     (hasher.finish() & 0xFFFF) as u16
 }
 
-/// Add `.litria/` to `.gitignore` if one exists and doesn't already contain it.
+/// Written when a git repository has no `.gitignore` yet (ADR-026 decision 7).
+const GITIGNORE_SEED: &str = "# Litria workspace (local state)\n.litria/\n";
+
+/// Keep `.litria/` out of version control: append to an existing
+/// `.gitignore` (deduplicated), or create one when the folder is a git
+/// repository (`.git` may be a directory or, for worktrees, a file). A folder
+/// that is not a repository is left untouched.
 fn add_litria_to_gitignore(project_root: &Path) {
     let gitignore = project_root.join(".gitignore");
     if !gitignore.exists() {
+        if project_root.join(".git").exists() {
+            let _ = fs::write(&gitignore, GITIGNORE_SEED);
+        }
         return;
     }
     let content = match fs::read_to_string(&gitignore) {
@@ -1106,5 +1150,148 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM connections", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    // ── On-disk lifecycle (ADR-026) ────────────────────────────────────────
+    // These open a real workspace under a temp dir, so they hold
+    // `db::serial_guard()` for the whole test (shared PROJECT_DB slot).
+
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let mut dir = std::env::temp_dir();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        dir.push(format!("litria-cmd-{prefix}-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn project_rows() -> i64 {
+        project_row_count().unwrap()
+    }
+
+    /// Audit T9: the file exists with a full schema but no `project` row.
+    #[test]
+    fn open_rebuilds_when_project_row_missing() {
+        let _serial = db::serial_guard();
+        let root = temp_dir("no-project-row");
+        db::open_workspace_db(&root).unwrap();
+        db::with_workspace_db(|conn| {
+            conn.execute(
+                "INSERT INTO editor_state (key, value) VALUES ('survivor', 'yes')",
+                [],
+            )
+            .map(|_| ())
+            .map_err(db::DbError::sqlite("seed"))
+        })
+        .unwrap();
+        assert_eq!(project_rows(), 0);
+        db::close_workspace_db().unwrap();
+
+        let state = db_open_project(root.to_string_lossy().into_owned())
+            .expect("a workspace without a project row is a bootstrap target");
+
+        assert_eq!(state.project.name, folder_name(&root));
+        assert!(!state.read_only);
+        assert_eq!(
+            state.editor_state.get("survivor").map(String::as_str),
+            Some("yes"),
+            "rows the file already held must survive the rebuild"
+        );
+        assert_eq!(project_rows(), 1);
+        assert!(root.join("litria.toml").is_file());
+        db::close_workspace_db().unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Audit H5: re-bootstrapping an existing file must not stack rows.
+    #[test]
+    fn bootstrap_twice_keeps_one_project_row() {
+        let _serial = db::serial_guard();
+        let root = temp_dir("bootstrap-twice");
+        let path = root.to_string_lossy().into_owned();
+
+        let first = db_bootstrap_project(path.clone(), "first".into(), None, None, None).unwrap();
+        let second = db_bootstrap_project(path, "second".into(), None, None, None).unwrap();
+        assert_ne!(first.project.instance_id, second.project.instance_id);
+
+        assert_eq!(project_rows(), 1);
+        let name: String = db::with_workspace_db(|conn| {
+            conn.query_row("SELECT name FROM project", [], |row| row.get(0))
+                .map_err(db::DbError::sqlite("read"))
+        })
+        .unwrap();
+        assert_eq!(name, "second");
+        db::close_workspace_db().unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn open_returning_project_reports_writable() {
+        let _serial = db::serial_guard();
+        let root = temp_dir("returning");
+        let path = root.to_string_lossy().into_owned();
+        db_bootstrap_project(path.clone(), "proj".into(), None, None, None).unwrap();
+        db::close_workspace_db().unwrap();
+
+        let state = db_open_project(path).unwrap();
+        assert_eq!(state.project.name, "proj");
+        assert!(!state.read_only);
+        db::close_workspace_db().unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    // ── .gitignore (ADR-026 decision 7) ────────────────────────────────────
+
+    #[test]
+    fn gitignore_created_in_git_repo_without_one() {
+        let root = temp_dir("gitignore-repo");
+        fs::create_dir_all(root.join(".git")).unwrap();
+
+        add_litria_to_gitignore(&root);
+
+        assert_eq!(
+            fs::read_to_string(root.join(".gitignore")).unwrap(),
+            GITIGNORE_SEED
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn gitignore_created_when_git_is_a_worktree_file() {
+        let root = temp_dir("gitignore-worktree");
+        fs::write(root.join(".git"), "gitdir: ../.git/worktrees/x\n").unwrap();
+
+        add_litria_to_gitignore(&root);
+
+        assert!(root.join(".gitignore").is_file());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn gitignore_not_created_outside_git_repo() {
+        let root = temp_dir("gitignore-plain");
+
+        add_litria_to_gitignore(&root);
+
+        assert!(!root.join(".gitignore").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn gitignore_appended_once_when_present() {
+        let root = temp_dir("gitignore-append");
+        fs::write(root.join(".gitignore"), "node_modules/").unwrap();
+
+        add_litria_to_gitignore(&root);
+        add_litria_to_gitignore(&root);
+
+        assert_eq!(
+            fs::read_to_string(root.join(".gitignore")).unwrap(),
+            "node_modules/\n.litria/\n"
+        );
+        fs::remove_dir_all(&root).ok();
     }
 }
