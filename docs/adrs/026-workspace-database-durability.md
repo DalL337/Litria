@@ -4,7 +4,7 @@
 
 Implemented on branch (2026-09-14 — decisions 1, 2, 4–8 and the backend
 half of 3 (`readOnly` probe and field) delivered on
-`fix/adr-026-workspace-db-durability`; the read-only pill and persistence
+`fix/adr-026-workspace-db-durability`, PR #36; the read-only pill and persistence
 notices of decision 3 wait on the two owner rulings in the brief; decision 6
 carries an erratum found during implementation. The decisions themselves
 still await owner acceptance)

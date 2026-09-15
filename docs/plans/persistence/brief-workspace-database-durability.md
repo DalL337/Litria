@@ -1,7 +1,7 @@
 # Brief — Workspace database durability fixes (SQLite audit remediation)
 
 **Status:** Slices 1, 2, 3 and 5 implemented 2026-09-14 on branch
-`fix/adr-026-workspace-db-durability` (see *Delivery notes* below), plus
+`fix/adr-026-workspace-db-durability`, PR #36 (see *Delivery notes* below), plus
 the backend half of slice 4 (`readOnly` on `ProjectState`). Slice 4's
 frontend waits on the two owner rulings in §4. Drafted 2026-09-14 from the
 audit `docs/audits/sqlite-schema-2026-09-14.md`; owner directed "deal with

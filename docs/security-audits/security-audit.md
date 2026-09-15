@@ -1100,7 +1100,7 @@ Transitive through tauri-utils; Litria does not use `KeyValueMap`. Moved because
 the fix is free and the alert would otherwise sit open.
 
 ### ISSUE 29: workspace.db durability (non-atomic migration, half-bootstrap, silent read-only, no integrity check)
-**Severity:** Medium (durability; no injection or exfiltration surface) · **Found:** 2026-09-14, dedicated SQLite audit `docs/audits/sqlite-schema-2026-09-14.md` · **Status:** fixed on branch `fix/adr-026-workspace-db-durability` (PR pending); read-only pill (slice 4) waits on owner rulings
+**Severity:** Medium (durability; no injection or exfiltration surface) · **Found:** 2026-09-14, dedicated SQLite audit `docs/audits/sqlite-schema-2026-09-14.md` · **Status:** fixed on branch `fix/adr-026-workspace-db-durability` (PR #36); read-only pill (slice 4) waits on owner rulings
 The six-pass SQLite audit (schema inventory, drift, query and input safety,
 data at rest, connections and constraints, failure behaviour) found no Tier-1
 issue and no SQL-injection path (the only dynamic SQL joins column names
