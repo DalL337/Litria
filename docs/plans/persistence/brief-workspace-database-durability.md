@@ -148,10 +148,20 @@ clear on project switch); existing persistence tests updated for the
 read-only skip; guard run (`npm run check:architecture`) because a domain
 gains state.
 
-**Owner rulings needed before this slice:** pill copy and placement (canvas
-top edge next to the HUD, or the status strip?), whether read-only should
-also disable the drag gestures or only skip persistence (design says: skip
-persistence only, gestures stay so the canvas remains explorable).
+**Owner rulings (2026-09-14, both RULED):**
+
+1. **Pill placement: canvas top edge next to the HUD**, with the draft copy
+   *"Read-only workspace — layout changes won't be saved."* The rate-limited
+   persistence notices share that surface. (Status strip rejected: too easy
+   to never look at for a first-hour basic.)
+2. **Read-only skips persistence only.** Every gesture stays (drag, group,
+   wire, collapse); nothing is written and the pill says why. Owner's
+   addition: **zoom and pan must remain in all cases**, so a node someone
+   parked far off the viewport is still reachable. Viewport writes are
+   skipped like every other write; navigation itself is never gated.
+
+Slice 4 branches from `main` after PR #36 merges (it depends on the
+`readOnly` field and the `db.*` error codes that PR carries).
 
 ### 5. `.litria/` ignore for git repositories (H1)
 
