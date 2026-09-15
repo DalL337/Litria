@@ -54,3 +54,13 @@ The correct release binary comes from:
 ```
 npm run tauri -- build --no-bundle
 ```
+
+## Rule 4 — Create the release object before artifact upload
+
+(Added 2026-09-15 — the v1.0.6 release journal found the workflow upload
+precondition only after the tag-triggered jobs had started.)
+
+The GitHub release object must exist before the release workflow reaches its
+upload step. Create it immediately after pushing the tag. The workflow in
+`.github/workflows/release.yml` only uploads artifacts with
+`gh release upload`; it does not create the release.

@@ -159,9 +159,16 @@ features work on first launch with nothing installed, and better servers
 are adopted when present.
 
 **Features**
+
+> **Corrected 2026-09-15 (ADR-027):** Definition-provider attribution and
+> language-tier boundaries now follow their executable sources of truth.
+
 - Python and TypeScript/JavaScript intelligence out of the box: hover,
-  completions, go-to-definition, signature help, symbols, diagnostics
+  completions, signature help, symbols, diagnostics
   (`.tsx`/`.jsx` handled spec-correctly as react variants)
+- Definitions come from their actual providers: local Python intelligence,
+  and Monaco's TypeScript worker for open TypeScript/JavaScript models. The
+  generic LSP `textDocument/definition` bridge is deferred
 - Bundled runtimes in the installer: Node.js 24.14.0, pyright 1.1.411,
   typescript-language-server 5.3.0, TypeScript 5.9.3
 - **Managed server directory** (ADR-005): rust-analyzer and clangd install
@@ -175,6 +182,15 @@ are adopted when present.
 - Custom Python hover card: diagnostic stacking, pin (`P`), severity labels
 - Server crashes surface as readable pack errors; recovery is user-driven
   (next file event), never a hidden restart loop
+
+**Language support tiers**
+
+| Tier | Current boundary | Source of truth |
+|---|---|---|
+| Editable | The editor can open every filename mapped to a Monaco language. | `getLanguageFromFilename` in `src/editor/editorLanguage.js` |
+| Discovered / wired | Project discovery considers its narrower source-file set. | `DISCOVERY_EXTENSIONS` in `src/app/useDiscoveryLifecycle.js` |
+| Symbol / import indexed | The syntax domain parses JavaScript/TypeScript and Python through language-specific parsers. | `src/app/syntaxDomain.js` and `src/app/*Parser.js` |
+| LSP served | Python and TypeScript/JavaScript use the bundled-first pack path; Rust and C/C++ use managed packs; Go uses the toolchain offer. | `src-tauri/src/lsp/packs/`, `src-tauri/resources/language-server-registry.json`, and `getManagedSessionLanguageFromFilename` |
 
 *Built on:* ADR-004 (bundled), ADR-005 (managed), `docs/plans/lsp/`.
 
@@ -208,6 +224,10 @@ theme with semantic tokens, per-tab model tracking with save baselines, and
 a pane-aware session domain — editor state is project state.
 
 **Features**
+
+> **Corrected 2026-09-15 (ADR-027):** The prior crash-safe working-copy
+> claim exceeded the implemented persistence model.
+
 - Multi-tab editing with dirty tracking and an unsaved-changes gate on
   project switch/exit
 - **Split editor panes** (`Ctrl+\`): node→pane and tab→pane drags,
@@ -216,7 +236,9 @@ a pane-aware session domain — editor state is project state.
 - Save system: `Ctrl+S` / `Ctrl+Shift+S` global capture-phase, canvas-level
   Save / Save All on the action pill, serialized Save-As for untitled
   sessions
-- Crash-safe: working copies persist; unsaved work survives restarts
+- Unsaved edits live in the current editor session. Deliberate project
+  switches and exits are gated by Save / Discard / Cancel. A process crash
+  loses unsaved edits; files already saved to disk remain safe
 - JSON editing with schema validation (package.json/tsconfig vendored
   schemas, jsonc comment tolerance)
 - Tabs/panes/session persist per project and restore tolerantly

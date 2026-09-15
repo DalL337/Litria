@@ -46,8 +46,11 @@ Builds are **unsigned**, so your OS will object the first time:
 
 > **Windows is the build that gets used daily.** **macOS** has been launched and run by
 > a tester — briefly, on one machine, which is enough to say it works and not enough to
-> call it proven. The **Linux** builds compile and pass the full test suite in CI but
-> have not yet been launched by a human. Both should work — please tell us when they don't.
+> call it proven. **Linux** passed the source-build parity checklist on Fedora 44
+> (2026-07-31); the packaged AppImage, deb, and rpm have not yet been launched by a
+> human. Please tell us when a platform build does not work.
+
+*Platform evidence corrected 2026-09-15 under ADR-027.*
 
 Prefer to build it yourself? Jump to [Getting into it](#getting-into-it).
 
