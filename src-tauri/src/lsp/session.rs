@@ -577,8 +577,8 @@ pub(crate) fn start_session(
 
 /// Stop the session for the given project + language.
 ///
-/// Sends the LSP `shutdown` request followed by the `exit` notification, then
-/// kills the server process.
+/// Sends `shutdown`, then `exit`, waits for graceful exit, kills only after
+/// timeout, and always reaps the child.
 pub(crate) fn stop_session(
     app: &AppHandle,
     language_id: &str,
@@ -602,10 +602,11 @@ pub(crate) fn stop_session(
     // Graceful shutdown — ignore errors if the server has already exited.
     // mark_stopping() must be called before kill() so the read-loop thread
     // does not treat the EOF as a crash.
-    session.transport.mark_stopping();
-    let _ = session.request("shutdown", Value::Null, Duration::from_millis(3_000));
-    let _ = session.notify("exit", Value::Null);
-    session.transport.kill();
+    teardown_session_process(
+        &session,
+        Duration::from_millis(3_000),
+        Duration::from_millis(1_500),
+    );
 
     let payload = LspSessionEndedPayload {
         session_id: session.session_id.clone(),
@@ -642,14 +643,38 @@ pub(crate) fn stop_sessions_for_language(app: &AppHandle, language_id: &str) -> 
 // Teardown all
 // ---------------------------------------------------------------------------
 
-/// Kill all active sessions immediately.  Called on app shutdown.
-pub(crate) fn teardown_all_sessions() -> CommandResult<usize> {
-    let mut map = sessions().lock().unwrap();
-    let count = map.len();
-    for (_, session) in map.drain() {
-        session.transport.mark_stopping();
-        let _ = session.notify("exit", Value::Null);
+fn teardown_session_process(
+    session: &LspSession,
+    shutdown_timeout: Duration,
+    exit_timeout: Duration,
+) {
+    // Mark first so EOF after either graceful exit or force-kill cannot emit a
+    // false crash. Request/notify failures mean the child already left or is
+    // unresponsive; the bounded wait/kill/reap tail still owns cleanup.
+    session.transport.mark_stopping();
+    let _ = session.request("shutdown", Value::Null, shutdown_timeout);
+    let _ = session.notify("exit", Value::Null);
+    if session.transport.wait_timeout(exit_timeout).is_none() {
         session.transport.kill();
+    }
+    let _ = session.transport.wait();
+}
+
+/// Gracefully stop and reap all active sessions. Called on app shutdown.
+pub(crate) fn teardown_all_sessions() -> CommandResult<usize> {
+    // Drain under the registry lock, then release it before any request or
+    // process wait. A slow server must not block concurrent registry access.
+    let drained: Vec<LspSession> = {
+        let mut map = sessions().lock().unwrap();
+        map.drain().map(|(_, session)| session).collect()
+    };
+    let count = drained.len();
+    for session in drained {
+        teardown_session_process(
+            &session,
+            Duration::from_millis(500),
+            Duration::from_millis(500),
+        );
     }
     Ok(count)
 }

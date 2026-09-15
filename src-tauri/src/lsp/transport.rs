@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 
 // A language server is a console child of a GUI process: on a Windows
 // release build a bare spawn opens a console window for as long as the
@@ -20,6 +20,7 @@ use crate::platform::hidden_command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tauri::AppHandle;
@@ -79,14 +80,25 @@ impl LspTransport {
         let _ = self.child.lock().unwrap().kill();
     }
 
-    /// Wait for the process to exit and return its exit status.
-    ///
-    /// Should be called after sending the LSP `shutdown` + `exit` sequence.
-    // Not on any current path — teardown kills today; the graceful
-    // shutdown→exit→wait cascade (Orchestration §1.2 ordering) is the
-    // deferred caller.
-    #[allow(dead_code)]
-    pub(crate) fn wait(&self) -> Option<std::process::ExitStatus> {
+    /// Wait up to `timeout` for the process to exit. The child lock is held
+    /// only for each poll, never across the 25 ms sleep.
+    pub(crate) fn wait_timeout(&self, timeout: Duration) -> Option<ExitStatus> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let status = self.child.lock().unwrap().try_wait().ok().flatten();
+            if status.is_some() {
+                return status;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(25).min(deadline - now));
+        }
+    }
+
+    /// Reap after graceful exit or force-kill.
+    pub(crate) fn wait(&self) -> Option<ExitStatus> {
         self.child.lock().unwrap().wait().ok()
     }
 }
@@ -457,6 +469,74 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::io::Cursor;
+
+    fn transport_for_test_child(mut command: Command) -> LspTransport {
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn().expect("spawn teardown test child");
+        let stdin = child.stdin.take().expect("test child stdin");
+        LspTransport {
+            stdin: Arc::new(Mutex::new(stdin)),
+            child: Arc::new(Mutex::new(child)),
+            next_id: Arc::new(Mutex::new(1)),
+            is_stopping: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[cfg(windows)]
+    fn cooperative_child_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "exit", "0"]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn cooperative_child_command() -> Command {
+        Command::new("true")
+    }
+
+    #[cfg(windows)]
+    fn stubborn_child_command() -> Command {
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        command
+    }
+
+    #[cfg(unix)]
+    fn stubborn_child_command() -> Command {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        command
+    }
+
+    #[test]
+    fn wait_timeout_observes_a_cooperative_child_and_wait_reaps_it() {
+        let transport = transport_for_test_child(cooperative_child_command());
+        assert!(
+            transport.wait_timeout(Duration::from_secs(2)).is_some(),
+            "a child that exits itself must be observed inside the grace period"
+        );
+        assert!(transport.wait().is_some(), "the observed child remains reapable");
+    }
+
+    #[test]
+    fn stubborn_child_times_out_then_kill_and_wait_reap_it() {
+        let transport = transport_for_test_child(stubborn_child_command());
+        assert!(
+            transport.wait_timeout(Duration::from_millis(75)).is_none(),
+            "a live stubborn child must exhaust the grace period"
+        );
+        transport.kill();
+        assert!(transport.wait().is_some(), "a killed child must be reaped");
+    }
 
     // -- stderr tail ring --
 
