@@ -8,7 +8,8 @@
 // churn is now routine (seam maintenance at drag-end, nudge-at-birth, editor
 // workingCode commits) — so moves detected once were never re-detectable and
 // the write was silently lost. Wired pieces reverted to creation positions on
-// reopen while unwired pieces persisted.
+// reopen while unwired pieces persisted. A rejected drain is restored and
+// retried; only a confirmed write permanently removes its moves.
 //
 // The outbox rule: detection writes into a pending map that SURVIVES timer
 // cancellation. New churn delays the flush; only a successful drain empties
@@ -25,6 +26,10 @@ export const POSITION_FLUSH_DEBOUNCE_MS = 300;
  * leaving a hard crash to eat it).
  */
 export const POSITION_FLUSH_MAX_WAIT_MS = 2000;
+
+/** First retry waits two seconds; the retry ceiling is thirty seconds. */
+export const POSITION_RETRY_BASE_MS = 2000;
+export const POSITION_RETRY_MAX_MS = 30_000;
 
 /**
  * Diff current pieces against the last-seen position map.
@@ -68,6 +73,61 @@ export function drainPending(pending) {
   }
   pending.clear();
   return moves;
+}
+
+/**
+ * Restore a failed drained batch without overwriting moves that arrived while
+ * the write was in flight. Failed entries are the older side of the merge.
+ */
+export function requeueFailed(pending, failedMoves) {
+  const newerMoves = drainPending(pending);
+  mergeIntoPending(pending, failedMoves);
+  mergeIntoPending(pending, newerMoves);
+  return pending;
+}
+
+/** Zero-based retry index: 0 => 2 s, 1 => 4 s, capped at 30 s. */
+export function computeRetryDelay(attempt) {
+  const safeAttempt = Number.isFinite(attempt) ? Math.max(0, Math.floor(attempt)) : 0;
+  return Math.min(POSITION_RETRY_BASE_MS * (2 ** safeAttempt), POSITION_RETRY_MAX_MS);
+}
+
+/**
+ * Drain and persist one batch. A normal failed write restores the batch and
+ * asks the caller to schedule the next zero-based retry. Final teardown calls
+ * may disable retention after making their one last attempt.
+ */
+export async function flushPositionOutbox({
+  pending,
+  writeMoves,
+  attempt = 0,
+  scheduleRetry = null,
+  retainOnFailure = true
+}) {
+  const moves = drainPending(pending);
+  if (moves.length === 0) {
+    return { saved: true, flushed: false, moves, attempt, retryDelay: null, error: null };
+  }
+
+  try {
+    await writeMoves(moves);
+    return { saved: true, flushed: true, moves, attempt: 0, retryDelay: null, error: null };
+  } catch (error) {
+    if (!retainOnFailure) {
+      return { saved: false, flushed: true, moves, attempt, retryDelay: null, error };
+    }
+    requeueFailed(pending, moves);
+    const retryDelay = computeRetryDelay(attempt);
+    scheduleRetry?.(retryDelay);
+    return {
+      saved: false,
+      flushed: true,
+      moves,
+      attempt: attempt + 1,
+      retryDelay,
+      error
+    };
+  }
 }
 
 /**
