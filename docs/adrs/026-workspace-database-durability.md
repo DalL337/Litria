@@ -197,6 +197,14 @@ Costs / trade-offs:
 
 ## Implementation Follow-ups
 
+> **Implemented follow-up (2026-09-15, ADR-027 slice 1):** File-save
+> failures now use the same adapter-neutral persistence-failure observer as
+> workspace-database writes. A failed or refused disk write leaves the editor
+> and piece baselines dirty, surfaces the affected relative path and reason,
+> and vetoes save-gated project transitions. The database `readOnly` flag
+> continues to govern layout persistence only; it does not disable file-save
+> attempts.
+
 - Cross-link this ADR and the audit from `docs/security-audits/security-audit.md`
   (the living audit) on the next dated entry; the audit report itself sits
   at `docs/audits/` by owner instruction and the security policy's home rule

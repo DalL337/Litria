@@ -18,6 +18,12 @@ import {
 // but every write below is skipped (canPersist), so no failure is generated
 // for the pill to report twice.
 import { canPersist } from './persistenceNotices.js';
+import { emitPersistenceWriteFailure } from './persistenceFailures.js';
+import {
+  applySavedPieceBaseline,
+  noSaveTargetOutcome,
+  resolveSaveOutcome
+} from './saveOutcome.js';
 
 /**
  * useProjectPersistence — hydrates canvas state from the SQLite workspace DB
@@ -89,43 +95,57 @@ export function useProjectPersistence({
   }, []);
   const sameId = useCallback((left, right) => normalizeId(left) === normalizeId(right), [normalizeId]);
 
-  // When a tab is saved: update the piece's working code in state + write
-  // the file to disk + persist label/filename to SQLite (file path is the
-  // source of truth for the piece's on-disk location).
+  // State follows disk: capture one snapshot, attempt the write, and advance
+  // the piece baseline only after explicit success. The live workingCode is
+  // preserved so keystrokes made while the write is in flight remain dirty.
   const persistSavedTab = useCallback(async (tab) => {
-    if (!tab) return;
-    setPieces((prev) =>
-      prev.map((piece) => (
-        sameId(piece.id, tab.pieceId)
-          ? { ...piece, code: tab.workingCode ?? '', workingCode: tab.workingCode ?? '' }
-          : piece
-      ))
-    );
-
+    if (!tab) return false;
+    const savedCode = typeof tab.workingCode === 'string' ? tab.workingCode : '';
     const rootPath = projectInstance?.rootPath;
-    if (!rootPath) return;
-
     const normalizedPieceId = normalizeId(tab.pieceId);
     const relativePath = piecesById.get(tab.pieceId)?.filename
       ?? piecesById.get(normalizedPieceId)?.filename
       ?? tab.filename;
 
-    if (!relativePath) return;
-
-    // Write the saved content to disk via the filesystem write manager
-    try {
-      const ok = await writeProjectFile(rootPath, relativePath, tab.workingCode ?? '');
-      if (ok !== true) console.warn('[persistence] tab disk write failed:', relativePath);
-    } catch (e) {
-      console.warn('[persistence] tab disk write failed:', e);
+    if (!rootPath || !relativePath) {
+      const outcome = noSaveTargetOutcome(relativePath);
+      console.warn('[persistence] tab disk write failed:', outcome.failure.error);
+      emitPersistenceWriteFailure(outcome.failure);
+      return false;
     }
-  }, [normalizeId, piecesById, projectInstance?.rootPath, sameId, setPieces, writeProjectFile]);
+
+    let outcome;
+    try {
+      projectDomain.commands.clearLastStorageError?.();
+      const managerResult = await writeProjectFile(rootPath, relativePath, savedCode);
+      outcome = resolveSaveOutcome({
+        managerResult,
+        relativePath,
+        storageError: projectDomain.commands.getLastStorageError?.() ?? null
+      });
+    } catch (error) {
+      outcome = resolveSaveOutcome({ thrownError: error, relativePath });
+    }
+
+    if (!outcome.saved) {
+      console.warn('[persistence] tab disk write failed:', relativePath, outcome.failure.error);
+      emitPersistenceWriteFailure(outcome.failure);
+      return false;
+    }
+
+    setPieces((prev) => applySavedPieceBaseline(prev, tab.pieceId, savedCode, sameId));
+    return true;
+  }, [normalizeId, piecesById, projectDomain.commands, projectInstance?.rootPath, sameId, setPieces, writeProjectFile]);
 
   const persistSavedTabs = useCallback(async (tabs) => {
-    if (!tabs?.length) return;
+    if (!tabs?.length) return [];
+    const results = [];
     for (const tab of tabs) {
-      await persistSavedTab(tab);
+      const savedCode = typeof tab?.workingCode === 'string' ? tab.workingCode : '';
+      const saved = await persistSavedTab(tab);
+      results.push({ tabId: tab.id, saved, savedCode });
     }
+    return results;
   }, [persistSavedTab]);
 
   useEffect(() => {

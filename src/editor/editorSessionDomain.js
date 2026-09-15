@@ -420,13 +420,10 @@ export function editorSessionReducer(state, action) {
     case 'SAVE_TAB': {
       const current = state.tabsById[action.tabId];
       if (!current) return state;
-      // savedCode: what actually reached disk. Async save paths (untitled
-      // Save As) pass the snapshot they wrote, so keystrokes typed during the
-      // dialog/write stay dirty; sync paths omit it and baseline to live
-      // workingCode as before.
-      const savedCode = typeof action.savedCode === 'string'
-        ? action.savedCode
-        : current.workingCode;
+      // The caller must provide the exact snapshot confirmed on disk. Missing
+      // or invalid evidence cannot advance the saved baseline.
+      if (typeof action.savedCode !== 'string') return state;
+      const savedCode = normalizeEditorText(action.savedCode);
       return {
         ...state,
         tabsById: {
@@ -450,17 +447,6 @@ export function editorSessionReducer(state, action) {
             workingCode: current.code
           }
         }
-      };
-    }
-    case 'SAVE_ALL': {
-      const nextTabsById = { ...state.tabsById };
-      Object.keys(nextTabsById).forEach((tabId) => {
-        const tab = nextTabsById[tabId];
-        nextTabsById[tabId] = { ...tab, code: tab.workingCode };
-      });
-      return {
-        ...state,
-        tabsById: nextTabsById
       };
     }
     case 'UPDATE_TAB_FILENAME': {
