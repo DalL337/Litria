@@ -1,6 +1,8 @@
 # Brief — Honest save state, retryable position outbox, LSP teardown reap, and truthful capability claims
 
-**Status:** RULED 2026-09-15 — the owner accepted all five rulings (R1–R5) as
+**Status:** IMPLEMENTED + OWNER LIVE-ACCEPTED 2026-09-15 — PRs #38–#42 (one per
+slice, each from `main`); the four live acceptance scenarios in the Slices
+table passed on the owner's machine the same day. Previously: RULED 2026-09-15 — the owner accepted all five rulings (R1–R5) as
 proposed; every slice is cleared to build, none started. Drafted the same day
 for owner review. Companion ADR:
 `docs/adrs/027-honest-save-state-outbox-retry-and-lsp-teardown.md`

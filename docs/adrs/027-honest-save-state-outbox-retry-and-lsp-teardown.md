@@ -2,6 +2,12 @@
 
 ## Status
 
+Implemented (2026-09-15 — all five slices delivered as PRs #38 (docs), #39
+(honest save), #40 (outbox retry), #41 (LSP teardown reap), #42 (engine
+text-focus); owner live acceptance passed the same day: read-only file save,
+database lock release during retry, language-server process list after stop
+and app exit, editor/canvas shortcut focus)
+
 Accepted (2026-09-15 — owner ruled R1–R5 in the brief exactly as proposed,
 same day as drafting; no slice started; the brief's Rulings section is the
 record)
