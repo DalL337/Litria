@@ -9,8 +9,8 @@ import {
  *
  * Priority waterfall:
  *   1. dirty (unsaved changes)    → 'blue'
- *   2. errors from LSP            → 'red'
- *   3. warnings from LSP          → 'amber'
+ *   2. diagnostic errors          → 'red'
+ *   3. diagnostic warnings        → 'amber'
  *   4. file is empty (no content) → 'empty'
  *   5. clean                      → 'green'
  *
@@ -18,6 +18,9 @@ import {
  * @param {boolean} isDirty - Whether the piece has unsaved changes
  * @param {string|null} projectRoot - Absolute project root path
  * @returns {'blue'|'red'|'amber'|'green'|'empty'}
+ *
+ * Corrected 2026-09-15 (ADR-027): diagnostics include LSP results and
+ * Monaco's built-in marker feed.
  */
 export function computeNodeHealth(piece, isDirty, projectRoot) {
   if (isDirty) return 'blue';
