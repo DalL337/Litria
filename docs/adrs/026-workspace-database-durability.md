@@ -4,7 +4,7 @@
 
 Implemented (2026-09-15 — decision 3's frontend half (read-only pill,
 rate-limited write-failure notices, persistence skip) delivered on
-`feat/read-only-workspace-pill` under the two owner rulings recorded in the
+`feat/read-only-workspace-pill` (PR #37) under the two owner rulings recorded in the
 brief §4; the decisions themselves still await formal owner acceptance)
 
 Implemented on branch (2026-09-14 — decisions 1, 2, 4–8 and the backend

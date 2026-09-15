@@ -2,7 +2,7 @@
 
 **Status:** ALL SLICES IMPLEMENTED. Slices 1, 2, 3 and 5 plus the backend
 half of slice 4 merged 2026-09-14 in PR #36; slice 4's frontend delivered
-2026-09-15 on `feat/read-only-workspace-pill` under the two owner rulings in
+2026-09-15 on `feat/read-only-workspace-pill`, PR #37, under the two owner rulings in
 §4 (see *Delivery notes* below). Drafted 2026-09-14 from the
 audit `docs/audits/sqlite-schema-2026-09-14.md`; owner directed "deal with
 the fixes first, then stop." Companion ADR:
