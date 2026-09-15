@@ -1,0 +1,127 @@
+/* ===================================
+   Persistence pill (ADR-026 decision 3, slice 4)
+   Top-center of the canvas: a persistent read-only pill and/or the latest
+   rate-limited write-failure notice. Pill tokens per ui-governance §4.3;
+   contextual semantic colors (warning / error) from the same section.
+   =================================== */
+
+.persistence-pill-stack {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 41; /* above the HUD (40), below drawers/menus and the terminal pills (105) */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: min(520px, calc(100% - 32px));
+  pointer-events: none;
+}
+
+/* Canvas drags pass through overlays (same rule as HUD/minimap/status bar). */
+.app-dragging .persistence-pill-stack {
+  visibility: hidden;
+}
+
+.persistence-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 5px 10px 5px 12px;
+  border-radius: var(--cm-pill-radius);
+  background: var(--cm-pill-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--cm-pill-border);
+  color: var(--cm-pill-color);
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: auto;
+  animation: persistence-pill-in 0.2s ease-out;
+}
+
+.persistence-pill-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px 0 currentColor;
+}
+
+.persistence-pill-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A failure notice may carry the backend's recovery sentence (db.corrupt):
+   it wraps instead of hiding the one line the user needs. */
+.persistence-pill-text--wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Suppressed-repeat counter sits outside the text so truncation never eats it. */
+.persistence-pill-count {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--cm-pill-radius);
+  border: 1px solid currentColor;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* Warning semantic: the workspace is viewable, nothing is written. */
+.persistence-pill--read-only {
+  border-color: rgba(253, 200, 104, 0.45);
+  color: #ffc107;
+}
+
+/* Error semantic: a write just failed. */
+.persistence-pill--notice {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #f87171;
+}
+
+.persistence-pill-dismiss {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  border-radius: var(--cm-pill-radius);
+  color: inherit;
+  opacity: 0.7;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: opacity var(--cm-transition-fast);
+}
+
+.persistence-pill-dismiss:hover,
+.persistence-pill-dismiss:focus-visible {
+  opacity: 1;
+  outline: none;
+}
+
+@keyframes persistence-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .persistence-pill {
+    animation: none;
+  }
+}

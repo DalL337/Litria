@@ -65,6 +65,10 @@ const SHELL_COMPOSITION_MANIFEST = new Set([
   // Rule-2: session-scoped effects (persistence, LSP activation, teardown)
   // that bind domains to the project lifecycle.
   './project/useProjectPersistence',
+  // Read-only pill + write-failure notices (ADR-026 decision 3) — binds the
+  // adapter's write-failure observer to the project lifecycle; pure state in
+  // project/persistenceNotices.js (node-tested).
+  './project/usePersistenceNotices',
   './terminal/useTerminalLifecycle',
   './app/usePythonLspLifecycle',
   // Python first-open offers (ADR-020 Slice 4) — per-open lifecycle hook,

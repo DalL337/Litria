@@ -51,6 +51,8 @@ import { getRandomPieceColor } from './utils/pieceColors';
 import { normalizePath, getBasename, getDirname, toFolderSegment, isFiniteNumber } from './utils/path';
 import { createProjectDomain } from './project/projectDomain';
 import { useProjectPersistence } from './project/useProjectPersistence';
+import { usePersistenceNotices } from './project/usePersistenceNotices';
+import PersistencePill from './components/PersistencePill';
 import { createTerminalDomain } from './terminal/terminalDomain';
 import { createPillDomain } from './terminal/pillDomain';
 import { createBuildLogDomain } from './app/buildLogDomain';
@@ -150,6 +152,7 @@ import './styles/new-project-wizard.css';
 import './styles/status-bar.css';
 import './styles/search.css';
 import './styles/hud.css';
+import './styles/persistence-pill.css';
 
 function App() {
   /* ================================
@@ -434,6 +437,8 @@ function App() {
     writeProjectFile,
     showToast
   });
+  // Read-only pill + rate-limited write-failure notices (ADR-026 decision 3).
+  const persistenceNotices = usePersistenceNotices({ projectInstance });
 
   const { persistConnectionSides } = useProjectPersistence({
     projectInstance,
@@ -1649,6 +1654,11 @@ function App() {
           onFitContent={handleFitContent}
           resetZoom={canvasHud.resetZoom}
           viewportScale={canvasHud.viewportScale}
+        />
+        <PersistencePill
+          readOnly={persistenceNotices.readOnly}
+          notice={persistenceNotices.notice}
+          onDismissNotice={persistenceNotices.dismissNotice}
         />
         {isMinimapVisible && (
           <Minimap

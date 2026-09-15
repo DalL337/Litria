@@ -2,12 +2,15 @@
 
 ## Status
 
+Implemented (2026-09-15 — decision 3's frontend half (read-only pill,
+rate-limited write-failure notices, persistence skip) delivered on
+`feat/read-only-workspace-pill` (PR #37) under the two owner rulings recorded in the
+brief §4; the decisions themselves still await formal owner acceptance)
+
 Implemented on branch (2026-09-14 — decisions 1, 2, 4–8 and the backend
 half of 3 (`readOnly` probe and field) delivered on
-`fix/adr-026-workspace-db-durability`, PR #36; the read-only pill and persistence
-notices of decision 3 wait on the two owner rulings in the brief; decision 6
-carries an erratum found during implementation. The decisions themselves
-still await owner acceptance)
+`fix/adr-026-workspace-db-durability`, merged as PR #36; decision 6
+carries an erratum found during implementation)
 
 Proposed (2026-09-14 — drafted at owner direction from the SQLite audit of
 the same day; owner accepted the audit's ordering "fix first, then the

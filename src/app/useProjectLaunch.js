@@ -233,6 +233,9 @@ export function useProjectLaunch({
       createdAt: projectState.project.createdAt || new Date().toISOString(),
       updatedAt: projectState.project.updatedAt || new Date().toISOString(),
       workspaceStyle: ws,
+      // ADR-026 decision 3: probed by the Rust adapter at open; a fresh
+      // bootstrap is writable by construction, so this is normally false.
+      readOnly: projectState.readOnly === true,
       _dbState: projectState
     };
     setProjectInstance(instance);
@@ -335,6 +338,9 @@ export function useProjectLaunch({
       createdAt: projectState.project.createdAt || new Date().toISOString(),
       updatedAt: projectState.project.updatedAt || new Date().toISOString(),
       workspaceStyle: workspaceStyleFromEditorState(projectState.editorState),
+      // ADR-026 decision 3: true when workspace.db opened read-only; the
+      // canvas shows the pill and persistence skips its writes.
+      readOnly: projectState.readOnly === true,
       _dbState: projectState
     });
   }, [

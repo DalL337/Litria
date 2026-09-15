@@ -1,9 +1,9 @@
 # Brief — Workspace database durability fixes (SQLite audit remediation)
 
-**Status:** Slices 1, 2, 3 and 5 implemented 2026-09-14 on branch
-`fix/adr-026-workspace-db-durability`, PR #36 (see *Delivery notes* below), plus
-the backend half of slice 4 (`readOnly` on `ProjectState`). Slice 4's
-frontend waits on the two owner rulings in §4. Drafted 2026-09-14 from the
+**Status:** ALL SLICES IMPLEMENTED. Slices 1, 2, 3 and 5 plus the backend
+half of slice 4 merged 2026-09-14 in PR #36; slice 4's frontend delivered
+2026-09-15 on `feat/read-only-workspace-pill`, PR #37, under the two owner rulings in
+§4 (see *Delivery notes* below). Drafted 2026-09-14 from the
 audit `docs/audits/sqlite-schema-2026-09-14.md`; owner directed "deal with
 the fixes first, then stop." Companion ADR:
 `docs/adrs/026-workspace-database-durability.md` (decisions only; this brief
@@ -230,6 +230,42 @@ can key on codes.
   `gitignore_appended_once_when_present`, `open_returning_project_reports_writable`.
   On-disk tests serialize on `db::serial_guard()` because they share the
   process-wide `PROJECT_DB` slot.
+
+### Slice 4 delivery (2026-09-15, branch `feat/read-only-workspace-pill`)
+
+- **One chokepoint instead of five patched sites.** Every persistence write
+  already passes through `invokeDb` in `src/project/dbStorage.js`, so the
+  adapter gained a write-failure observer (`onPersistenceWriteFailure`) that
+  fires for mutating commands only (`db_create_*`, `db_update_*`, `db_delete_*`,
+  `db_batch_*`, `db_add_*`, `db_remove_*`, `db_save_*`, `db_register_*`,
+  `db_pin_*`). The `.catch(() => {})` and `console.warn` sites in the Findings
+  table are untouched and remain the secondary trace; the notice is the
+  primary surface for all of them plus every piece/group command.
+- **Pure state, node-tested:** `src/project/persistenceNotices.js` owns the
+  10 s window (`reduceWriteFailure`: first failure shows; inside the window
+  the slot keeps its time, takes the latest message and counts suppressed
+  repeats; after it a fresh notice), expiry after the same window, dismiss,
+  clear on project switch, `canPersist(instance)`, and the ruled pill copy.
+  A `db.read_only` failure on a read-only instance is dropped (the pill
+  already says it); any other code still notices.
+  Tests: `test/domains/persistenceNotices.test.mjs` (11).
+- **Hook + component:** `src/project/usePersistenceNotices.js` binds the
+  observer to the project lifecycle; `src/components/PersistencePill.jsx`
+  (+ `src/styles/persistence-pill.css`) renders top-center of the canvas at
+  z 41 — above the HUD, below the terminal pills — independent of the
+  draggable HUD's position. Warning semantic for read-only, error semantic
+  for notices, `--cm-pill-*` tokens, hand-rolled BEM; both files added to
+  the protected-zone guard's pill zone. Notice text wraps so a `db.corrupt`
+  recovery sentence is never ellipsized. Screenshot-verified at 1× and 3×
+  (implementation-policy Rule 6).
+- **Read-only skip:** `useProjectLaunch` copies `readOnly` onto the instance;
+  `useProjectPersistence` gates its four write paths (viewport, piece
+  positions, editor state, connection sides) on `canPersist`. Hydration and
+  every gesture are untouched; zoom and pan are never gated (ruling 2).
+- Shell: `App.jsx` composes the hook and the pill; the composition manifest
+  gained `./project/usePersistenceNotices` with its rationale.
+- Verification: six guards + Vite build (`npm run check`), 1113 JS domain
+  tests; Rust untouched.
 
 ## Verification against the audit
 
