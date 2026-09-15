@@ -11,8 +11,8 @@ import { buildPiecesByFolder, deriveGroupPieceIds } from '../utils/groupFolders.
 import {
   diffPositions,
   mergeIntoPending,
-  drainPending,
-  computeFlushDelay
+  computeFlushDelay,
+  flushPositionOutbox
 } from './positionOutbox.js';
 // ADR-026 decision 3: a read-only workspace hydrates and navigates normally
 // but every write below is skipped (canPersist), so no failure is generated
@@ -422,19 +422,81 @@ export function useProjectPersistence({
   // already advanced, and the move was unrecoverable: pieces reverted to
   // stale DB positions on reopen (owner repro 2026-08-02; see
   // src/project/positionOutbox.js). Churn now only delays the flush — capped
-  // by POSITION_FLUSH_MAX_WAIT_MS — and only a drain empties the box.
+  // by POSITION_FLUSH_MAX_WAIT_MS. A failed drain is requeued with newer
+  // positions winning and retried with capped exponential backoff.
   const lastPositionsRef = useRef(new Map());
   const pendingMovesRef = useRef(new Map());
   const firstPendingAtRef = useRef(null);
+  const positionRetryAttemptRef = useRef(0);
+  const positionRetryTimerRef = useRef(null);
+  const positionFlushInFlightRef = useRef(null);
+  const flushPendingMovesRef = useRef(null);
 
-  const flushPendingMoves = useCallback(() => {
-    const moves = drainPending(pendingMovesRef.current);
+  const flushPendingMoves = useCallback((options = {}) => {
+    const allowRetry = options?.allowRetry !== false;
+
+    if (!allowRetry && positionRetryTimerRef.current !== null) {
+      window.clearTimeout(positionRetryTimerRef.current);
+      positionRetryTimerRef.current = null;
+    }
+    if (allowRetry && positionRetryTimerRef.current !== null) {
+      return Promise.resolve(false);
+    }
+
+    // Serialize writes. Moves detected during an in-flight batch stay pending;
+    // after success they flush immediately, and after failure they ride the
+    // scheduled retry so backoff cannot be bypassed by render churn.
+    if (positionFlushInFlightRef.current) {
+      return positionFlushInFlightRef.current.then((saved) => {
+        if (!allowRetry && pendingMovesRef.current.size > 0) {
+          return flushPendingMovesRef.current?.({ allowRetry: false }) ?? false;
+        }
+        return saved;
+      });
+    }
+
     firstPendingAtRef.current = null;
-    if (moves.length === 0) return;
-    dbBatchMovePieces(moves).catch((error) => {
-      console.warn('[persistence] piece position write failed:', error);
+    const scheduleRetry = (delay) => {
+      if (positionRetryTimerRef.current !== null) {
+        window.clearTimeout(positionRetryTimerRef.current);
+      }
+      positionRetryTimerRef.current = window.setTimeout(() => {
+        positionRetryTimerRef.current = null;
+        void flushPendingMovesRef.current?.();
+      }, delay);
+    };
+
+    let run;
+    run = flushPositionOutbox({
+      pending: pendingMovesRef.current,
+      writeMoves: dbBatchMovePieces,
+      attempt: positionRetryAttemptRef.current,
+      scheduleRetry: allowRetry ? scheduleRetry : null,
+      retainOnFailure: allowRetry
+    }).then((result) => {
+      positionRetryAttemptRef.current = allowRetry ? result.attempt : 0;
+      if (result.error) {
+        console.warn('[persistence] piece position write failed:', result.error);
+      }
+      if (
+        result.saved
+        && allowRetry
+        && pendingMovesRef.current.size > 0
+        && positionRetryTimerRef.current === null
+      ) {
+        scheduleRetry(0);
+      }
+      return result.saved;
+    }).finally(() => {
+      if (positionFlushInFlightRef.current === run) {
+        positionFlushInFlightRef.current = null;
+      }
     });
+
+    positionFlushInFlightRef.current = run;
+    return run;
   }, []);
+  flushPendingMovesRef.current = flushPendingMoves;
 
   useEffect(() => {
     if (!canPersist(projectInstance) || !hasLoadedPiecesRef.current) return;
@@ -454,6 +516,7 @@ export function useProjectPersistence({
       mergeIntoPending(pendingMovesRef.current, moves);
     }
     if (pendingMovesRef.current.size === 0) return;
+    if (positionRetryTimerRef.current !== null) return;
 
     const delay = computeFlushDelay(firstPendingAtRef.current, Date.now());
     const timer = window.setTimeout(flushPendingMoves, delay);
@@ -467,7 +530,8 @@ export function useProjectPersistence({
   // entries (piece ids are per-project autoincrement and overlap).
   useEffect(() => {
     return () => {
-      flushPendingMoves();
+      void flushPendingMoves({ allowRetry: false });
+      positionRetryAttemptRef.current = 0;
       lastPositionsRef.current = new Map();
     };
   }, [projectInstance?.instanceId, flushPendingMoves]);
@@ -477,8 +541,11 @@ export function useProjectPersistence({
   // forget — the invoke races shutdown, which is strictly better than the
   // guaranteed loss without it.
   useEffect(() => {
-    window.addEventListener('beforeunload', flushPendingMoves);
-    return () => window.removeEventListener('beforeunload', flushPendingMoves);
+    const flushFinalPositionBatch = () => {
+      void flushPendingMoves({ allowRetry: false });
+    };
+    window.addEventListener('beforeunload', flushFinalPositionBatch);
+    return () => window.removeEventListener('beforeunload', flushFinalPositionBatch);
   }, [flushPendingMoves]);
 
   // Close tabs for deleted pieces

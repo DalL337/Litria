@@ -5,8 +5,13 @@ import {
   mergeIntoPending,
   drainPending,
   computeFlushDelay,
+  computeRetryDelay,
+  flushPositionOutbox,
+  requeueFailed,
   POSITION_FLUSH_DEBOUNCE_MS,
-  POSITION_FLUSH_MAX_WAIT_MS
+  POSITION_FLUSH_MAX_WAIT_MS,
+  POSITION_RETRY_BASE_MS,
+  POSITION_RETRY_MAX_MS
 } from '../../src/project/positionOutbox.js';
 
 // ---------------------------------------------------------------------------
@@ -74,6 +79,24 @@ test('drain of an empty box is a no-op payload', () => {
   assert.deepEqual(drainPending(new Map()), []);
 });
 
+test('failed drained moves are restored to the outbox', () => {
+  const pending = new Map();
+  requeueFailed(pending, [{ id: 1, x: 45, y: 82 }, { id: 2, x: 700, y: 300 }]);
+  assert.deepEqual(drainPending(pending), [
+    { id: 1, x: 45, y: 82 },
+    { id: 2, x: 700, y: 300 }
+  ]);
+});
+
+test('a newer pending move wins over the failed older position', () => {
+  const pending = new Map([[1, { x: 200, y: 140 }]]);
+  requeueFailed(pending, [{ id: 1, x: 45, y: 82 }, { id: 2, x: 700, y: 300 }]);
+  assert.deepEqual(drainPending(pending), [
+    { id: 1, x: 200, y: 140 },
+    { id: 2, x: 700, y: 300 }
+  ]);
+});
+
 // ── The regression scenario, end to end at the pure layer ──────────────────
 test('churn between detection and flush cannot lose the move', () => {
   // Run A: drag-end commits main.py's move — detected, enqueued.
@@ -108,4 +131,52 @@ test('flush delay is the debounce while young, shrinking to zero at max-wait', (
   assert.equal(computeFlushDelay(t0, nearCap), 100, 'remaining budget beats the debounce');
   const pastCap = t0 + POSITION_FLUSH_MAX_WAIT_MS + 500;
   assert.equal(computeFlushDelay(t0, pastCap), 0, 'never negative, fires immediately');
+});
+
+test('retry delay doubles from two seconds and caps at thirty seconds', () => {
+  assert.equal(computeRetryDelay(0), POSITION_RETRY_BASE_MS);
+  assert.equal(computeRetryDelay(1), 4000);
+  assert.equal(computeRetryDelay(2), 8000);
+  assert.equal(computeRetryDelay(4), POSITION_RETRY_MAX_MS);
+  assert.equal(computeRetryDelay(99), POSITION_RETRY_MAX_MS);
+});
+
+test('flush retries the original moves after one rejection and resets on success', async () => {
+  const pending = new Map([[1, { x: 45, y: 82 }]]);
+  const calls = [];
+  const delays = [];
+  let rejectOnce = true;
+  const writeMoves = async (moves) => {
+    calls.push(moves);
+    if (rejectOnce) {
+      rejectOnce = false;
+      throw new Error('database busy');
+    }
+  };
+
+  const failed = await flushPositionOutbox({
+    pending,
+    writeMoves,
+    attempt: 0,
+    scheduleRetry: (delay) => delays.push(delay)
+  });
+  assert.equal(failed.saved, false);
+  assert.equal(failed.attempt, 1);
+  assert.deepEqual(delays, [POSITION_RETRY_BASE_MS]);
+  assert.deepEqual([...pending.entries()], [[1, { x: 45, y: 82 }]]);
+
+  const succeeded = await flushPositionOutbox({
+    pending,
+    writeMoves,
+    attempt: failed.attempt,
+    scheduleRetry: (delay) => delays.push(delay)
+  });
+  assert.equal(succeeded.saved, true);
+  assert.equal(succeeded.attempt, 0);
+  assert.equal(pending.size, 0);
+  assert.deepEqual(calls, [
+    [{ id: 1, x: 45, y: 82 }],
+    [{ id: 1, x: 45, y: 82 }]
+  ]);
+  assert.deepEqual(delays, [POSITION_RETRY_BASE_MS]);
 });
