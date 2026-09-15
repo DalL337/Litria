@@ -14,6 +14,10 @@ import {
   drainPending,
   computeFlushDelay
 } from './positionOutbox.js';
+// ADR-026 decision 3: a read-only workspace hydrates and navigates normally
+// but every write below is skipped (canPersist), so no failure is generated
+// for the pill to report twice.
+import { canPersist } from './persistenceNotices.js';
 
 /**
  * useProjectPersistence — hydrates canvas state from the SQLite workspace DB
@@ -360,8 +364,7 @@ export function useProjectPersistence({
 
   // ─── Debounced viewport persistence ──────────────────────────────────────
   useEffect(() => {
-    if (!projectInstance?.rootPath || !projectInstance?.instanceId) return;
-    if (projectInstance.manifestPath === null) return;
+    if (!canPersist(projectInstance)) return;
     if (!hasLoadedPiecesRef.current) return;
 
     if (viewportTimerRef.current) {
@@ -385,6 +388,7 @@ export function useProjectPersistence({
     projectInstance?.instanceId,
     projectInstance?.rootPath,
     projectInstance?.manifestPath,
+    projectInstance?.readOnly,
     viewportScale,
     viewportOffsetX,
     viewportOffsetY
@@ -413,8 +417,7 @@ export function useProjectPersistence({
   }, []);
 
   useEffect(() => {
-    if (!projectInstance?.rootPath || !hasLoadedPiecesRef.current) return;
-    if (projectInstance.manifestPath === null) return;
+    if (!canPersist(projectInstance) || !hasLoadedPiecesRef.current) return;
 
     // First gated run after hydration (or after a project switch reset): the
     // last-seen map is empty, so every piece diffs as "moved" — but those are
@@ -436,7 +439,7 @@ export function useProjectPersistence({
     const timer = window.setTimeout(flushPendingMoves, delay);
     // Cleanup cancels only the TIMER; the pending outbox rides to the next run.
     return () => clearTimeout(timer);
-  }, [pieces, projectInstance?.instanceId, projectInstance?.rootPath, projectInstance?.manifestPath, flushPendingMoves]);
+  }, [pieces, projectInstance?.instanceId, projectInstance?.rootPath, projectInstance?.manifestPath, projectInstance?.readOnly, flushPendingMoves]);
 
   // Flush on project switch/unmount (best-effort — the workspace DB is still
   // the outgoing project's at cleanup time) and reset the last-seen map so
@@ -469,8 +472,7 @@ export function useProjectPersistence({
 
   // ─── Debounced editor state persistence ──────────────────────────────────
   useEffect(() => {
-    if (!projectInstance?.rootPath || !projectInstance?.instanceId) return;
-    if (projectInstance.manifestPath === null) return;
+    if (!canPersist(projectInstance)) return;
     if (snapshotTimerRef.current) {
       clearTimeout(snapshotTimerRef.current);
     }
@@ -506,7 +508,8 @@ export function useProjectPersistence({
     paneSplitRatio,
     projectInstance?.instanceId,
     projectInstance?.rootPath,
-    projectInstance?.manifestPath
+    projectInstance?.manifestPath,
+    projectInstance?.readOnly
   ]);
 
   // Persist a manually-drawn connection's anchor sides so a reopen restores the
@@ -517,7 +520,7 @@ export function useProjectPersistence({
   // so a pair is only drawn — and persisted — once (no duplicate rows).
   const persistConnectionSides = useCallback((connection) => {
     if (!connection) return;
-    if (!projectInstance?.rootPath || projectInstance?.manifestPath === null) return;
+    if (!canPersist(projectInstance)) return;
     const { sourceId, targetId, sourceSide, targetSide, type } = connection;
     if (sourceId == null || targetId == null) return;
     Promise.resolve(
@@ -526,7 +529,7 @@ export function useProjectPersistence({
       // eslint-disable-next-line no-console
       console.warn('[persistence] persist connection sides failed:', e);
     });
-  }, [projectInstance?.rootPath, projectInstance?.manifestPath]);
+  }, [projectInstance]);
 
   return { persistConnectionSides };
 }

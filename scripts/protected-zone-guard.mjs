@@ -42,6 +42,8 @@ const PROTECTED_FILES = new Set([
   // Pill notifications
   'src/styles/pill-notification.css',
   'src/components/PillNotification.jsx',
+  'src/styles/persistence-pill.css',
+  'src/components/PersistencePill.jsx',
 
   // Status bar
   'src/styles/status-bar.css',
