@@ -13,6 +13,10 @@ import {
   assemblePrimaryArgv,
   availability,
   getBackendOptions,
+  deriveScaffoldSteps,
+  describeStep,
+  addonAvailability,
+  backendAvailability,
 } from './recipeRegistry.js';
 import {
   isPythonWrapper,
@@ -51,16 +55,15 @@ function blankPreview(state) {
  * runner passes, flags styled as keys and values as values. Nothing appears
  * here that does not run, and nothing runs that does not appear here (F14).
  */
-function npmPreview({ managerId, argv, addons, backend }) {
+function npmPreview({ managerId, argv, steps }) {
   const parts = [{ type: 'key', text: managerId }];
   for (const token of argv) {
     parts.push({ type: token.startsWith('-') ? 'key' : 'val', text: ` ${token}` });
   }
-  if (backend && backend !== 'none') {
-    parts.push({ type: 'comment', text: ` # +backend: ${backend}` });
-  }
-  for (const addon of addons) {
-    parts.push({ type: 'comment', text: ` # +${addon}` });
+  // Every post-scaffold step, one line each (ADR-028 §4): what installs,
+  // what is written, what is patched — nothing runs that is not listed.
+  for (const step of steps) {
+    parts.push({ type: 'comment', text: `\n# ${describeStep(step, managerId)}` });
   }
   return parts;
 }
@@ -135,17 +138,34 @@ export function buildScaffoldPlan(state, probe, env = {}) {
 
   const argv = assemblePrimaryArgv({ route, managerId, projectName: displayName(state) });
   const backend = getBackendOptions(wrapper).length > 0 ? (state.backend || 'none') : 'none';
-  const preview = npmPreview({ managerId, argv, addons: state.addons, backend });
-  if (!avail.selectable) {
-    preview.push({ type: 'comment', text: `\n# not offered: ${avail.reason}` });
+  const stepArgs = { wrapper, framework: state.framework, language: state.lang, manager: managerId, addons: state.addons, backend, projectName: state.name.trim() };
+  const steps = deriveScaffoldSteps(stepArgs);
+  const preview = npmPreview({ managerId, argv, steps });
+  // Add-ons and the backend need their own evidence for this combination
+  // (ADR-028 §10); the first one without it names the reason.
+  let combined = avail;
+  if (combined.selectable) {
+    const key = { wrapper, framework: state.framework, language: state.lang, manager: managerId, platform };
+    for (const addon of state.addons) {
+      const a = addonAvailability({ ...key, addon });
+      if (!a.selectable) { combined = { selectable: false, status: 'unverified', reason: a.reason }; break; }
+    }
+    if (combined.selectable) {
+      const b = backendAvailability({ ...key, backend });
+      if (!b.selectable) combined = { selectable: false, status: 'unverified', reason: b.reason };
+    }
+  }
+  if (!combined.selectable) {
+    preview.push({ type: 'comment', text: `\n# not offered: ${combined.reason}` });
   }
 
   return {
     kind: 'npm',
     preview,
-    availability: avail,
+    availability: combined,
     route,
     argv,
+    steps,
     payload: {
       projectName: state.name.trim(),
       projectLocation: state.folder.trim(),
@@ -169,6 +189,9 @@ export function buildScaffoldPlan(state, probe, env = {}) {
         // derives with the validated name and compares.
         argv: assemblePrimaryArgv({ route, managerId, projectName: state.name.trim() }),
         platform,
+        // Post-scaffold steps, verbatim (ADR-028 §4): the runner derives the
+        // same list from the registry and refuses a payload that differs.
+        steps,
       },
     },
   };

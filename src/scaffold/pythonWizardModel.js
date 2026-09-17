@@ -76,23 +76,36 @@ export function derivePythonFloor(version) {
   return match ? `${match[1]}.${match[2]}` : null;
 }
 
-/** Display file list per archetype — mirrors the Slice 3 blueprint. */
-export function pythonBlueprintFiles(archetypeId, moduleName) {
-  const common = ['pyproject.toml', '.python-version', '.gitignore', 'README.md'];
+/**
+ * Display file list per archetype — mirrors python_scaffold.rs blueprint_files
+ * (ADR-028 §4, F12): `.python-version` only when a valid requires-python
+ * floor exists (the runner writes it only then), and a pytest smoke test for
+ * every archetype that declares pytest (F11), not only Library.
+ */
+export function pythonBlueprintFiles(archetypeId, moduleName, { addons = [], floor = null } = {}) {
+  const files = ['pyproject.toml'];
+  if (isValidPythonFloor(floor)) files.push('.python-version');
+  files.push('.gitignore', 'README.md');
+  const wantsPytest = archetypeId === 'py-lib' || addons.includes('pytest');
   switch (archetypeId) {
     case 'py-lib':
-      return [
-        ...common,
-        `src/${moduleName}/__init__.py`,
-        `src/${moduleName}/py.typed`,
-        `tests/test_${moduleName}.py`,
-      ];
+      files.push(`src/${moduleName}/__init__.py`, `src/${moduleName}/py.typed`, `tests/test_${moduleName}.py`);
+      break;
     case 'py-cli':
     case 'py-fastapi':
     case 'py-script':
     default:
-      return [...common, 'main.py'];
+      files.push('main.py');
+      if (wantsPytest) files.push('tests/test_main.py');
   }
+  return files;
+}
+
+/** Same rule as python_scaffold.rs `is_valid_floor`: digits and dots, no
+ *  leading dot, no trailing dot, no empty segment. */
+export function isValidPythonFloor(floor) {
+  if (typeof floor !== 'string' || floor === '') return false;
+  return /^[0-9]+(\.[0-9]+)*$/.test(floor);
 }
 
 /** Declared (never installed at creation) dependencies per archetype/addons. */
@@ -131,7 +144,7 @@ function shortInterpreterLabel(interpreter) {
 export function buildPythonPlanPreview(state, probe) {
   if (!state.framework) return null;
   const { moduleName } = derivePythonNames(state.name);
-  const files = pythonBlueprintFiles(state.framework, moduleName);
+  const files = pythonBlueprintFiles(state.framework, moduleName, { addons: state.addons, floor: state.pyRequiresFloor?.trim() });
   const parts = [
     { type: 'key', text: 'write' },
     { type: 'val', text: ` ${files.join('  ')}` },
@@ -211,7 +224,7 @@ export function buildPythonReviewRows(state, probe) {
     ['Interpreter', interpreterLabel],
     ['Environment', envLabel],
     ['Tools', toolsLabel],
-    ['Files', pythonBlueprintFiles(state.framework, moduleName).join(', ')],
+    ['Files', pythonBlueprintFiles(state.framework, moduleName, { addons: state.addons, floor: state.pyRequiresFloor?.trim() }).join(', ')],
   ];
   if (state.framework === 'py-lib' || state.framework === 'py-cli') {
     rows.splice(3, 0, ['Package · Module', `${distName} · ${moduleName}`]);

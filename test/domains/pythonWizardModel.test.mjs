@@ -6,6 +6,7 @@ import {
   derivePythonNames,
   derivePythonFloor,
   pythonBlueprintFiles,
+  isValidPythonFloor,
   pythonDeclaredDeps,
   resolvePythonEngine,
   buildPythonPlanPreview,
@@ -79,11 +80,30 @@ test('blueprint files: flat for script/cli/fastapi, src layout for library', () 
   assert.ok(lib.includes('tests/test_my_app.py'));
   assert.ok(!lib.includes('main.py'));
   for (const id of ['py-script', 'py-cli', 'py-lib', 'py-fastapi']) {
-    const files = pythonBlueprintFiles(id, 'm');
+    const files = pythonBlueprintFiles(id, 'm', { floor: '3.13' });
     for (const f of ['pyproject.toml', '.python-version', '.gitignore', 'README.md']) {
       assert.ok(files.includes(f), `${id} missing ${f}`);
     }
   }
+});
+
+test('blueprint files: .python-version only with a valid floor — the runner writes it only then (F12)', () => {
+  assert.ok(!pythonBlueprintFiles('py-script', 'm').includes('.python-version'));
+  assert.ok(!pythonBlueprintFiles('py-script', 'm', { floor: '' }).includes('.python-version'));
+  assert.ok(!pythonBlueprintFiles('py-script', 'm', { floor: '3.' }).includes('.python-version'));
+  assert.ok(!pythonBlueprintFiles('py-script', 'm', { floor: 'abc' }).includes('.python-version'));
+  assert.ok(pythonBlueprintFiles('py-script', 'm', { floor: '3.13' }).includes('.python-version'));
+  assert.equal(isValidPythonFloor('3.13'), true);
+  assert.equal(isValidPythonFloor('3..13'), false);
+  assert.equal(isValidPythonFloor('.13'), false);
+});
+
+test('blueprint files: pytest add-on ships a smoke test for every archetype, not only Library (F11)', () => {
+  for (const id of ['py-script', 'py-cli', 'py-fastapi']) {
+    assert.ok(!pythonBlueprintFiles(id, 'm').includes('tests/test_main.py'), `${id} without pytest`);
+    assert.ok(pythonBlueprintFiles(id, 'm', { addons: ['pytest'] }).includes('tests/test_main.py'), `${id} with pytest`);
+  }
+  assert.ok(pythonBlueprintFiles('py-lib', 'm').includes('tests/test_m.py'), 'library is pytest-ready by definition');
 });
 
 test('declared deps: fastapi brings runtime deps, pytest is a dev dep, script has none', () => {

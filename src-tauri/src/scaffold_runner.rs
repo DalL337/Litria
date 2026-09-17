@@ -25,8 +25,8 @@ use tauri::AppHandle;
 use crate::bundled_runtime;
 use crate::errors::{CommandError, CommandResult};
 use crate::scaffold_recipes::{
-    addon_cli_spec, coverage_status, current_platform, derive_primary, is_selectable_status,
-    registry, shadcn_cli_for, DerivedPrimary,
+    coverage_status, current_platform, derive_primary, derive_steps, is_selectable_status,
+    registry, unverified_addon, DerivedPrimary,
 };
 use crate::scaffold_types::*;
 
@@ -162,19 +162,39 @@ pub(crate) fn run_scaffold(
         env: Vec::new(),
     });
 
-    // Post-scaffold steps (framework install for Electron, addons, backend).
-    steps.extend(build_post_steps(&config, &pm, &project_dir));
+    // Post-scaffold steps (ADR-028 §4): the validated plan's steps — Electron
+    // framework wiring, add-ons in prerequisite order, backend — each either
+    // a manager command or an in-process file operation.
+    let mut post: Vec<PostStep> = Vec::new();
+    for step in &config.plan.steps {
+        post.push(post_step(step, &pm, &project_dir));
+    }
+    let mut command_steps: Vec<&mut ScaffoldStep> = post
+        .iter_mut()
+        .filter_map(|p| match &mut p.action {
+            PostAction::Command(s) => Some(s),
+            PostAction::File(_) => None,
+        })
+        .collect();
+    steps.extend(std::iter::empty());
 
     // ADR-021 §3: scripts-off by default on the npm path.
     apply_scripts_off(&mut steps, &config.manager);
+    apply_scripts_off_refs(&mut command_steps, &config.manager);
 
     // ---- Execute steps ----
 
-    let total = steps.len() as u32;
+    let total = (steps.len() + post.len()) as u32;
     let mut completed = Vec::new();
     let mut errors = Vec::new();
 
-    for (i, step) in steps.iter().enumerate() {
+    let mut all: Vec<PostStep> = steps
+        .into_iter()
+        .map(|s| PostStep { label: s.label.clone(), action: PostAction::Command(s) })
+        .collect();
+    all.extend(post);
+
+    for (i, step) in all.iter().enumerate() {
         let step_num = (i + 1) as u32;
 
         let _ = channel.send(ScaffoldEvent::StepStarted {
@@ -183,7 +203,16 @@ pub(crate) fn run_scaffold(
             total,
         });
 
-        match run_step_command(step, channel) {
+        let outcome = match &step.action {
+            PostAction::Command(cmd) => run_step_command(cmd, channel),
+            PostAction::File(op) => apply_file_step(&project_dir, op).map(|lines| {
+                for line in lines {
+                    let _ = channel.send(ScaffoldEvent::StepOutput { line });
+                }
+            }),
+        };
+
+        match outcome {
             Ok(()) => {
                 completed.push(step.label.clone());
                 let _ = channel.send(ScaffoldEvent::StepCompleted {
@@ -567,6 +596,25 @@ fn validate_plan(config: &ScaffoldConfig, name: &str) -> Result<DerivedPrimary, 
     if plan.platform != platform {
         return Err(mismatch("platform", plan.platform.clone(), platform.to_string()));
     }
+    // ADR-028 §4: every post-scaffold step the wizard previewed, verbatim.
+    let addons: Vec<String> = config.addons.iter().map(|a| a.id().to_string()).collect();
+    let steps = derive_steps(
+        config.wrapper.id(),
+        config.framework.id(),
+        config.language.id(),
+        config.manager.id(),
+        &addons,
+        config.backend.as_ref().map(|b| b.id()),
+        name,
+    )
+    .map_err(|e| CommandError::internal("scaffold.recipe_invalid", e))?;
+    if plan.steps != steps {
+        return Err(mismatch(
+            "steps",
+            format!("{} step(s)", plan.steps.len()),
+            format!("{} step(s) derived from the registry", steps.len()),
+        ));
+    }
     Ok(derived)
 }
 
@@ -583,6 +631,28 @@ fn enforce_coverage(config: &ScaffoldConfig) -> Result<(), CommandError> {
         platform,
     );
     if is_selectable_status(&status) {
+        let addons: Vec<String> = config.addons.iter().map(|a| a.id().to_string()).collect();
+        if let Some(missing) = unverified_addon(
+            config.wrapper.id(),
+            config.framework.id(),
+            config.language.id(),
+            config.manager.id(),
+            platform,
+            &addons,
+            config.backend.as_ref().map(|b| b.id()),
+        ) {
+            return Err(CommandError::conflict(
+                "scaffold.addon_unverified",
+                format!(
+                    "{missing} on {} + {} ({}) with {} on {platform} has no execution evidence yet \
+                     (ADR-028 §10) and is not offered.",
+                    config.wrapper.id(),
+                    config.framework.id(),
+                    config.language.id(),
+                    config.manager.id()
+                ),
+            ));
+        }
         return Ok(());
     }
     let label = format!(
@@ -663,14 +733,10 @@ const AGE_GATE_HOURS: i64 = 24;
 /// registry, which the JS suite holds to exact versions.
 fn specs_to_execute(config: &ScaffoldConfig, derived: &DerivedPrimary) -> Vec<(String, bool)> {
     let mut specs = vec![(derived.spec(), derived.route_kind == "initializer")];
-    let wants_shadcn = config
-        .addons
-        .iter()
-        .any(|a| matches!(a, ScaffoldAddon::ShadCN));
-    if wants_shadcn {
-        if let Some(pkg) = shadcn_cli_for(config.framework.id()) {
-            if let Some(spec) = addon_cli_spec(&pkg) {
-                specs.push((spec, false));
+    for step in &config.plan.steps {
+        if step.get("op").and_then(|v| v.as_str()) == Some("exec") {
+            if let Some(spec) = step.get("spec").and_then(|v| v.as_str()) {
+                specs.push((spec.to_string(), false));
             }
         }
     }
@@ -1059,185 +1125,307 @@ struct ScaffoldStep {
     env: Vec<(String, String)>,
 }
 
-fn build_post_steps(
-    config: &ScaffoldConfig,
-    pm: &ResolvedPM,
-    project_dir: &Path,
-) -> Vec<ScaffoldStep> {
-    let mut steps = Vec::new();
-
-    // Electron: framework is a post-scaffold install (Forge templates are
-    // bundler-only; the framework is added separately).
-    if matches!(config.wrapper, ScaffoldWrapper::Electron) {
-        if let Some(step) = build_electron_framework_step(&config.framework, pm, project_dir) {
-            steps.push(step);
-        }
-    }
-
-    // Addons.
-    for addon in &config.addons {
-        if let Some(step) = build_addon_step(addon, config, pm, project_dir) {
-            steps.push(step);
-        }
-    }
-
-    // Backend (Web Only wrapper).
-    if let Some(ref backend) = config.backend {
-        if let Some(step) = build_backend_step(backend, pm, project_dir) {
-            steps.push(step);
-        }
-    }
-
-    steps
+/// A post-scaffold step from the validated plan: a manager command
+/// (install / exec) or an in-process file operation (write / patch).
+struct PostStep {
+    label: String,
+    action: PostAction,
 }
 
-fn build_electron_framework_step(
-    framework: &ScaffoldFramework,
-    pm: &ResolvedPM,
-    project_dir: &Path,
-) -> Option<ScaffoldStep> {
-    let (deps, label) = match framework {
-        ScaffoldFramework::React => (
-            vec!["react", "react-dom", "@vitejs/plugin-react"],
-            "Installing React",
-        ),
-        ScaffoldFramework::Svelte => (
-            vec!["svelte", "@sveltejs/vite-plugin-svelte"],
-            "Installing Svelte",
-        ),
-        ScaffoldFramework::Vue => (vec!["vue", "@vitejs/plugin-vue"], "Installing Vue"),
-        ScaffoldFramework::Solid => (
-            vec!["solid-js", "vite-plugin-solid"],
-            "Installing Solid",
-        ),
-        // Angular + Electron is a complex setup — skip in MVP.
-        ScaffoldFramework::Angular => return None,
-    };
-
-    if deps.is_empty() {
-        return None;
-    }
-
-    Some(make_install_step(label, &deps, false, pm, project_dir))
+enum PostAction {
+    Command(ScaffoldStep),
+    File(serde_json::Value),
 }
 
-fn build_addon_step(
-    addon: &ScaffoldAddon,
-    config: &ScaffoldConfig,
-    pm: &ResolvedPM,
-    project_dir: &Path,
-) -> Option<ScaffoldStep> {
-    let framework = &config.framework;
-    match addon {
-        ScaffoldAddon::Tailwind => Some(make_install_step(
-            "Installing Tailwind CSS",
-            &["tailwindcss", "@tailwindcss/vite"],
-            true, // dev dependency
-            pm,
-            project_dir,
-        )),
-        ScaffoldAddon::ShadCN => {
-            // Each framework has its own shadcn variant with a dedicated CLI,
-            // pinned in the recipe registry. Absence there means the registry
-            // is incomplete, and skipping the step beats executing an
-            // unpinned CLI (ADR-021 §1).
-            let pkg = shadcn_cli_for(framework.id())?;
-            let init_pkg = addon_cli_spec(&pkg)?;
-            let label = match framework {
-                ScaffoldFramework::React => "Installing shadcn/ui",
-                ScaffoldFramework::Svelte => "Installing shadcn-svelte",
-                ScaffoldFramework::Vue => "Installing shadcn-vue",
-                _ => return None,
-            };
+fn step_str<'a>(step: &'a serde_json::Value, key: &str) -> &'a str {
+    step.get(key).and_then(|v| v.as_str()).unwrap_or("")
+}
+
+/// Turn one derived step (already validated against the registry) into an
+/// executable post step. Command steps run through the resolved manager
+/// with the same absolute-executable discipline as the primary step.
+fn post_step(step: &serde_json::Value, pm: &ResolvedPM, project_dir: &Path) -> PostStep {
+    let source = step_str(step, "source").to_string();
+    let op = step_str(step, "op");
+    match op {
+        "install" | "exec" => {
+            let argv: Vec<String> = step
+                .get("argv")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
             let mut args = pm.prefix_args.clone();
-            // Manager-specific "run a package binary" form: npm has no dlx
-            // (that is pnpm/yarn-berry vocabulary) — its equivalent is
-            // `exec --yes`. Yarn keeps dlx: correct on Yarn 2+; classic
-            // Yarn 1 has no equivalent and fails visibly in the step rather
-            // than silently skipping the selected addon.
-            match config.manager {
-                PackageManager::Npm => {
-                    args.extend([
-                        "exec".into(),
-                        "--yes".into(),
-                        "--".into(),
-                        init_pkg,
-                        "init".into(),
-                        "-y".into(),
-                    ]);
-                }
-                PackageManager::Pnpm | PackageManager::Yarn => {
-                    args.extend(["dlx".into(), init_pkg, "init".into(), "-y".into()]);
+            args.extend(argv.iter().cloned());
+            let label = if op == "install" {
+                format!("{source}: install {}", argv.iter().skip_while(|a| a.starts_with('-') || *a == "install" || *a == "add").cloned().collect::<Vec<_>>().join(" "))
+            } else {
+                format!("{source}: run {}", step_str(step, "spec"))
+            };
+            PostStep {
+                label,
+                action: PostAction::Command(ScaffoldStep {
+                    label: String::new(),
+                    executable: pm.executable.clone(),
+                    args,
+                    cwd: project_dir.to_path_buf(),
+                    env: Vec::new(),
+                }),
+            }
+        }
+        _ => {
+            let verb = match op {
+                "write" => "write",
+                "prepend" | "append" | "replace" | "insertBefore" => "patch",
+                "mergeJson" => "merge into",
+                "delete" => "remove",
+                other => other,
+            };
+            PostStep {
+                label: format!("{source}: {verb} {}", step_str(step, "path")),
+                action: PostAction::File(step.clone()),
+            }
+        }
+    }
+}
+
+/// A registry-relative path inside the project: never absolute, never
+/// climbing out. The registry is ours, but a rule enforced at the chokepoint
+/// costs nothing (security-policy Rule 4).
+fn project_file(project_dir: &Path, rel: &str) -> Result<PathBuf, String> {
+    let rel_path = Path::new(rel);
+    if rel.is_empty() || rel_path.is_absolute() {
+        return Err(format!("refusing path '{rel}': must be project-relative"));
+    }
+    if rel_path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_) | std::path::Component::RootDir))
+    {
+        return Err(format!("refusing path '{rel}': must stay inside the project"));
+    }
+    Ok(project_dir.join(rel_path))
+}
+
+/// Remove `//` and `/* */` comments (outside strings) and trailing commas
+/// before `}` / `]`, so JSONC config files parse as JSON.
+fn strip_jsonc(text: &str) -> String {
+    let bytes: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            out.push(c);
+            if c == '\\' && i + 1 < bytes.len() {
+                out.push(bytes[i + 1]);
+                i += 2;
+                continue;
+            }
+            if c == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == '/' {
+            while i < bytes.len() && bytes[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == '*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == '*' && bytes[i + 1] == '/') {
+                i += 1;
+            }
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    // Trailing commas: `,` followed only by whitespace then `}` or `]`.
+    let mut cleaned = String::with_capacity(out.len());
+    let chars: Vec<char> = out.chars().collect();
+    let mut j = 0;
+    let mut in_str = false;
+    while j < chars.len() {
+        let c = chars[j];
+        if in_str {
+            cleaned.push(c);
+            if c == '\\' && j + 1 < chars.len() {
+                cleaned.push(chars[j + 1]);
+                j += 2;
+                continue;
+            }
+            if c == '"' {
+                in_str = false;
+            }
+            j += 1;
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+        } else if c == ',' {
+            let mut k = j + 1;
+            while k < chars.len() && chars[k].is_whitespace() {
+                k += 1;
+            }
+            if k < chars.len() && (chars[k] == '}' || chars[k] == ']') {
+                j += 1;
+                continue;
+            }
+        }
+        cleaned.push(c);
+        j += 1;
+    }
+    cleaned
+}
+
+fn deep_merge(target: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (target, patch) {
+        (serde_json::Value::Object(t), serde_json::Value::Object(p)) => {
+            for (k, v) in p {
+                match t.get_mut(k) {
+                    Some(existing) if existing.is_object() && v.is_object() => deep_merge(existing, v),
+                    _ => {
+                        t.insert(k.clone(), v.clone());
+                    }
                 }
             }
-            Some(ScaffoldStep {
-                label: label.into(),
-                executable: pm.executable.clone(),
-                args,
-                cwd: project_dir.to_path_buf(),
-                env: Vec::new(),
-            })
         }
-        ScaffoldAddon::Router => {
-            // Each framework has its own router package.
-            let deps: &[&str] = match framework {
-                ScaffoldFramework::React => &["react-router-dom"],
-                ScaffoldFramework::Vue => &["vue-router"],
-                ScaffoldFramework::Solid => &["@solidjs/router"],
-                // Angular has built-in routing; Svelte uses SvelteKit routing.
-                _ => return None,
+        (t, p) => *t = p.clone(),
+    }
+}
+
+/// Execute one file operation from the plan. Returns trace lines. Every
+/// failure names the file and the reason; the caller records it as a
+/// non-fatal step failure (the primary scaffold already succeeded).
+fn apply_file_step(project_dir: &Path, step: &serde_json::Value) -> Result<Vec<String>, String> {
+    let op = step_str(step, "op");
+    let rel = step_str(step, "path");
+    let target = project_file(project_dir, rel)?;
+    let read = || std::fs::read_to_string(&target).map_err(|e| format!("{rel}: cannot read: {e}"));
+    let write = |text: &str| -> Result<(), String> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{rel}: cannot create directory: {e}"))?;
+        }
+        std::fs::write(&target, text).map_err(|e| format!("{rel}: cannot write: {e}"))
+    };
+    match op {
+        "write" => {
+            let content = step_str(step, "content");
+            let replace = step_str(step, "mode") == "replace";
+            if !replace && target.exists() {
+                return Err(format!("{rel}: already exists (recipe expected to create it)"));
+            }
+            write(content)?;
+            Ok(vec![format!("{} {rel}", if replace { "replaced" } else { "wrote" })])
+        }
+        "prepend" | "append" => {
+            let text = step_str(step, "text");
+            let current = read()?;
+            if current.contains(text) {
+                return Ok(vec![format!("{rel}: already contains the {op} text")]);
+            }
+            let next = if op == "prepend" {
+                format!("{text}{current}")
+            } else {
+                let sep = if current.is_empty() || current.ends_with('\n') { "" } else { "\n" };
+                format!("{current}{sep}{text}")
             };
-            Some(make_install_step("Installing Router", deps, false, pm, project_dir))
+            write(&next)?;
+            Ok(vec![format!("{op}ed to {rel}")])
         }
+        "replace" => {
+            let current = read()?;
+            let with = step_str(step, "with");
+            let finds: Vec<String> = match step.get("find") {
+                Some(serde_json::Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                Some(serde_json::Value::String(s)) => vec![s.clone()],
+                _ => vec![],
+            };
+            if current.contains(with) {
+                return Ok(vec![format!("{rel}: already patched")]);
+            }
+            let Some(found) = finds.iter().find(|f| current.contains(f.as_str())) else {
+                return Err(format!(
+                    "{rel}: none of the expected markers found ({}) — the template changed; recipe needs a refresh",
+                    finds.join(" | ")
+                ));
+            };
+            write(&current.replacen(found.as_str(), with, 1))?;
+            Ok(vec![format!("patched {rel}")])
+        }
+        "insertBefore" => {
+            let current = read()?;
+            let marker = step_str(step, "marker");
+            let text = step_str(step, "text");
+            if current.contains(text) {
+                return Ok(vec![format!("{rel}: already patched")]);
+            }
+            let Some(idx) = current.find(marker) else {
+                return Err(format!("{rel}: marker '{marker}' not found — the template changed; recipe needs a refresh"));
+            };
+            let next = format!("{}{}{}", &current[..idx], text, &current[idx..]);
+            write(&next)?;
+            Ok(vec![format!("patched {rel}")])
+        }
+        "mergeJson" => {
+            let optional = step.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
+            let create = step.get("create").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !target.exists() {
+                if create {
+                    write("{}\n")?;
+                } else if optional {
+                    return Ok(vec![format!("{rel}: absent, skipped (optional)")]);
+                } else {
+                    return Err(format!("{rel}: file not found"));
+                }
+            }
+            let current = read()?;
+            // tsconfig.json files from create-vite carry comments and trailing
+            // commas (JSONC). Strip them before parsing; the merged file is
+            // written back as strict JSON, which every consumer accepts.
+            let stripped = strip_jsonc(&current);
+            let had_comments = stripped.trim() != current.trim();
+            let mut json: serde_json::Value =
+                serde_json::from_str(&stripped).map_err(|e| format!("{rel}: not valid JSON: {e}"))?;
+            deep_merge(&mut json, step.get("value").unwrap_or(&serde_json::Value::Null));
+            let pretty = serde_json::to_string_pretty(&json).map_err(|e| format!("{rel}: {e}"))?;
+            write(&format!("{pretty}\n"))?;
+            let mut lines = vec![format!("merged into {rel}")];
+            if had_comments {
+                lines.push(format!("{rel}: comments/trailing commas dropped (rewritten as strict JSON)"));
+            }
+            Ok(lines)
+        }
+        "delete" => {
+            std::fs::remove_file(&target).map_err(|e| format!("{rel}: cannot remove: {e}"))?;
+            Ok(vec![format!("removed {rel}")])
+        }
+        other => Err(format!("unknown step op '{other}'")),
     }
 }
 
-fn build_backend_step(
-    backend: &ScaffoldBackend,
-    pm: &ResolvedPM,
-    project_dir: &Path,
-) -> Option<ScaffoldStep> {
-    match backend {
-        ScaffoldBackend::Express => Some(make_install_step(
-            "Installing Express",
-            &["express"],
-            false,
-            pm,
-            project_dir,
-        )),
-        ScaffoldBackend::Fastify => Some(make_install_step(
-            "Installing Fastify",
-            &["fastify"],
-            false,
-            pm,
-            project_dir,
-        )),
-        // Axum needs a separate Cargo project — out of scope for the npm-based runner.
-        ScaffoldBackend::Axum => None,
+/// Same scripts-off rule as `apply_scripts_off`, for the post steps that live
+/// behind `PostAction::Command`.
+fn apply_scripts_off_refs(steps: &mut [&mut ScaffoldStep], manager: &PackageManager) {
+    if !matches!(manager, PackageManager::Npm) {
+        return;
     }
-}
-
-/// Helper: build an `<pm> install [-D] <deps...>` step.
-fn make_install_step(
-    label: &str,
-    deps: &[&str],
-    dev: bool,
-    pm: &ResolvedPM,
-    project_dir: &Path,
-) -> ScaffoldStep {
-    let mut args = pm.prefix_args.clone();
-    args.push("install".into());
-    if dev {
-        args.push("-D".into());
-    }
-    args.extend(deps.iter().map(|d| String::from(*d)));
-
-    ScaffoldStep {
-        label: label.into(),
-        executable: pm.executable.clone(),
-        args,
-        cwd: project_dir.to_path_buf(),
-        env: Vec::new(),
+    for step in steps.iter_mut() {
+        step.env
+            .push(("npm_config_ignore_scripts".into(), "true".into()));
+        if let Some(pos) = step.args.iter().position(|a| a == "install") {
+            step.args.insert(pos + 1, "--ignore-scripts".into());
+        }
     }
 }
 
@@ -1373,8 +1561,28 @@ mod tests {
                 template: derived.template.clone(),
                 argv: derived.argv.clone(),
                 platform: current_platform().to_string(),
+                steps: vec![],
             },
         }
+    }
+
+    /// Give a config the add-ons/backend it asks for AND the steps the
+    /// registry derives for them — what buildScaffoldPlan sends.
+    fn with_steps(mut config: ScaffoldConfig, addons: Vec<ScaffoldAddon>, backend: Option<ScaffoldBackend>) -> ScaffoldConfig {
+        config.addons = addons;
+        config.backend = backend;
+        let ids: Vec<String> = config.addons.iter().map(|a| a.id().to_string()).collect();
+        config.plan.steps = derive_steps(
+            config.wrapper.id(),
+            config.framework.id(),
+            config.language.id(),
+            config.manager.id(),
+            &ids,
+            config.backend.as_ref().map(|b| b.id()),
+            &config.project_name,
+        )
+        .unwrap();
+        config
     }
 
     fn web_react_ts_npm() -> ScaffoldConfig {
@@ -1562,58 +1770,138 @@ mod tests {
     }
 
     #[test]
-    fn shadcn_step_uses_the_registry_pin() {
-        let mut config = web_react_ts_npm();
-        config.addons = vec![ScaffoldAddon::ShadCN];
-        let pm = ResolvedPM {
-            executable: "npm".into(),
-            prefix_args: vec![],
-        };
-        let step =
-            build_addon_step(&ScaffoldAddon::ShadCN, &config, &pm, Path::new("/tmp/test"))
-                .expect("shadcn step builds from the registry pin");
-        let spec = addon_cli_spec("shadcn").unwrap();
-        assert!(step.args.contains(&spec));
-        assert!(!step.args.iter().any(|a| a.contains("@latest")));
-        // npm has no dlx — the npm path must use the `exec --yes` form.
-        assert_eq!(step.args[..3], ["exec".to_string(), "--yes".to_string(), "--".to_string()]);
-        assert!(!step.args.contains(&"dlx".to_string()));
+    fn validate_plan_refuses_steps_that_were_not_previewed() {
+        // ADR-028 §4: the runner executes exactly the steps the wizard listed.
+        let config = with_steps(web_react_ts_npm(), vec![ScaffoldAddon::Tailwind], None);
+        assert!(validate_plan(&config, "test").is_ok());
+        let mut tampered = config.clone();
+        tampered.plan.steps.pop();
+        assert_eq!(validate_plan(&tampered, "test").unwrap_err().code(), "scaffold.plan_mismatch");
+        let mut extra = config.clone();
+        extra.plan.steps.push(serde_json::json!({"source": "addon:evil", "op": "install", "argv": ["install", "evil@1.0.0"]}));
+        assert_eq!(validate_plan(&extra, "test").unwrap_err().code(), "scaffold.plan_mismatch");
     }
 
     #[test]
-    fn shadcn_step_keeps_dlx_on_pnpm() {
-        let mut config = planned_config(
-            ScaffoldWrapper::Web,
-            ScaffoldFramework::React,
-            ScaffoldLanguage::TypeScript,
-            PackageManager::Pnpm,
+    fn post_steps_run_through_the_resolved_manager_and_scripts_off() {
+        let config = with_steps(
+            web_react_ts_npm(),
+            vec![ScaffoldAddon::ShadCN, ScaffoldAddon::Tailwind],
+            Some(ScaffoldBackend::Express),
         );
-        config.addons = vec![ScaffoldAddon::ShadCN];
         let pm = ResolvedPM {
-            executable: "pnpm".into(),
-            prefix_args: vec![],
+            executable: "C:/node/node.exe".into(),
+            prefix_args: vec!["C:/node/npm-cli.js".into()],
         };
-        let step =
-            build_addon_step(&ScaffoldAddon::ShadCN, &config, &pm, Path::new("/tmp/test"))
-                .expect("shadcn step builds from the registry pin");
-        assert_eq!(step.args[0], "dlx");
-        assert!(step.args.contains(&addon_cli_spec("shadcn").unwrap()));
+        let steps: Vec<PostStep> = config.plan.steps.iter().map(|s| post_step(s, &pm, Path::new("/tmp/p"))).collect();
+        // Prerequisite first: tailwind install precedes the shadcn init.
+        let labels: Vec<&str> = steps.iter().map(|s| s.label.as_str()).collect();
+        let tw = labels.iter().position(|l| l.starts_with("addon:tailwind")).unwrap();
+        let sh = labels.iter().position(|l| l.starts_with("addon:shadcn: run")).unwrap();
+        assert!(tw < sh, "{labels:?}");
+        // Commands go through the manager executable; file steps stay in-process.
+        let mut commands = 0;
+        for step in &steps {
+            match &step.action {
+                PostAction::Command(cmd) => {
+                    commands += 1;
+                    assert_eq!(cmd.executable, "C:/node/node.exe");
+                    assert_eq!(cmd.args[0], "C:/node/npm-cli.js");
+                    assert_eq!(cmd.cwd, Path::new("/tmp/p"));
+                }
+                PostAction::File(op) => assert!(op.get("path").is_some()),
+            }
+        }
+        assert!(commands >= 4);
+        // The shadcn step carries the registry pin, npm's exec form, no dlx.
+        let shadcn = steps.iter().find_map(|s| match &s.action {
+            PostAction::Command(cmd) if s.label.starts_with("addon:shadcn: run") => Some(cmd),
+            _ => None,
+        }).unwrap();
+        assert_eq!(shadcn.args[1..4], ["exec".to_string(), "--yes".to_string(), "--".to_string()]);
+        assert!(shadcn.args.iter().any(|a| a.starts_with("shadcn@")));
+        assert!(!shadcn.args.contains(&"dlx".to_string()));
     }
 
     #[test]
-    fn shadcn_step_is_skipped_for_frameworks_without_a_variant() {
-        let mut config = planned_config(
-            ScaffoldWrapper::Web,
-            ScaffoldFramework::Solid,
-            ScaffoldLanguage::TypeScript,
-            PackageManager::Npm,
+    fn shadcn_step_uses_dlx_on_pnpm() {
+        let config = with_steps(
+            planned_config(ScaffoldWrapper::Web, ScaffoldFramework::React, ScaffoldLanguage::TypeScript, PackageManager::Pnpm),
+            vec![ScaffoldAddon::ShadCN],
+            None,
         );
-        config.addons = vec![ScaffoldAddon::ShadCN];
-        let pm = ResolvedPM {
-            executable: "npm".into(),
-            prefix_args: vec![],
-        };
-        assert!(build_addon_step(&ScaffoldAddon::ShadCN, &config, &pm, Path::new("/tmp/test")).is_none());
+        let exec = config.plan.steps.iter().find(|s| s["op"] == "exec").unwrap();
+        assert_eq!(exec["argv"][0], "dlx");
+    }
+
+    #[test]
+    fn shadcn_has_no_step_for_frameworks_without_a_variant() {
+        let config = with_steps(
+            planned_config(ScaffoldWrapper::Web, ScaffoldFramework::Solid, ScaffoldLanguage::TypeScript, PackageManager::Npm),
+            vec![ScaffoldAddon::ShadCN],
+            None,
+        );
+        assert!(!config.plan.steps.iter().any(|s| s["op"] == "exec"));
+    }
+
+    // ---- File operations (ADR-028 §4) ----
+
+    fn temp_project(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("litria-steps-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn file_steps_write_patch_merge_and_delete() {
+        let dir = temp_project("ops");
+        let j = |v: serde_json::Value| v;
+        // write (create) then refuse to overwrite; replace mode overwrites.
+        apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "src/a.css", "mode": "create", "content": "x"}))).unwrap();
+        assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "src/a.css", "mode": "create", "content": "y"}))).is_err());
+        apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "src/a.css", "mode": "replace", "content": "z"}))).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("src/a.css")).unwrap(), "z");
+        // prepend is idempotent.
+        std::fs::write(dir.join("main.ts"), "import App from './App';\nrender(<App />);\n").unwrap();
+        apply_file_step(&dir, &j(serde_json::json!({"op": "prepend", "path": "main.ts", "text": "import './tw.css';\n"}))).unwrap();
+        apply_file_step(&dir, &j(serde_json::json!({"op": "prepend", "path": "main.ts", "text": "import './tw.css';\n"}))).unwrap();
+        let text = std::fs::read_to_string(dir.join("main.ts")).unwrap();
+        assert_eq!(text.matches("tw.css").count(), 1);
+        assert!(text.starts_with("import './tw.css';"));
+        // replace with alternatives; missing marker is a visible failure.
+        apply_file_step(&dir, &j(serde_json::json!({"op": "replace", "path": "main.ts", "find": ["nope", "<App />"], "with": "<Router root={App} />"}))).unwrap();
+        assert!(std::fs::read_to_string(dir.join("main.ts")).unwrap().contains("<Router root={App} />"));
+        let err = apply_file_step(&dir, &j(serde_json::json!({"op": "replace", "path": "main.ts", "find": ["absent"], "with": "x"}))).unwrap_err();
+        assert!(err.contains("markers"), "{err}");
+        // insertBefore.
+        std::fs::write(dir.join("index.html"), "<body>\n    <script type=\"module\" src=\"/src/r.ts\"></script>\n").unwrap();
+        apply_file_step(&dir, &j(serde_json::json!({"op": "insertBefore", "path": "index.html", "marker": "<script type=\"module\"", "text": "<div id=\"root\"></div>\n    "}))).unwrap();
+        let html = std::fs::read_to_string(dir.join("index.html")).unwrap();
+        assert!(html.find("<div id=\"root\">").unwrap() < html.find("<script").unwrap());
+        // mergeJson deep-merges and keeps siblings; optional missing file is skipped.
+        std::fs::write(dir.join("tsconfig.json"), "{\"compilerOptions\": {\"target\": \"es2023\"}, \"include\": [\"src\"]}").unwrap();
+        apply_file_step(&dir, &j(serde_json::json!({"op": "mergeJson", "path": "tsconfig.json", "optional": false, "value": {"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["./src/*"]}}}}))).unwrap();
+        let merged: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("tsconfig.json")).unwrap()).unwrap();
+        assert_eq!(merged["compilerOptions"]["target"], "es2023");
+        assert_eq!(merged["compilerOptions"]["paths"]["@/*"][0], "./src/*");
+        assert_eq!(merged["include"][0], "src");
+        // create-vite's tsconfig.app.json is JSONC: comments and trailing commas.
+        std::fs::write(dir.join("tsconfig.jsonc.json"), "{\n  \"compilerOptions\": {\n    /* Bundler mode */\n    \"moduleResolution\": \"bundler\", // comment\n    \"jsx\": \"react-jsx\",\n  },\n  \"include\": [\"src\",],\n}\n").unwrap();
+        let lines = apply_file_step(&dir, &j(serde_json::json!({"op": "mergeJson", "path": "tsconfig.jsonc.json", "optional": false, "value": {"compilerOptions": {"paths": {"@/*": ["./src/*"]}}}}))).unwrap();
+        assert!(lines.iter().any(|l| l.contains("comments")), "{lines:?}");
+        let merged: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("tsconfig.jsonc.json")).unwrap()).unwrap();
+        assert_eq!(merged["compilerOptions"]["jsx"], "react-jsx");
+        assert_eq!(merged["compilerOptions"]["paths"]["@/*"][0], "./src/*");
+        assert_eq!(strip_jsonc("{\"a\": \"http://x // not a comment\"}"), "{\"a\": \"http://x // not a comment\"}");
+        assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "mergeJson", "path": "tsconfig.app.json", "optional": true, "value": {}}))).is_ok());
+        assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "mergeJson", "path": "tsconfig.app.json", "optional": false, "value": {}}))).is_err());
+        // delete, and path discipline.
+        apply_file_step(&dir, &j(serde_json::json!({"op": "delete", "path": "src/a.css"}))).unwrap();
+        assert!(!dir.join("src/a.css").exists());
+        assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "../escape.txt", "mode": "create", "content": ""}))).is_err());
+        assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "C:/abs.txt", "mode": "create", "content": ""}))).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- Release-age gate (ADR-021 §2) ----
@@ -1702,18 +1990,18 @@ mod tests {
     }
 
     #[test]
-    fn specs_to_execute_includes_shadcn_when_selected() {
-        let mut config = web_react_ts_npm();
+    fn specs_to_execute_includes_every_exec_step_cli() {
+        let config = web_react_ts_npm();
         let derived = validate_plan(&config, "test").unwrap();
         assert_eq!(
             specs_to_execute(&config, &derived),
             vec![("vite@9.1.1".to_string(), true)]
         );
-        config.addons = vec![ScaffoldAddon::ShadCN];
-        assert_eq!(
-            specs_to_execute(&config, &derived),
-            vec![("vite@9.1.1".to_string(), true), (addon_cli_spec("shadcn").unwrap(), false)]
-        );
+        let config = with_steps(web_react_ts_npm(), vec![ScaffoldAddon::ShadCN], None);
+        let specs = specs_to_execute(&config, &derived);
+        assert_eq!(specs.len(), 2);
+        assert!(specs[1].0.starts_with("shadcn@"));
+        assert!(!specs[1].1, "addon CLIs are queried under their real package name");
     }
 
     // ---- Dependency audit classification (ADR-021 §4) ----

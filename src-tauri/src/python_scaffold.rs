@@ -351,7 +351,40 @@ fn blueprint_files(config: &PythonScaffoldConfig) -> Vec<(String, String)> {
     } else {
         files.push(("main.py".to_string(), main_py_contents(config)));
     }
+    // ADR-028 §4 (F11): the pytest add-on promised "test scaffold + dev
+    // dependency" but only Library shipped a test. Every archetype that
+    // declares pytest now gets a smoke test that imports its entry module.
+    let wants_pytest = config.archetype == "py-lib" || config.addons.iter().any(|a| a == "pytest");
+    if wants_pytest && config.archetype != "py-lib" {
+        files.push(("tests/test_main.py".to_string(), smoke_test_contents(config)));
+    }
     files
+}
+
+/// Smoke test for the flat archetypes (script / CLI / FastAPI): imports
+/// main.py as a module and checks its public entry point exists.
+fn smoke_test_contents(config: &PythonScaffoldConfig) -> String {
+    match config.archetype.as_str() {
+        "py-fastapi" => "import main
+
+
+def test_app_exists() -> None:
+    assert main.app.title
+".to_string(),
+        "py-cli" => "import main
+
+
+def test_parser_defaults() -> None:
+    args = main.build_parser().parse_args([])
+    assert args.name == \"world\"
+".to_string(),
+        _ => "import main
+
+
+def test_main_is_callable() -> None:
+    assert callable(main.main)
+".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -699,6 +732,26 @@ mod tests {
         assert!(lib.contains(&"src/demo_app/py.typed".to_string()));
         assert!(lib.contains(&"tests/test_demo_app.py".to_string()));
         assert!(!lib.contains(&"main.py".to_string()));
+    }
+
+    #[test]
+    fn pytest_addon_ships_a_smoke_test_for_every_archetype() {
+        // ADR-028 §4 (F11): the card promised "test scaffold"; only Library
+        // delivered one. Now script / CLI / FastAPI get tests/test_main.py.
+        for archetype in ["py-script", "py-cli", "py-fastapi"] {
+            let without: Vec<String> = blueprint_files(&config(archetype)).into_iter().map(|(p, _)| p).collect();
+            assert!(!without.contains(&"tests/test_main.py".to_string()), "{archetype} without pytest");
+            let mut cfg = config(archetype);
+            cfg.addons = vec!["pytest".into()];
+            let files = blueprint_files(&cfg);
+            let test = files.iter().find(|(p, _)| p == "tests/test_main.py").unwrap_or_else(|| panic!("{archetype} with pytest"));
+            assert!(test.1.starts_with("import main\n"), "{archetype}: imports the entry module");
+            assert!(test.1.contains("def test_"), "{archetype}: defines a test");
+        }
+        // Library is pytest-ready by definition and keeps its own test.
+        let lib: Vec<String> = blueprint_files(&config("py-lib")).into_iter().map(|(p, _)| p).collect();
+        assert!(lib.contains(&"tests/test_demo_app.py".to_string()));
+        assert!(!lib.contains(&"tests/test_main.py".to_string()));
     }
 
     #[test]

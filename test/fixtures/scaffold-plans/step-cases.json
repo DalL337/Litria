@@ -1,0 +1,405 @@
+{
+  "$comment": "ADR-028 §4 shared step cases. Both test/domains/scaffoldSteps.test.mjs and src-tauri/src/scaffold_recipes.rs derive the post-scaffold steps for `input` and must produce exactly `expect` (a projection: source, op, path, argv). Keep in sync when a recipe changes.",
+  "cases": [
+    {
+      "name": "web react ts npm: tailwind + shadcn + router + express, prerequisites first",
+      "input": {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "addons": [
+          "router",
+          "shadcn"
+        ],
+        "backend": "express",
+        "projectName": "demo"
+      },
+      "expect": [
+        {
+          "source": "addon:tailwind",
+          "op": "install",
+          "argv": [
+            "install",
+            "-D",
+            "tailwindcss@4.3.3",
+            "@tailwindcss/postcss@4.3.3",
+            "postcss@8.5.28"
+          ]
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": ".postcssrc.json"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": "src/tailwind.css"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "prepend",
+          "path": "src/main.tsx"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "mergeJson",
+          "path": "tsconfig.json"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "mergeJson",
+          "path": "tsconfig.app.json"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "prepend",
+          "path": "vite.config.ts"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "replace",
+          "path": "vite.config.ts"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "exec",
+          "argv": [
+            "exec",
+            "--yes",
+            "--",
+            "shadcn@4.13.0",
+            "init",
+            "-y",
+            "-d"
+          ]
+        },
+        {
+          "source": "addon:router",
+          "op": "install",
+          "argv": [
+            "install",
+            "react-router-dom@7.18.4"
+          ]
+        },
+        {
+          "source": "addon:router",
+          "op": "prepend",
+          "path": "src/main.tsx"
+        },
+        {
+          "source": "addon:router",
+          "op": "replace",
+          "path": "src/main.tsx"
+        },
+        {
+          "source": "backend:express",
+          "op": "install",
+          "argv": [
+            "install",
+            "express@5.2.1"
+          ]
+        },
+        {
+          "source": "backend:express",
+          "op": "install",
+          "argv": [
+            "install",
+            "-D",
+            "@types/express@5.0.6"
+          ]
+        },
+        {
+          "source": "backend:express",
+          "op": "write",
+          "path": "server/index.ts"
+        },
+        {
+          "source": "backend:express",
+          "op": "mergeJson",
+          "path": "package.json"
+        }
+      ]
+    },
+    {
+      "name": "electron react js pnpm: framework wiring precedes tailwind, entry is the renamed renderer",
+      "input": {
+        "wrapper": "electron",
+        "framework": "react",
+        "language": "js",
+        "manager": "pnpm",
+        "addons": [
+          "tailwind"
+        ],
+        "backend": null,
+        "projectName": "demo"
+      },
+      "expect": [
+        {
+          "source": "framework:react",
+          "op": "install",
+          "argv": [
+            "install",
+            "react@19.2.8",
+            "react-dom@19.2.8"
+          ]
+        },
+        {
+          "source": "framework:react",
+          "op": "install",
+          "argv": [
+            "install",
+            "-D",
+            "@vitejs/plugin-react@4.7.0"
+          ]
+        },
+        {
+          "source": "framework:react",
+          "op": "write",
+          "path": "vite.renderer.config.mjs"
+        },
+        {
+          "source": "framework:react",
+          "op": "write",
+          "path": "src/App.jsx"
+        },
+        {
+          "source": "framework:react",
+          "op": "delete",
+          "path": "src/renderer.js"
+        },
+        {
+          "source": "framework:react",
+          "op": "write",
+          "path": "src/renderer.jsx"
+        },
+        {
+          "source": "framework:react",
+          "op": "replace",
+          "path": "index.html"
+        },
+        {
+          "source": "framework:react",
+          "op": "insertBefore",
+          "path": "index.html"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "install",
+          "argv": [
+            "install",
+            "-D",
+            "tailwindcss@4.3.3",
+            "@tailwindcss/postcss@4.3.3",
+            "postcss@8.5.28"
+          ]
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": ".postcssrc.json"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": "src/tailwind.css"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "prepend",
+          "path": "src/renderer.jsx"
+        }
+      ]
+    },
+    {
+      "name": "tauri svelte ts npm (SvelteKit): tailwind writes the root layout, shadcn-svelte uses built-in $lib",
+      "input": {
+        "wrapper": "tauri",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "npm",
+        "addons": [
+          "shadcn"
+        ],
+        "backend": null,
+        "projectName": "demo"
+      },
+      "expect": [
+        {
+          "source": "addon:tailwind",
+          "op": "install",
+          "argv": [
+            "install",
+            "-D",
+            "tailwindcss@4.3.3",
+            "@tailwindcss/postcss@4.3.3",
+            "postcss@8.5.28"
+          ]
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": ".postcssrc.json"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": "src/app.css"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": "src/routes/+layout.svelte"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "mergeJson",
+          "path": "jsconfig.json"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "mergeJson",
+          "path": "tsconfig.json"
+        },
+        {
+          "source": "addon:shadcn",
+          "op": "exec",
+          "argv": [
+            "exec",
+            "--yes",
+            "--",
+            "shadcn-svelte@1.4.1",
+            "init",
+            "--preset",
+            "bIkeymG",
+            "--css",
+            "src/app.css",
+            "--base-color",
+            "neutral",
+            "--components-alias",
+            "$lib/components",
+            "--ui-alias",
+            "$lib/components/ui",
+            "--hooks-alias",
+            "$lib/hooks",
+            "--lib-alias",
+            "$lib",
+            "--utils-alias",
+            "$lib/utils",
+            "--reinstall"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "web angular ts npm: tailwind appends to styles.css, no entry patch",
+      "input": {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "npm",
+        "addons": [
+          "tailwind"
+        ],
+        "backend": null,
+        "projectName": "demo"
+      },
+      "expect": [
+        {
+          "source": "addon:tailwind",
+          "op": "install",
+          "argv": [
+            "install",
+            "-D",
+            "tailwindcss@4.3.3",
+            "@tailwindcss/postcss@4.3.3",
+            "postcss@8.5.28"
+          ]
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "write",
+          "path": ".postcssrc.json"
+        },
+        {
+          "source": "addon:tailwind",
+          "op": "append",
+          "path": "src/styles.css"
+        }
+      ]
+    },
+    {
+      "name": "web vue js yarn: router + fastify",
+      "input": {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "js",
+        "manager": "yarn",
+        "addons": [
+          "router"
+        ],
+        "backend": "fastify",
+        "projectName": "demo"
+      },
+      "expect": [
+        {
+          "source": "addon:router",
+          "op": "install",
+          "argv": [
+            "install",
+            "vue-router@4.6.4"
+          ]
+        },
+        {
+          "source": "addon:router",
+          "op": "write",
+          "path": "src/router.js"
+        },
+        {
+          "source": "addon:router",
+          "op": "prepend",
+          "path": "src/main.js"
+        },
+        {
+          "source": "addon:router",
+          "op": "replace",
+          "path": "src/main.js"
+        },
+        {
+          "source": "backend:fastify",
+          "op": "install",
+          "argv": [
+            "install",
+            "fastify@5.12.4"
+          ]
+        },
+        {
+          "source": "backend:fastify",
+          "op": "write",
+          "path": "server/index.js"
+        },
+        {
+          "source": "backend:fastify",
+          "op": "mergeJson",
+          "path": "package.json"
+        }
+      ]
+    },
+    {
+      "name": "blank and python have no steps",
+      "input": {
+        "wrapper": "python",
+        "framework": "py-lib",
+        "language": "py",
+        "manager": "npm",
+        "addons": [
+          "ruff"
+        ],
+        "backend": null,
+        "projectName": "demo"
+      },
+      "expect": []
+    }
+  ]
+}
