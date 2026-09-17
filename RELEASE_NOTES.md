@@ -1,6 +1,14 @@
 # Release Notes
 
-## Unreleased — Scaffold recipe integrity (ADR-028, PRs #45–#52)
+## v1.0.8 — Scaffold recipe integrity
+
+**Date:** 2026-09-17 (PRs #44–#53)
+
+> Platform status: unsigned artifacts everywhere; macOS run once by a tester;
+> **Linux** passed the source-build parity checklist on Fedora 44, but the packaged
+> AppImage / deb / rpm have not yet been launched by a human. The scaffold
+> evidence behind this release was recorded on Windows; every scaffold
+> combination is disabled by name on macOS and Linux until evidence exists there.
 
 Two independent audits of the New Project wizard on 2026-09-16 found that the
 compatibility matrix made claims nothing tested — most visibly, "Web + Angular"
@@ -53,6 +61,18 @@ create-vite 9.2.1, shadcn 4.21.0, shadcn-svelte 1.6.1, shadcn-vue 2.8.2,
 react/react-dom 19.3.0. Held with a recorded trigger: create-tauri-app 4.6.2
 and @angular/cli 21.2.24 (Angular 22 needs Node ≥ 24.15; the bundled runtime
 is 24.14).
+
+### Also in this release
+
+- **Bundled language servers refreshed (#44):** TypeScript 5.9.3 → 6.0.3,
+  typescript-language-server 5.3.0 → 6.0.0, pyright 1.1.411 → 1.1.414.
+  TypeScript stays on the 6.x line on purpose: 7.x is the native compiler and
+  ships no `tsserver`, which the language server needs (ADR-004 addendum).
+- **Wizard trace polish from the owner's live pass (#53):** the Angular route
+  names its step correctly, tool output is plain text (no colour escapes),
+  failure messages name the step rather than an executable path, a Yarn +
+  Angular card explains why it fails, a cancelled run that kept its folder no
+  longer offers "Create as Blank instead", and long trace lines wrap.
 
 ## v1.0.7 — Honest save state and process teardown
 
