@@ -111,6 +111,9 @@ test('the wizard derives every guard from runState and keeps the created payload
   assert.ok(/captureError\('wizard', err, \{ source: 'python-probe' \}\)/.test(jsx) && /captureError\('wizard', err, \{ source: 'folder-picker' \}\)/.test(jsx), 'no silent catches (F23)');
   assert.ok(/if \(e\.key === 'Tab'\)/.test(jsx) && /querySelectorAll\(FOCUSABLE\)/.test(jsx), 'focus trap (F26)');
   assert.ok(/if \(state\.wrapper === action\.value\) return state;/.test(jsx), 'same-value reducer guard (F21)');
+  // ADR-028 §9 (F31): only interpreters creation will accept are offered.
+  assert.ok(/const interpreters = eligibleInterpreters\(found\);/.test(jsx), 'the select lists eligible entries only');
+  assert.ok(/ineligible: found\.filter\(\(i\) => i\?\.eligible === false\)/.test(jsx), 'ineligible entries are kept to explain the empty state');
   // The existing-environment input lives in the env strip, not the Advanced fold.
   const envInput = jsx.indexOf('aria-label="Existing environment path"');
   const caption = jsx.indexOf('<div className="npw-env-caption">{PY_ENV_CAPTION}</div>');

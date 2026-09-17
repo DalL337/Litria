@@ -21,6 +21,7 @@ import {
 import {
   isPythonWrapper,
   derivePythonNames,
+  pythonPlanProblem,
   resolvePythonEngine,
   buildPythonPlanPreview,
 } from './pythonWizardModel.js';
@@ -95,10 +96,12 @@ export function buildScaffoldPlan(state, probe, env = {}) {
   if (isPythonWrapper(wrapper)) {
     const { distName, moduleName } = derivePythonNames(state.name);
     const preview = buildPythonPlanPreview(state, probe);
+    // Every refusal the runner would make is a reason here first (ADR-028 §9).
+    const reason = pythonPlanProblem(state);
     return {
       kind: 'python',
       preview,
-      availability: { selectable: state.framework !== null, status: 'verified', reason: state.framework ? null : 'Pick a project type.' },
+      availability: { selectable: reason === null, status: 'verified', reason },
       payload: {
         projectName: state.name.trim(),
         projectLocation: state.folder.trim(),

@@ -116,7 +116,11 @@ test('buildPythonOfferCommand: create-env prefers uv, falls back to interpreter,
     kind: 'create-env', summary, uvAvailable: true,
     interpreterPath: 'C:\\Py\\python.exe', isWindows: true,
   });
-  assert.equal(uv.command, 'uv venv .venv --python "C:\\Py\\python.exe"');
+  // F28: finishing the environment never downloads an interpreter either.
+  assert.equal(uv.command, 'uv venv --no-python-downloads .venv --python "C:\\Py\\python.exe"');
+  assert.equal(uv.display, 'uv venv --no-python-downloads .venv', 'the pill states exactly what it runs');
+  const uvNoPick = buildPythonOfferCommand({ kind: 'create-env', summary, uvAvailable: true, interpreterPath: null, isWindows: false });
+  assert.equal(uvNoPick.command, 'uv venv --no-python-downloads .venv');
 
   const stdlib = buildPythonOfferCommand({
     kind: 'create-env', summary, uvAvailable: false,

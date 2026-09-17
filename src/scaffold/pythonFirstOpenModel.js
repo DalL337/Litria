@@ -106,10 +106,11 @@ export function buildPythonOfferCommand({ kind, summary, uvAvailable, interprete
   const venvPython = isWindows ? '.venv\\Scripts\\python.exe' : '.venv/bin/python';
   if (kind === 'create-env') {
     if (uvAvailable) {
-      const command = interpreterPath
-        ? `uv venv .venv --python "${interpreterPath}"`
-        : 'uv venv .venv';
-      return { command, display: 'uv venv .venv' };
+      // Same posture as creation (ADR-028 §9, F28): finishing the environment
+      // never downloads an interpreter; a missing one fails visibly.
+      const base = 'uv venv --no-python-downloads .venv';
+      const command = interpreterPath ? `${base} --python "${interpreterPath}"` : base;
+      return { command, display: base };
     }
     if (interpreterPath) {
       const command = `${quoteForShell(interpreterPath, isWindows)} -m venv .venv`;

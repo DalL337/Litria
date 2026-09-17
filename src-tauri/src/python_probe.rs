@@ -64,6 +64,74 @@ pub struct PythonInterpreter {
     pub variant: Option<String>,
     /// "x86_64" | "arm64" | … when a source reported it.
     pub arch: Option<String>,
+    /// `interpreter_eligibility` verdict (ADR-028 §9): creation applies the
+    /// same predicate, so an offered entry is never refused later. The
+    /// wizard hides ineligible entries and can name the reason.
+    pub eligible: bool,
+    pub ineligible_reason: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Eligibility — ONE predicate shared by discovery and creation (F31, F35)
+// ---------------------------------------------------------------------------
+
+/// Whether a path may be offered by the wizard and spawned (stdlib venv) or
+/// handed to uv via `--python` by creation. Existence + name only — this is
+/// a spawn guard, not an execution check: the path must resolve to a file
+/// whose basename names a Python interpreter. Accepted names, with or
+/// without `.exe`: `python`, `pythonw`, `python3`, `python3.13`,
+/// `python3.13t` (free-threaded), `pypy`, `pypy3`, `pypy3.11`. The
+/// discovery sources report exactly these shapes (registry ExecutablePath,
+/// py launcher tags, uv's managed and system entries, PATH lookups).
+pub(crate) fn interpreter_eligibility(path: &str) -> Result<(), &'static str> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("no path");
+    }
+    let Ok(canonical) = std::fs::canonicalize(std::path::Path::new(trimmed)) else {
+        return Err("not found on disk");
+    };
+    if !canonical.is_file() {
+        return Err("not a file");
+    }
+    let Some(file_name) = canonical.file_name().and_then(|n| n.to_str()) else {
+        return Err("unreadable file name");
+    };
+    if is_interpreter_file_name(file_name) {
+        Ok(())
+    } else {
+        Err("file name is not a Python interpreter")
+    }
+}
+
+fn is_interpreter_file_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    let base = lower.strip_suffix(".exe").unwrap_or(&lower);
+    let Some(rest) = base.strip_prefix("python").or_else(|| base.strip_prefix("pypy")) else {
+        return false;
+    };
+    // pythonw (windowed), trailing `t` (free-threaded build)
+    let rest = rest.strip_prefix('w').unwrap_or(rest);
+    let rest = rest.strip_suffix('t').unwrap_or(rest);
+    rest.chars().all(|c| c.is_ascii_digit() || c == '.') && !rest.starts_with('.') && !rest.ends_with('.')
+}
+
+/// Stamp the shared verdict on every merged entry. Ineligible entries stay
+/// in the report (the wizard can explain them) but sort last, so the first
+/// entry is always one creation will accept.
+fn classify_eligibility(interpreters: &mut [PythonInterpreter]) {
+    for interpreter in interpreters.iter_mut() {
+        match interpreter_eligibility(&interpreter.path) {
+            Ok(()) => {
+                interpreter.eligible = true;
+                interpreter.ineligible_reason = None;
+            }
+            Err(reason) => {
+                interpreter.eligible = false;
+                interpreter.ineligible_reason = Some(reason.to_string());
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -168,6 +236,8 @@ fn parse_uv_python_list_json(json: &str) -> Vec<PythonInterpreter> {
                 implementation: entry.implementation,
                 variant: entry.variant,
                 arch: entry.arch,
+                eligible: true,
+                ineligible_reason: None,
             })
         })
         .collect()
@@ -224,6 +294,8 @@ fn parse_reg_query_output(text: &str) -> Vec<PythonInterpreter> {
                 implementation: Some("cpython".into()),
                 variant: None,
                 arch: meta.and_then(|(_, _, a)| a.clone()),
+                eligible: true,
+                ineligible_reason: None,
             });
         }
     }
@@ -279,6 +351,8 @@ fn parse_py_launcher_list(text: &str) -> Vec<PythonInterpreter> {
             implementation: Some("cpython".into()),
             variant: Some(if freethreaded { "freethreaded" } else { "default" }.into()),
             arch: None,
+            eligible: true,
+            ineligible_reason: None,
         });
     }
     interpreters
@@ -323,6 +397,8 @@ fn parse_py_manager_json(json: &str) -> Vec<PythonInterpreter> {
                 implementation: Some("cpython".into()),
                 variant: None,
                 arch: None,
+                eligible: true,
+                ineligible_reason: None,
             })
         })
         .collect()
@@ -392,7 +468,8 @@ fn source_rank(source: &str) -> u8 {
 /// Best-first ordering: stable CPython default-variant with the highest
 /// version wins; prereleases, freethreaded builds, and alternative
 /// implementations sort below; source rank is only a tiebreak.
-fn interpreter_sort_key(i: &PythonInterpreter) -> (u8, u8, u8, (u64, u64, u64), u8) {
+fn interpreter_sort_key(i: &PythonInterpreter) -> (u8, u8, u8, u8, (u64, u64, u64), u8) {
+    let eligibility_penalty = if i.eligible { 0 } else { 1 };
     let impl_penalty = match i.implementation.as_deref() {
         None | Some("cpython") => 0,
         _ => 1,
@@ -404,6 +481,7 @@ fn interpreter_sort_key(i: &PythonInterpreter) -> (u8, u8, u8, (u64, u64, u64), 
     let prerelease_penalty = if is_prerelease(i.version.as_deref()) { 1 } else { 0 };
     let (major, minor, patch) = version_sort_key(i.version.as_deref());
     (
+        eligibility_penalty,
         impl_penalty,
         variant_penalty,
         prerelease_penalty,
@@ -496,6 +574,8 @@ fn probe_path() -> Vec<PythonInterpreter> {
                         implementation: None,
                         variant: None,
                         arch: None,
+                        eligible: true,
+                        ineligible_reason: None,
                     });
                 }
             }
@@ -519,6 +599,8 @@ fn probe_path() -> Vec<PythonInterpreter> {
                         implementation: None,
                         variant: None,
                         arch: None,
+                        eligible: true,
+                        ineligible_reason: None,
                     });
                 }
             }
@@ -558,7 +640,9 @@ pub(crate) fn detect_python_interpreters() -> PythonProbeReport {
 
     let mut report = merge_and_classify(found);
     fill_versions(&mut report.interpreters);
-    // Version fill can demote an entry (prerelease discovered) — re-sort.
+    classify_eligibility(&mut report.interpreters);
+    // Version fill can demote an entry (prerelease discovered) and an
+    // ineligible entry sorts last — re-sort.
     report.interpreters.sort_by_key(interpreter_sort_key);
     report.uv_available = uv_available;
     report
@@ -579,6 +663,8 @@ mod tests {
             implementation: None,
             variant: None,
             arch: None,
+            eligible: true,
+            ineligible_reason: None,
         }
     }
 
@@ -776,5 +862,75 @@ HKEY_CURRENT_USER\\Software\\Python\\PythonCore\\3.13\\InstallPath
             assert!(!is_prerelease(first.version.as_deref()));
             assert!(!matches!(first.variant.as_deref(), Some(v) if v != "default"));
         }
+        // ADR-028 §9: every entry carries the shared verdict, and nothing
+        // ineligible sorts above an eligible entry.
+        let first_ineligible = report.interpreters.iter().position(|i| !i.eligible);
+        let last_eligible = report.interpreters.iter().rposition(|i| i.eligible);
+        if let (Some(a), Some(b)) = (first_ineligible, last_eligible) {
+            assert!(b < a, "ineligible entries must sort last");
+        }
+    }
+
+    // ---- eligibility: the predicate creation shares (F31, F35) ----
+
+    #[test]
+    fn interpreter_file_names_cover_every_shape_the_probes_report() {
+        for good in [
+            "python", "python.exe", "pythonw.exe", "python3", "python3.13", "python3.13.exe",
+            "python3.13t.exe", "python3.14t", "Python.EXE", "pypy", "pypy3", "pypy3.11.exe",
+        ] {
+            assert!(is_interpreter_file_name(good), "{good} should be eligible");
+        }
+        for bad in [
+            "evil.exe", "python-build", "python3.13-config", "python.", "python.3", "py.exe",
+            "pythonx", "cmd.exe", "", "uv.exe",
+        ] {
+            assert!(!is_interpreter_file_name(bad), "{bad} should be ineligible");
+        }
+    }
+
+    #[test]
+    fn eligibility_needs_an_existing_file_with_an_interpreter_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "litria-pyprobe-elig-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for good in ["python.exe", "python3.13t.exe", "pypy3.exe"] {
+            let p = dir.join(good);
+            std::fs::write(&p, b"#!fake").unwrap();
+            assert_eq!(interpreter_eligibility(p.to_str().unwrap()), Ok(()), "{good}");
+        }
+        let evil = dir.join("evil.exe");
+        std::fs::write(&evil, b"x").unwrap();
+        assert_eq!(
+            interpreter_eligibility(evil.to_str().unwrap()),
+            Err("file name is not a Python interpreter")
+        );
+        assert_eq!(
+            interpreter_eligibility(dir.join("python-nope.exe").to_str().unwrap()),
+            Err("not found on disk")
+        );
+        assert_eq!(interpreter_eligibility(dir.to_str().unwrap()), Err("not a file"));
+        assert_eq!(interpreter_eligibility("   "), Err("no path"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn classify_marks_missing_paths_and_sorts_them_last() {
+        let mut list = vec![
+            entry("C:\\nowhere\\python.exe", Some("3.99.0"), "registry"),
+            entry("C:\\nowhere\\python3.exe", Some("3.12.0"), "path"),
+        ];
+        classify_eligibility(&mut list);
+        assert!(list.iter().all(|i| !i.eligible));
+        assert_eq!(list[0].ineligible_reason.as_deref(), Some("not found on disk"));
+        // A (fake) eligible entry with a lower version still sorts first.
+        let mut ok = entry("C:\\real\\python.exe", Some("3.8.0"), "path");
+        ok.eligible = true;
+        list.push(ok);
+        list.sort_by_key(interpreter_sort_key);
+        assert_eq!(list[0].path, "C:\\real\\python.exe");
     }
 }
