@@ -1991,6 +1991,11 @@ mod tests {
         apply_file_step(&dir, &j(serde_json::json!({"op": "delete", "path": "src/a.css"}))).unwrap();
         assert!(!dir.join("src/a.css").exists());
         assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "../escape.txt", "mode": "create", "content": ""}))).is_err());
+        // Rooted on every platform: `/abs.txt` is absolute on Unix and a
+        // RootDir component on Windows. A drive-prefixed path is only
+        // absolute on Windows (`C:` is an ordinary directory name elsewhere).
+        assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "/abs.txt", "mode": "create", "content": ""}))).is_err());
+        #[cfg(windows)]
         assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "C:/abs.txt", "mode": "create", "content": ""}))).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
