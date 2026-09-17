@@ -239,6 +239,18 @@ test('every offered coverage entry was recorded against the current pins', () =>
   }
 });
 
+test('a failing add-on run names its cause on the framework card when the primary has no entry', () => {
+  // Yarn + Angular: the registry holds a failing add-on entry and no primary entry.
+  const avail = availability({ wrapper: 'web', framework: 'angular', language: 'ts', manager: 'yarn', platform: 'windows' });
+  assert.equal(avail.selectable, false);
+  assert.equal(avail.status, 'failing');
+  assert.match(avail.reason, /failed verification: .*Yarn Classic/);
+  // Nothing recorded at all stays "not verified".
+  const none = availability({ wrapper: 'electron', framework: 'react', language: 'ts', manager: 'yarn', platform: 'windows' });
+  assert.equal(none.status, 'unverified');
+  assert.match(none.reason, /not been verified/);
+});
+
 test('selectableLanguages narrows to what has evidence', () => {
   // No entries for yarn on linux anywhere → nothing selectable.
   assert.deepEqual(selectableLanguages({ wrapper: 'web', framework: 'react', manager: 'yarn', platform: 'linux' }), []);

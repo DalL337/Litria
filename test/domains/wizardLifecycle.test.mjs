@@ -118,6 +118,10 @@ test('the wizard derives every guard from runState and keeps the created payload
   assert.ok(/invoke\('cancel_scaffold', \{ runId: runIdRef\.current \}\)/.test(jsx), 'Cancel invokes cancel_scaffold with the run id');
   assert.equal((jsx.match(/runId: runIdRef\.current/g) || []).length, 3, 'npm and python configs carry runId (plus the cancel call)');
   assert.ok(/disabled=\{cancelKind === null \|\| cancelling\}/.test(jsx), 'Cancel is enabled while running (abort mode)');
+  // A retained partial folder never gets the Blank fallback (it would refuse as not empty).
+  assert.ok(/setErrorRetainedPartial\(isRetainedPartialError\(err\)\)/.test(jsx), 'retained-partial classified from the runner error');
+  assert.ok(/error && !errorIsDestination && !errorRetainedPartial && runState === 'failed'/.test(jsx), 'Blank fallback hidden when the folder was retained');
+  assert.ok(/Choose a different name or location/.test(jsx), 'a retained folder offers the way out instead');
   assert.ok(!/cancelKind === 'abort' \|\| cancelKind === null\) return;/.test(jsx), 'no path still treats abort as disabled');
   assert.ok(/ineligible: found\.filter\(\(i\) => i\?\.eligible === false\)/.test(jsx), 'ineligible entries are kept to explain the empty state');
   // The existing-environment input lives in the env strip, not the Advanced fold.

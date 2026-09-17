@@ -46,7 +46,7 @@ import {
   pickDefaultInterpreter,
   eligibleInterpreters,
 } from '../scaffold/pythonWizardModel';
-import { isDestinationError } from '../scaffold/creationErrors';
+import { isDestinationError, isRetainedPartialError } from '../scaffold/creationErrors';
 import {
   WIZARD_STEPS,
   stepState,
@@ -398,6 +398,8 @@ function NewProjectWizard({
   // Phase of the last failure. A destination failure must not offer
   // "Create as Blank" — Blank writes to the same place and fails identically.
   const [errorIsDestination, setErrorIsDestination] = useState(false);
+  // A stopped run kept its partial folder (ADR-028 §7): Blank would refuse it.
+  const [errorRetainedPartial, setErrorRetainedPartial] = useState(false);
   const modalRef = useRef(null);
   const [traceMenuOpen, setTraceMenuOpen] = useState(false);
   // Same clipping problem the pill menu has: .npw-modal is overflow:hidden and
@@ -492,6 +494,7 @@ function NewProjectWizard({
     setMaxReached((reached) => Math.max(reached, target));
     setError('');
     setErrorIsDestination(false);
+    setErrorRetainedPartial(false);
     setConfirmingCancel(false);
     // An Edit jump into a fold opens it — the control must be on screen,
     // not behind a second click.
@@ -566,11 +569,13 @@ function NewProjectWizard({
     setRunState('opening');
     setError('');
     setErrorIsDestination(false);
+    setErrorRetainedPartial(false);
     try {
       await onDone(payload);
     } catch (err) {
       setError(toErrorMessage(err, 'Opening the workspace failed.'));
       setErrorIsDestination(false);
+    setErrorRetainedPartial(false);
       setRunState('failed');
     }
   }, [onDone]);
@@ -643,6 +648,7 @@ function NewProjectWizard({
     setProgressLines([]);
     setError('');
     setErrorIsDestination(false);
+    setErrorRetainedPartial(false);
     setTraceStatus('');
     buildLogDomain?.commands.startRun({
       projectName: state.name.trim(),
@@ -750,6 +756,7 @@ function NewProjectWizard({
     } catch (err) {
       const message = toErrorMessage(err, 'Scaffold failed.');
       setErrorIsDestination(isDestinationError(err));
+      setErrorRetainedPartial(isRetainedPartialError(err));
       buildLogDomain?.commands.failRun(message);
       if (autoSendLogs) {
         await buildLogActions?.sendCurrentRunToLogs?.();
@@ -771,6 +778,7 @@ function NewProjectWizard({
     setRunState('running');
     setError('');
     setErrorIsDestination(false);
+    setErrorRetainedPartial(false);
     // Fresh run: the fallback is a second attempt, so it gets its own log
     // rather than appending to the failed scaffold's trace.
     buildLogDomain?.commands.startRun({
@@ -783,6 +791,7 @@ function NewProjectWizard({
     } catch (err) {
       const message = toErrorMessage(err, 'Blank creation failed.');
       setErrorIsDestination(isDestinationError(err));
+      setErrorRetainedPartial(isRetainedPartialError(err));
       buildLogDomain?.commands.failRun(message);
       if (autoSendLogs) {
         await buildLogActions?.sendCurrentRunToLogs?.();
@@ -1699,7 +1708,26 @@ function NewProjectWizard({
                       </button>
                     </div>
                   )}
-                  {error && !errorIsDestination && runState === 'failed' && !createdPayload && !isBlank && (
+                  {error && errorRetainedPartial && !createdPayload && (
+                    // The stopped run kept what it could not prove it made
+                    // (ADR-028 §7); Blank would refuse that folder as not empty.
+                    <div className="npw-fallback">
+                      <div className="npw-fallback-hint">
+                        The stopped run left its partial folder in place (named above).
+                        Remove it, or go back and choose a different name or location,
+                        before creating again.
+                      </div>
+                      <button
+                        className="npw-btn-done npw-fallback-btn"
+                        type="button"
+                        onClick={() => goToPage(0)}
+                      >
+                        <FolderOpen size={14} aria-hidden="true" />
+                        Choose a different name or location
+                      </button>
+                    </div>
+                  )}
+                  {error && !errorIsDestination && !errorRetainedPartial && runState === 'failed' && !createdPayload && !isBlank && (
                     <div className="npw-fallback">
                       <div className="npw-fallback-hint">
                         You can still start this project as Blank — README, .gitignore,

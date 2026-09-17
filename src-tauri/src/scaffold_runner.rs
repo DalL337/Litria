@@ -157,7 +157,7 @@ pub(crate) fn run_scaffold(
     // reaches the create CLI's own install, which runs before any post step.
     let pm_env = manager_env(config.manager.id());
     steps.push(ScaffoldStep {
-        label: format!("Creating {} project", wrapper_label(&config.wrapper)),
+        label: format!("Creating {} project", primary_label(&config, &derived)),
         executable: pm.executable.clone(),
         args: primary_args,
         cwd: location.to_path_buf(),
@@ -232,8 +232,10 @@ pub(crate) fn run_scaffold(
             PostAction::Command(cmd) => {
                 let step_limits = if i == 0 { limits.primary.step_limits() } else { limits.command.step_limits() };
                 let _ = channel.send(ScaffoldEvent::StepOutput { line: step_limits.describe() });
+                // Failures name the step, not the executable (the bundled
+                // node.exe path meant nothing in the trace).
                 run_step_command(cmd, step_limits, &control, channel)
-                    .map_err(|failure| (failure.message(&cmd.executable), failure.is_abort().then_some(failure)))
+                    .map_err(|failure| (failure.message(&step.label), failure.is_abort().then_some(failure)))
             }
             PostAction::File(op) => apply_file_step(&project_dir, op)
                 .map(|lines| {
@@ -1179,6 +1181,21 @@ fn wrapper_label(wrapper: &ScaffoldWrapper) -> &'static str {
     }
 }
 
+/// What the primary step creates, as the trace names it: the framework for
+/// an exec route (the Angular CLI makes an Angular project, not a Vite one —
+/// owner live pass 2026-09-17), the wrapper's tool otherwise.
+fn primary_label(config: &ScaffoldConfig, derived: &DerivedPrimary) -> String {
+    if derived.route_kind == "exec" {
+        let id = config.framework.id();
+        let mut chars = id.chars();
+        return match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        };
+    }
+    wrapper_label(&config.wrapper).to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Post-scaffold steps
 // ---------------------------------------------------------------------------
@@ -1773,6 +1790,16 @@ mod tests {
     }
 
     // ---- Coverage enforcement (ADR-028 §10) ----
+
+    #[test]
+    fn the_primary_step_is_named_after_what_it_creates() {
+        let angular = planned_config(ScaffoldWrapper::Web, ScaffoldFramework::Angular, ScaffoldLanguage::TypeScript, PackageManager::Npm);
+        let derived = derive_primary("web", "angular", "ts", "npm", "test").unwrap();
+        assert_eq!(primary_label(&angular, &derived), "Angular");
+        let react = web_react_ts_npm();
+        let derived = derive_primary("web", "react", "ts", "npm", "test").unwrap();
+        assert_eq!(primary_label(&react, &derived), "Vite");
+    }
 
     #[test]
     fn enforce_coverage_refuses_combinations_without_evidence() {

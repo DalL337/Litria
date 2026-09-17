@@ -56,6 +56,26 @@ const DESTINATION_CODES = new Set([
  * @param {unknown} err - A rejected Tauri command error, or its `code`.
  * @returns {boolean}
  */
+/** Codes a cancelled or timed-out run ends with (ADR-028 §8). */
+const ABORT_CODES = new Set(['scaffold.cancelled', 'scaffold.step_idle_timeout', 'scaffold.step_deadline']);
+
+/**
+ * Did a stopped run leave its partial folder in place? The runner says so
+ * in its message ("Partial project retained — …") after the cleanup rule
+ * (ADR-028 §7) refused to delete what it could not prove it made. Blank
+ * would refuse that folder as not empty, so the fallback must not be
+ * offered; the user removes the folder or picks another name/location.
+ *
+ * @param {unknown} err - A rejected Tauri command error.
+ * @returns {boolean}
+ */
+export function isRetainedPartialError(err) {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = typeof err.code === 'string' ? err.code : '';
+  const message = typeof err.message === 'string' ? err.message : '';
+  return ABORT_CODES.has(code) && message.includes('Partial project retained');
+}
+
 export function isDestinationError(err) {
   const code = typeof err === 'string'
     ? err

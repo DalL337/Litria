@@ -251,6 +251,10 @@ pub(crate) struct AddonCoverageEntry {
     pub backend: Option<String>,
     #[serde(default)]
     pub evidence: Option<EvidencePins>,
+    /// Why a `failing` run failed — surfaced on the framework card when the
+    /// primary combination has no entry of its own.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// The registry, parsed once. A malformed file is a build defect caught by
@@ -628,7 +632,37 @@ pub(crate) fn coverage_status(
             }
             (e.status.clone(), e.reason.clone())
         })
-        .unwrap_or_else(|| ("unverified".to_string(), None))
+        .unwrap_or_else(|| {
+            // No primary entry, but a failing add-on run of the same
+            // combination exists: its cause is the honest answer (Yarn +
+            // Angular read "not verified" while the registry knew why it
+            // fails — owner live pass 2026-09-17). Mirrors recipeRegistry.js.
+            failing_addon_reason(reg, wrapper, framework, language, manager, platform)
+                .map(|reason| ("failing".to_string(), Some(reason)))
+                .unwrap_or_else(|| ("unverified".to_string(), None))
+        })
+}
+
+fn failing_addon_reason(
+    reg: &Registry,
+    wrapper: &str,
+    framework: &str,
+    language: &str,
+    manager: &str,
+    platform: &str,
+) -> Option<String> {
+    reg.addon_coverage
+        .entries
+        .iter()
+        .find(|e| {
+            e.wrapper == wrapper
+                && e.framework == framework
+                && e.language == language
+                && e.manager == manager
+                && e.platform == platform
+                && e.status == "failing"
+        })
+        .and_then(|e| e.reason.clone())
 }
 
 pub(crate) fn is_selectable_status(status: &str) -> bool {
@@ -927,6 +961,15 @@ mod tests {
                 assert_eq!(pins_out_of_date(reg, e.evidence.as_ref()), None, "{}/{}/{} {:?}", e.wrapper, e.framework, e.language, e.addons);
             }
         }
+    }
+
+    #[test]
+    fn a_failing_addon_run_names_its_cause_when_the_primary_has_no_entry() {
+        // Yarn + Angular: no primary entry, one failing add-on run (S4/S8).
+        let (status, reason) = coverage_status("web", "angular", "ts", "yarn", "windows");
+        assert_eq!(status, "failing");
+        assert!(reason.as_deref().unwrap_or("").contains("Yarn Classic"), "{reason:?}");
+        assert!(!is_selectable_status(&status));
     }
 
     #[test]
