@@ -14,7 +14,7 @@
 
 import { RECIPES } from './recipeRegistry.js';
 
-/** Short invocation name → exact version, e.g. `vite` → `9.1.1`. */
+/** Short invocation name → exact version, e.g. `vite` → `9.2.1`. */
 export const CREATE_CLI_VERSIONS = Object.freeze(Object.fromEntries(
   Object.entries(RECIPES.tools)
     .filter(([, t]) => t.kind === 'initializer')

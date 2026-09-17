@@ -2,9 +2,14 @@
 
 ## Status
 
+Accepted and implemented (2026-09-16 rulings R1–R8 taken as proposed and
+recorded in the brief §7; slices S1–S8 landed as stacked PRs #45–#52 on
+2026-09-16/17; owner live passes per slice still owed — see the brief §9
+disposition table)
+
 Proposed revision (2026-09-16 — owner-requested review clarifications for
 content-preserving cleanup, absolute deadlines, verification-based
-availability, and per-finding closure; rulings remain pending)
+availability, and per-finding closure)
 
 Proposed (2026-09-16 — drafted at owner direction from the two independent
 wizard/matrix audits of the same day; owner directed that web + Angular be

@@ -37,6 +37,54 @@ pub(crate) struct Registry {
     pub addon_coverage: AddonCoverage,
     /// Subprocess limits per step kind (ADR-028 §8).
     pub limits: Limits,
+    /// Generated-project package pins (`name → { version, … }`; the
+    /// `$comment` key is a string). Read only to check evidence pins.
+    #[serde(default)]
+    pub packages: HashMap<String, Value>,
+}
+
+/// What a coverage entry's evidence was recorded against (ADR-028 §10,
+/// dependency policy Rule 5). Other evidence fields are wizard/PR material.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EvidencePins {
+    #[serde(default)]
+    pub pins: HashMap<String, String>,
+}
+
+/// The registry's current pin for a tool or generated-project package.
+fn current_pin(reg: &Registry, name: &str) -> Option<String> {
+    if let Some(tool) = reg.tools.get(name) {
+        return Some(tool.version.clone());
+    }
+    reg.packages
+        .get(name)
+        .and_then(|v| v.get("version"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+/// Why an entry's evidence no longer applies, or None. Mirrors
+/// `pinsOutOfDate` in recipeRegistry.js: evidence without recorded pins is
+/// stale by definition; a pin that moved since names itself.
+fn pins_out_of_date(reg: &Registry, evidence: Option<&EvidencePins>) -> Option<String> {
+    let pins = evidence.map(|e| &e.pins).filter(|p| !p.is_empty());
+    let Some(pins) = pins else {
+        return Some("evidence predates pin tracking — re-run scripts/scaffold-recipe-evidence.mjs".into());
+    };
+    let mut names: Vec<&String> = pins.keys().collect();
+    names.sort();
+    for name in names {
+        let recorded = &pins[name];
+        if let Some(current) = current_pin(reg, name) {
+            if &current != recorded {
+                return Some(format!(
+                    "evidence recorded against {name}@{recorded}; the registry now pins {name}@{current} — re-run scripts/scaffold-recipe-evidence.mjs"
+                ));
+            }
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -60,7 +108,7 @@ impl LimitPair {
     }
 }
 // Registry fields the runner does not read (`recordedAt`, `frameworks`,
-// `packages`, `templateManifests`) are not declared: serde ignores them.
+// `templateManifests`) are not declared: serde ignores them.
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -178,6 +226,8 @@ pub(crate) struct CoverageEntry {
     pub status: String,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<EvidencePins>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,6 +249,8 @@ pub(crate) struct AddonCoverageEntry {
     pub addons: Vec<String>,
     #[serde(default)]
     pub backend: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<EvidencePins>,
 }
 
 /// The registry, parsed once. A malformed file is a build defect caught by
@@ -317,7 +369,7 @@ pub(crate) fn derive_primary(
     })
 }
 
-/// Exact spec for a pinned addon CLI (`shadcn-vue@2.7.4`), or None when the
+/// Exact spec for a pinned addon CLI (`shadcn-vue@2.8.2`), or None when the
 /// registry does not pin it — the caller must then skip the step rather than
 /// execute an unpinned CLI (ADR-021 §1).
 pub(crate) fn addon_cli_spec(cli: &str) -> Option<String> {
@@ -555,8 +607,8 @@ pub(crate) fn coverage_status(
     manager: &str,
     platform: &str,
 ) -> (String, Option<String>) {
-    registry()
-        .coverage
+    let reg = registry();
+    reg.coverage
         .entries
         .iter()
         .find(|e| {
@@ -566,7 +618,16 @@ pub(crate) fn coverage_status(
                 && e.manager == manager
                 && e.platform == platform
         })
-        .map(|e| (e.status.clone(), e.reason.clone()))
+        .map(|e| {
+            // Revalidation trigger: evidence recorded against other pins
+            // does not carry over (same rule as recipeRegistry.js).
+            if is_selectable_status(&e.status) {
+                if let Some(stale) = pins_out_of_date(reg, e.evidence.as_ref()) {
+                    return ("unverified".to_string(), Some(stale));
+                }
+            }
+            (e.status.clone(), e.reason.clone())
+        })
         .unwrap_or_else(|| ("unverified".to_string(), None))
 }
 
@@ -586,7 +647,8 @@ pub(crate) fn unverified_addon(
     addons: &[String],
     backend: Option<&str>,
 ) -> Option<String> {
-    let entries: Vec<&AddonCoverageEntry> = registry()
+    let reg = registry();
+    let entries: Vec<&AddonCoverageEntry> = reg
         .addon_coverage
         .entries
         .iter()
@@ -597,6 +659,7 @@ pub(crate) fn unverified_addon(
                 && e.manager == manager
                 && e.platform == platform
                 && is_selectable_status(&e.status)
+                && pins_out_of_date(reg, e.evidence.as_ref()).is_none()
         })
         .collect();
     for addon in addons {
@@ -818,6 +881,50 @@ mod tests {
                         route.tool
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn evidence_recorded_against_other_pins_is_stale_by_name() {
+        // ADR-028 §10 / dependency policy Rule 5: the revalidation trigger.
+        let reg = registry();
+        let vite = &reg.tools["create-vite"].version;
+        let mut pins = HashMap::new();
+        pins.insert("create-vite".to_string(), vite.clone());
+        pins.insert("tailwindcss".to_string(), current_pin(reg, "tailwindcss").unwrap());
+        let fresh = EvidencePins { pins: pins.clone() };
+        assert_eq!(pins_out_of_date(reg, Some(&fresh)), None);
+        pins.insert("create-vite".to_string(), "0.0.1".into());
+        let stale = EvidencePins { pins };
+        let reason = pins_out_of_date(reg, Some(&stale)).expect("stale");
+        assert!(reason.contains("create-vite@0.0.1") && reason.contains(&format!("create-vite@{vite}")), "{reason}");
+        assert!(pins_out_of_date(reg, None).unwrap().contains("predates pin tracking"));
+        assert!(pins_out_of_date(reg, Some(&EvidencePins::default())).is_some(), "empty pins are stale");
+        // A name the registry does not pin is not a trigger.
+        let mut other = HashMap::new();
+        other.insert("left-pad".to_string(), "1.0.0".to_string());
+        assert_eq!(pins_out_of_date(reg, Some(&EvidencePins { pins: other })), None);
+    }
+
+    #[test]
+    fn every_offered_coverage_entry_was_recorded_against_the_current_pins() {
+        // The repo never ships a stale-but-selectable entry: a pin bump must
+        // come with re-run evidence or a downgraded status.
+        let reg = registry();
+        for e in &reg.coverage.entries {
+            if is_selectable_status(&e.status) {
+                assert_eq!(
+                    pins_out_of_date(reg, e.evidence.as_ref()),
+                    None,
+                    "{}/{}/{} {} {}",
+                    e.wrapper, e.framework, e.language, e.manager, e.platform
+                );
+            }
+        }
+        for e in &reg.addon_coverage.entries {
+            if is_selectable_status(&e.status) {
+                assert_eq!(pins_out_of_date(reg, e.evidence.as_ref()), None, "{}/{}/{} {:?}", e.wrapper, e.framework, e.language, e.addons);
             }
         }
     }

@@ -496,3 +496,57 @@ Each has a proposed answer; accept as-is or amend.
 - First-open consent pill for Angular projects — the npm pill already
   models scripts-off installs; Angular projects go through it unchanged.
 - Preferences ownership of wizard seeds (ADR-019) — untouched.
+
+## 9. Disposition table (§6 closure contract; recorded 2026-09-17)
+
+Slices landed as stacked PRs: S1 #45, S2 #46, S3 #47, S4 #48, S5 #49,
+S6 #50, S7 #51, S8 #52. "Check" names the test or evidence that exercises
+the original failure case; each PR body carries the expected/observed
+detail. Owner live passes are listed per slice in the PR bodies and remain
+the open verification for every row.
+
+| ID | Disposition | Fix (slice) | Check |
+|---|---|---|---|
+| F1 | Closed | S1 registry + template manifests; S2 Angular CLI exec route | `scaffoldRecipes.test.mjs` F1 regression (both sides); web/angular/ts fixture: create + `ng build` |
+| F2 | Closed | S3 Electron framework recipes pin Vite-5 plugin majors | electron × react/svelte/vue/solid renderer `vite build` evidence |
+| F3 | Closed | S3 shadcn-svelte real flags | electron/tauri/web svelte + shadcn evidence |
+| F4 | Closed | S4 manager verbs (`add`/`dlx`), Yarn Classic floor | Rust `resolve_global_pm_with_floor` tests; pnpm/Yarn evidence |
+| F5 | Closed | S3 add-ons as registry step lists (config + wiring) | `scaffoldSteps.test.mjs` + step-cases fixture; add-on evidence builds |
+| F6 | Closed | S1/S3 `orderAddons` from `addonOrder` | `scaffoldSteps.test.mjs`; Rust `order_addons` |
+| F7 | Reproduced, closed | S3 alias merged into tsconfig before `shadcn init` | first S3 probe failed the alias preflight; recipe evidence now verified |
+| F8 | Closed | S1 removed the matrix tables (comment gone); S8 `docs/capabilities.md` states standalone Svelte, no SvelteKit | doc review |
+| F9 | Closed | S8 pins refreshed under the 24h rule; `evidence.pins` per entry; runtime + test trigger | `every offered coverage entry was recorded against the current pins` (JS + Rust) |
+| F10 | Closed | S8 `docs/capabilities.md` excluded-combinations section; "Angular via the Angular CLI" | doc review |
+| F11 | Closed | S3 pytest smoke test for every archetype | Rust `pytest_addon_ships_a_smoke_test_for_every_archetype` |
+| F12 | Closed | S3 `.python-version` display rule = runner rule | `pythonWizardModel.test.mjs` F12 case |
+| F13 | Closed | S1 single registry; projections only | architecture: `compatibility-matrix.js` carries no data |
+| F14 | Closed | S1 preview = argv = runner | `scaffoldPlan.test.mjs` F14; Rust `validate_plan` |
+| F15 | Closed | S1 memoized plan from the same inputs | S5 component test reads `plan` only |
+| F16 | Closed | S5 Python → `finishRun` | `wizardLifecycle.test.mjs` text contract |
+| F17 | Closed | S5 payload retained until open resolves | `wizardComponent.test.mjs` failed open → open again |
+| F18 | Closed | S5 held/opening states freeze navigation, Cancel reworded | component test |
+| F19 | Closed | S5 `resolveJump` + `canSubmit` re-validate | component test (runtime changed after Create) |
+| F20 | Closed | S5 `goToPage` refuses while running | `wizardLifecycle.test.mjs` |
+| F21 | Closed | S5 reducer same-value guards | text contract |
+| F22 | Closed | S1 themes derived from presets | `wizardComponent`/lifecycle contracts |
+| F23 | Closed | S5 `captureError` on probe/picker; fallback honours autoSendLogs | text contract |
+| F24 | Closed | S5 issue counters in `buildLogDomain` | `wizardLifecycle.test.mjs` truncation case |
+| F25 | Closed | S5 existing-env input beside its select | text contract |
+| F26 | Closed | S5 Tab focus trap | text contract |
+| F27 | Closed | S7 ownership marker + manifest; `create_new`; link refusal; preservation-checked retry/cleanup | Rust `creation_ownership` tests (pre-seeded README, linked `src`, proven retry, preserved content) |
+| F28 | Closed | S6 `uv venv --no-python-downloads` (creation, preview, first-open pill) | live uv `--python 3.99` refusal, no download |
+| F29 | Closed | S4 posture note per manager from registry fields | `createCliVersions.test.mjs` per manager |
+| F30 | Closed | S7 idle + deadline per step kind; `cancel_scaffold`; process-tree teardown | Rust `process_control` tests (node families); component Cancel test |
+| F31 | Closed | S6 one `interpreter_eligibility` predicate; wizard hides ineligible | Rust probe/scaffold tests; `pickDefaultInterpreter` test |
+| F32 | Closed | S6 serde model + `toml` serializer; env must exist | TOML round-trip tests (Windows + quoted POSIX path) |
+| F33 | Closed | S6 keyword refusal both sides | `derivePythonNames` keyword tests; Rust `validate_config` |
+| F34 | Closed | S1 `validate_plan` refuses versions the registry did not derive | Rust plan-mismatch tests |
+| F35 | Closed | S6 guard in every environment mode | Rust `validate_guards_the_interpreter_in_every_mode` |
+| F36 | Closed | S6 invalid floor is a reason / an error | `pythonPlanProblem` + Rust floor tests |
+| F37 | Closed | S1 manifest test (matrix ↔ real templates); S5 component-level wizard tests | `scaffoldRecipes.test.mjs`; `wizardComponent.test.mjs` |
+
+Accepted scope notes (recorded separately from fixes): create-tauri-app is
+held at 4.6.2 and @angular/cli at 21.2.24 until the bundled Node reaches
+24.15 (registry `$comment`s name the trigger); Yarn with shadcn/router and
+Yarn with Angular remain `failing` with their reasons; macOS and Linux
+coverage remains unverified and disabled by name.

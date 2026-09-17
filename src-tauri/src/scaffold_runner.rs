@@ -758,6 +758,8 @@ fn enforce_coverage(config: &ScaffoldConfig) -> Result<(), CommandError> {
     let detail = match (status.as_str(), reason) {
         ("failing", Some(r)) => format!("failed verification: {r}"),
         ("failing", None) => "failed verification".to_string(),
+        // Stale evidence (a pin moved since it was recorded) names the pin.
+        (_, Some(r)) => format!("is not offered: {r}"),
         _ => "has no execution evidence yet (ADR-028 §10) and is not offered".to_string(),
     };
     Err(CommandError::conflict(
@@ -1658,7 +1660,7 @@ mod tests {
         assert_eq!(derived.argv, config.plan.argv);
         assert_eq!(
             derived.argv,
-            vec!["create", "--yes", "vite@9.1.1", "test", "--", "--template", "react-ts"]
+            vec!["create", "--yes", "vite@9.2.1", "test", "--", "--template", "react-ts"]
         );
     }
 
@@ -1756,7 +1758,7 @@ mod tests {
             PackageManager::Pnpm,
         );
         // pnpm forwards flags without `--` and needs no `--yes`.
-        assert_eq!(vite_pnpm.plan.argv, vec!["create", "vite@9.1.1", "test", "--template", "vue"]);
+        assert_eq!(vite_pnpm.plan.argv, vec!["create", "vite@9.2.1", "test", "--template", "vue"]);
         assert!(!vite_pnpm.plan.argv.contains(&"--manager".to_string()));
         let electron_yarn = planned_config(
             ScaffoldWrapper::Electron,
@@ -2122,7 +2124,7 @@ mod tests {
         let derived = validate_plan(&config, "test").unwrap();
         assert_eq!(
             specs_to_execute(&config, &derived),
-            vec![("vite@9.1.1".to_string(), true)]
+            vec![("vite@9.2.1".to_string(), true)]
         );
         let config = with_steps(web_react_ts_npm(), vec![ScaffoldAddon::ShadCN], None);
         let specs = specs_to_execute(&config, &derived);
