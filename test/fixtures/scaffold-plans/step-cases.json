@@ -137,10 +137,15 @@
       },
       "expect": [
         {
+          "source": "manager:pnpm",
+          "op": "write",
+          "path": "pnpm-workspace.yaml"
+        },
+        {
           "source": "framework:react",
           "op": "install",
           "argv": [
-            "install",
+            "add",
             "react@19.2.8",
             "react-dom@19.2.8"
           ]
@@ -149,7 +154,7 @@
           "source": "framework:react",
           "op": "install",
           "argv": [
-            "install",
+            "add",
             "-D",
             "@vitejs/plugin-react@4.7.0"
           ]
@@ -188,7 +193,7 @@
           "source": "addon:tailwind",
           "op": "install",
           "argv": [
-            "install",
+            "add",
             "-D",
             "tailwindcss@4.3.3",
             "@tailwindcss/postcss@4.3.3",
@@ -344,10 +349,20 @@
       },
       "expect": [
         {
+          "source": "manager:yarn",
+          "op": "write",
+          "path": "yarn.lock"
+        },
+        {
+          "source": "manager:yarn",
+          "op": "write",
+          "path": ".yarnrc.yml"
+        },
+        {
           "source": "addon:router",
           "op": "install",
           "argv": [
-            "install",
+            "add",
             "vue-router@4.6.4"
           ]
         },
@@ -370,7 +385,7 @@
           "source": "backend:fastify",
           "op": "install",
           "argv": [
-            "install",
+            "add",
             "fastify@5.12.4"
           ]
         },

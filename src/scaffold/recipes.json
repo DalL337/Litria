@@ -1,5 +1,5 @@
 {
-  "$comment": "ADR-028 §1 — the scaffold recipe registry. The ONLY place a create-CLI version, template identifier, manager verb, or support claim for a generated project lives. Read by src/scaffold/recipeRegistry.js (frontend) and src-tauri/src/scaffold_recipes.rs (include_str!). The wizard's compatibility matrix and preview, and the Rust runner's argv, are all projections of this file. Bumping a pin: verify the version is ≥24h old (`npm view <pkg> time --json`, ADR-021 §2), refresh `templateManifests` below from the published package, re-run scripts/scaffold-recipe-evidence.mjs for the affected recipes, and update `coverage`.",
+  "$comment": "ADR-028 §1 — the scaffold recipe registry. The ONLY place a create-CLI version, template identifier, manager verb, or support claim for a generated project lives. Read by src/scaffold/recipeRegistry.js (frontend) and src-tauri/src/scaffold_recipes.rs (include_str!). The wizard's compatibility matrix and preview, and the Rust runner's argv, are all projections of this file. Bumping a pin: verify the version is ≥24h old (`npm view <pkg> time --json`, ADR-021 §2), refresh `templateManifests` below from the published package, re-run scripts/scaffold-recipe-evidence.mjs for the affected recipes, and update `coverage`. Managers: One entry per package manager the wizard offers. `create`/`exec`/`install` are the argv verbs the plan derivation uses (both sides); `forwardSeparator` is npm's `--` for create-* flags; `scriptsOff` names how dependency lifecycle scripts are prevented (env+flag: npm_config_ignore_scripts + --ignore-scripts; native: the manager's default; none); `auditAtCreate` whether `npm audit` runs (ADR-021 §4); `minMajor` the floor the runner enforces from `<pm> --version` before executing anything (ADR-028 §5).",
   "schemaVersion": 1,
   "recordedAt": "2026-09-16",
   "tools": {
@@ -61,7 +61,9 @@
       ],
       "devFlag": "-D",
       "scriptsOff": "env+flag",
-      "auditAtCreate": true
+      "auditAtCreate": true,
+      "minMajor": 7,
+      "$comment": "npm 7+ (workspaces-era CLI, `exec`, `--yes`). Litria bundles its own npm, so this is the floor for a user-installed global npm."
     },
     "pnpm": {
       "label": "pnpm",
@@ -73,11 +75,22 @@
         "dlx"
       ],
       "install": [
-        "install"
+        "add"
       ],
       "devFlag": "-D",
       "scriptsOff": "native",
-      "auditAtCreate": false
+      "auditAtCreate": false,
+      "minMajor": 9,
+      "$comment": "pnpm `add` is the dependency verb (`pnpm install <pkg>` is an alias but `add` is what the docs and the trace should say). pnpm 9+ ships scripts-off for dependencies by default (`onlyBuiltDependencies`) and honours `minimumReleaseAge` (ADR-021 §2) — the runner writes that into pnpm-workspace.yaml. `postCreate` writes pnpm-workspace.yaml (strictDepBuilds off, minimumReleaseAge) before anything installs.",
+      "postCreate": [
+        {
+          "op": "write",
+          "path": "pnpm-workspace.yaml",
+          "mode": "create",
+          "content": "# Litria (ADR-021 / ADR-028 §5)\n# Dependency build scripts stay off (pnpm's default); pnpm 12's strict mode\n# would otherwise fail an `add` that ignores builds. Run `pnpm approve-builds`\n# to allow specific packages.\nstrictDepBuilds: false\n# Wait 24h after a version is published before installing it.\nminimumReleaseAge: 1440\n",
+          "$comment": "Observed 2026-09-16 with pnpm 12.4.2: ERR_PNPM_IGNORED_BUILDS on `pnpm add` in an Angular project (lmdb, esbuild, @parcel/watcher). Written before any install so create-CLI installs see it too; replaces the runner's old post-scaffold minimumReleaseAge writer."
+        }
+      ]
     },
     "yarn": {
       "label": "yarn",
@@ -89,11 +102,34 @@
         "dlx"
       ],
       "install": [
-        "install"
+        "add"
       ],
       "devFlag": "-D",
       "scriptsOff": "none",
-      "auditAtCreate": false
+      "auditAtCreate": false,
+      "minMajor": 2,
+      "$comment": "Yarn Berry (2+) only: `yarn add` is the dependency verb (`yarn install <pkg>` is an error), `yarn dlx` runs the create/addon CLIs. Yarn Classic (1.x) has no dlx and no scripts-off story; the runner refuses it visibly (F4, R3). Lifecycle scripts run as Yarn's default; nothing audits at create (the posture note says so). `postCreate` steps run right after the create CLI, before any add-on. `env` is applied to every yarn command the runner spawns (the create CLI's own install included). `npmMinimalAgeGate: 1d` (and the env for the create step) applies the 24h gate to Yarn installs; an install then resolves to the newest version older than a day (observed: rolldown ~1.2.6 → 1.2.8 while 1.2.9 was 14h old).",
+      "postCreate": [
+        {
+          "op": "write",
+          "path": "yarn.lock",
+          "mode": "keep",
+          "content": "",
+          "$comment": "Yarn Berry walks up from the new folder looking for a project; a package.json in any ancestor (a user's home directory is common) makes it refuse the scaffold as 'not part of the project declared in …'. An empty yarn.lock marks the new folder as its own project (Yarn's documented remedy); `yarn install` rewrites it. Mode `keep`: a create CLI that already wrote one (ng new) wins."
+        },
+        {
+          "op": "write",
+          "path": ".yarnrc.yml",
+          "mode": "keep",
+          "content": "# Litria (ADR-028 §5): node_modules linker — native build scripts and most\n# Vite/Angular tooling assume it; Plug'n'Play is opt-in.\nnodeLinker: node-modules\n# ADR-021 §2: wait 24h after a version is published before installing it\n# (Yarn's own quarantine, the counterpart of pnpm's minimumReleaseAge).\nnpmMinimalAgeGate: 1d\n",
+          "$comment": "Observed 2026-09-16 with Yarn 4.18.0: under the default PnP linker `ng new`'s install fails in lmdb's build script (Cannot find module 'pnpapi'). The env below applies the same linker to the create step itself, which runs before this file exists."
+        }
+      ],
+      "env": {
+        "YARN_NODE_LINKER": "node-modules",
+        "YARN_ENABLE_IMMUTABLE_INSTALLS": "false",
+        "YARN_NPM_MINIMAL_AGE_GATE": "1d"
+      }
     }
   },
   "wrappers": {
@@ -3075,6 +3111,40 @@
       },
       {
         "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "pnpm",
+        "platform": "windows",
+        "status": "covered-by-equivalence",
+        "evidence": {
+          "date": "2026-09-17",
+          "representative": "addon run web/angular/ts pnpm windows [tailwind +express]",
+          "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
+          "recipe": {
+            "package": "@angular/cli",
+            "version": "21.2.24",
+            "template": "ng-new",
+            "argv": [
+              "pnpm",
+              "dlx",
+              "@angular/cli@21.2.24",
+              "new",
+              "fx-web-angular-ts",
+              "--defaults",
+              "--skip-git",
+              "--package-manager",
+              "pnpm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "pnpm": "12.4.2"
+          },
+          "source": "scripts/scaffold-recipe-evidence-apply.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
         "framework": "react",
         "language": "js",
         "manager": "npm",
@@ -3185,6 +3255,68 @@
             }
           },
           "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "pnpm",
+        "platform": "windows",
+        "status": "covered-by-equivalence",
+        "evidence": {
+          "date": "2026-09-17",
+          "representative": "addon run web/react/ts pnpm windows [tailwind+shadcn+router +express]",
+          "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "react-ts",
+            "argv": [
+              "pnpm",
+              "create",
+              "vite@9.1.1",
+              "fx-web-react-ts",
+              "--template",
+              "react-ts"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "pnpm": "12.4.2"
+          },
+          "source": "scripts/scaffold-recipe-evidence-apply.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "yarn",
+        "platform": "windows",
+        "status": "covered-by-equivalence",
+        "evidence": {
+          "date": "2026-09-17",
+          "representative": "addon run web/react/ts yarn windows [tailwind]",
+          "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "react-ts",
+            "argv": [
+              "yarn",
+              "create",
+              "vite@9.1.1",
+              "fx-web-react-ts",
+              "--template",
+              "react-ts"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "yarn": "4.18.0"
+          },
+          "source": "scripts/scaffold-recipe-evidence-apply.mjs"
         }
       },
       {
@@ -4365,6 +4497,81 @@
       },
       {
         "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "pnpm",
+        "platform": "windows",
+        "addons": [
+          "tailwind"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "manager:pnpm: write pnpm-workspace.yaml",
+            "addon:tailwind: pnpm add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: append to src/styles.css",
+            "backend:express: pnpm add express@5.2.1",
+            "backend:express: pnpm add -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "pnpm": "12.4.2"
+          },
+          "checks": [
+            "create",
+            "files",
+            "manager steps",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "yarn",
+        "platform": "windows",
+        "addons": [
+          "tailwind"
+        ],
+        "backend": null,
+        "status": "failing",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "manager:yarn: write yarn.lock",
+            "manager:yarn: write .yarnrc.yml",
+            "addon:tailwind: yarn add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: append to src/styles.css"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "yarn": "4.18.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "manager steps"
+          ],
+          "notExercised": [
+            "install (scripts off): add-on steps install (runner flow)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        },
+        "reason": "step failed: addon:tailwind: yarn add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28"
+      },
+      {
+        "wrapper": "web",
         "framework": "react",
         "language": "js",
         "manager": "npm",
@@ -4453,6 +4660,145 @@
             "steps",
             "build",
             "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "pnpm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "manager:pnpm: write pnpm-workspace.yaml",
+            "addon:tailwind: pnpm add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.tsx",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: merge into tsconfig.app.json",
+            "addon:shadcn: prepend to vite.config.ts",
+            "addon:shadcn: patch vite.config.ts",
+            "addon:shadcn: pnpm dlx shadcn@4.13.0 init -y -d",
+            "addon:router: pnpm add react-router-dom@7.18.4",
+            "addon:router: prepend to src/main.tsx",
+            "addon:router: patch src/main.tsx",
+            "backend:express: pnpm add express@5.2.1",
+            "backend:express: pnpm add -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "pnpm": "12.4.2"
+          },
+          "checks": [
+            "create",
+            "files",
+            "manager steps",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "yarn",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": "express",
+        "status": "failing",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "manager:yarn: write yarn.lock",
+            "manager:yarn: write .yarnrc.yml",
+            "addon:tailwind: yarn add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.tsx",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: merge into tsconfig.app.json",
+            "addon:shadcn: prepend to vite.config.ts",
+            "addon:shadcn: patch vite.config.ts",
+            "addon:shadcn: yarn dlx shadcn@4.13.0 init -y -d",
+            "addon:router: yarn add react-router-dom@7.18.4",
+            "addon:router: prepend to src/main.tsx",
+            "addon:router: patch src/main.tsx",
+            "backend:express: yarn add express@5.2.1",
+            "backend:express: yarn add -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "yarn": "4.18.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "manager steps"
+          ],
+          "notExercised": [
+            "install (scripts off): add-on steps install (runner flow)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        },
+        "reason": "step failed: addon:router: yarn add react-router-dom@7.18.4"
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "yarn",
+        "platform": "windows",
+        "addons": [
+          "tailwind"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "manager:yarn: write yarn.lock",
+            "manager:yarn: write .yarnrc.yml",
+            "addon:tailwind: yarn add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.tsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "yarn": "4.18.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "manager steps",
+            "steps",
+            "build"
+          ],
+          "notExercised": [
+            "install (scripts off): add-on steps install (runner flow)"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }

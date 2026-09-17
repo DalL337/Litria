@@ -24,6 +24,11 @@
 // Usage:
 //   node scripts/scaffold-recipe-evidence.mjs [--manager npm] [--only web/react/ts,...]
 //        [--addons tailwind,shadcn] [--backend express] [--skip-install] [--out <file>] [--keep]
+//        [--corepack <version>]
+// `--corepack 10.34.5` runs pnpm/yarn through Node's bundled corepack
+// (`node corepack.js pnpm@10.34.5 …`) when the manager is not installed
+// globally — the same argv, a provisioned binary. The evidence records the
+// exact manager version either way.
 // Network is required (the CLIs download). Nothing in the repo is touched.
 // ---------------------------------------------------------------------------
 
@@ -32,7 +37,7 @@ import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { RECIPES, listWrappers, getWrapper, getLanguages, resolveRoute, assemblePrimaryArgv, deriveScaffoldSteps, describeStep, getAddons, getBackendOptions } from '../src/scaffold/recipeRegistry.js';
+import { RECIPES, listWrappers, getWrapper, getLanguages, resolveRoute, assemblePrimaryArgv, deriveScaffoldSteps, describeStep, getAddons, getBackendOptions, managerEnv } from '../src/scaffold/recipeRegistry.js';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback = null) => {
@@ -46,6 +51,7 @@ const only = opt('--only') ? new Set(opt('--only').split(',')) : null;
 const skipInstall = flag('--skip-install');
 const addonsWanted = opt('--addons') ? opt('--addons').split(',').filter(Boolean) : [];
 const backendWanted = opt('--backend') || null;
+const corepackVersion = opt('--corepack') || null;
 const keep = flag('--keep');
 const outFile = opt('--out', join(process.cwd(), `scaffold-evidence-${manager}-${Date.now()}.json`));
 const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
@@ -59,6 +65,11 @@ function resolveManager(id) {
     const cli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
     if (!existsSync(cli)) throw new Error(`npm-cli.js not found beside node: ${cli}`);
     return { exe: process.execPath, prefix: [cli] };
+  }
+  if (corepackVersion) {
+    const corepack = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'corepack.js');
+    if (!existsSync(corepack)) throw new Error(`corepack.js not found beside node: ${corepack}`);
+    return { exe: process.execPath, prefix: [corepack, `${id}@${corepackVersion}`] };
   }
   const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [id], { encoding: 'utf8' });
   const lines = (probe.stdout ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
@@ -75,7 +86,7 @@ function run(cmd, cmdArgs, cwd, extraEnv = {}) {
     encoding: 'utf8',
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, CI: 'true', npm_config_ignore_scripts: 'true', ...extraEnv },
+    env: { ...process.env, CI: 'true', npm_config_ignore_scripts: 'true', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', COREPACK_ENABLE_STRICT: '0', ...extraEnv },
     maxBuffer: 64 * 1024 * 1024,
   });
   return {
@@ -87,7 +98,7 @@ function run(cmd, cmdArgs, cwd, extraEnv = {}) {
 }
 
 function pmRun(cmdArgs, cwd) {
-  return run(pm.exe, [...pm.prefix, ...cmdArgs], cwd);
+  return run(pm.exe, [...pm.prefix, ...cmdArgs], cwd, managerEnv(manager));
 }
 
 // ---- step executor (mirror of scaffold_runner.rs apply_file_step) ---------
@@ -130,7 +141,10 @@ function applyFileStep(projectDir, step) {
   const write = (text) => { mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, text); };
   switch (step.op) {
     case 'write':
-      if (step.mode !== 'replace' && existsSync(target)) throw new Error(`${step.path}: already exists`);
+      if (existsSync(target)) {
+        if (step.mode === 'keep') return 'already present, kept';
+        if (step.mode !== 'replace') throw new Error(`${step.path}: already exists`);
+      }
       write(step.content); return 'wrote';
     case 'prepend': case 'append': {
       const cur = read();
@@ -261,14 +275,38 @@ for (const { wrapper, framework, language, route, addons, backend } of combos) {
     continue;
   }
 
+  // Manager post-create steps (Yarn's project marker + linker, pnpm's
+  // workspace settings) land before the first install, as in the runner.
+  const managerSteps = steps.filter((st) => st.source.startsWith('manager:'));
+  if (managerSteps.length) {
+    const ran = runSteps(projectDir, managerSteps);
+    checks.push({ check: 'manager steps', ok: ran.ok, steps: ran.results });
+    if (!ran.ok) {
+      record.status = 'failing';
+      record.reason = `step failed: ${ran.failed}`;
+      results.push(record);
+      console.log(`   FAIL: ${record.reason}`);
+      continue;
+    }
+  }
   let pkg = {};
   try { pkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8')); } catch { /* recorded below */ }
   record.generated = { name: pkg.name ?? null, scripts: Object.keys(pkg.scripts ?? {}), dependencies: pkg.dependencies ?? {}, devDependencies: pkg.devDependencies ?? {} };
 
   if (!skipInstall) {
-    const install = pmRun(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--fetch-retries=1'], projectDir);
-    checks.push({ check: 'install (scripts off)', ok: install.ok, ms: install.ms, tail: install.ok ? '' : install.tail });
-    if (!install.ok) {
+    // The runner never runs a bare install: the create CLI installs (Forge,
+    // Angular) or the add-on steps do (`add`). A standalone `install` here is
+    // the creation-stage check for templates that ship without one; for
+    // pnpm/Yarn it is skipped when post steps will install anyway so the
+    // evidence flow matches the runner's (Yarn's install-on-empty-lockfile
+    // path differs from `add`, which showed up as quarantined lock entries).
+    const stepsInstall = steps.some((st) => !st.source.startsWith('manager:') && (st.op === 'install' || st.op === 'exec'));
+    const installArgs = manager === 'npm'
+      ? ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--fetch-retries=1']
+      : ['install'];
+    const install = stepsInstall && manager !== 'npm' ? { ok: null, ms: 0, tail: '' } : pmRun(installArgs, projectDir);
+    checks.push({ check: 'install (scripts off)', ok: install.ok, ms: install.ms, tail: install.ok === false ? install.tail : '', ...(install.ok === null ? { detail: 'add-on steps install (runner flow)' } : {}) });
+    if (install.ok === false) {
       record.status = 'failing';
       record.reason = `install exited ${install.status}`;
       results.push(record);
@@ -277,8 +315,9 @@ for (const { wrapper, framework, language, route, addons, backend } of combos) {
     }
     // Post-scaffold steps (add-ons / backend / Electron framework wiring), the
     // same list the runner executes, before the build proves them.
-    if (steps.length) {
-      const ran = runSteps(projectDir, steps);
+    const postSteps = steps.filter((st) => !st.source.startsWith('manager:'));
+    if (postSteps.length) {
+      const ran = runSteps(projectDir, postSteps);
       checks.push({ check: 'steps', ok: ran.ok, steps: ran.results });
       if (!ran.ok) {
         record.status = 'failing';

@@ -5,6 +5,7 @@ import {
   ADDON_CLI_VERSIONS,
   CREATE_CLI_VERSIONS,
   SCAFFOLD_POSTURE_NOTE,
+  scaffoldPostureNote,
 } from '../../src/scaffold/create-cli-versions.js';
 import { COMPAT } from '../../src/scaffold/compatibility-matrix.js';
 import { RECIPES, resolveRoute } from '../../src/scaffold/recipeRegistry.js';
@@ -64,4 +65,25 @@ test('posture note states the gate honestly (ADR-021 §5)', () => {
   assert.ok(!note.includes('npm enforces'), 'npm has no native cooldown');
   assert.ok(!note.includes('guarantee'), 'the gate contains, it does not guarantee');
   assert.ok(!note.includes('safe from'), 'no blanket safety claims');
+});
+
+test('posture note is per manager and never claims npm coverage for Yarn or pnpm (ADR-028 §5, F29)', () => {
+  const npm = scaffoldPostureNote('npm').toLowerCase();
+  assert.ok(npm.includes('(npm)') && npm.includes('scripts off by default') && npm.includes('npm audit at create'));
+  const pnpm = scaffoldPostureNote('pnpm').toLowerCase();
+  assert.ok(pnpm.includes('(pnpm)'), 'names the manager');
+  assert.ok(pnpm.includes("pnpm's own default"), 'scripts-off is pnpm-native');
+  assert.ok(pnpm.includes('no audit at create'), 'pnpm gets no npm audit');
+  assert.ok(pnpm.includes('minimumreleaseage'), 'the cooldown the runner writes');
+  const yarn = scaffoldPostureNote('yarn').toLowerCase();
+  assert.ok(yarn.includes('(yarn)'));
+  assert.ok(yarn.includes('not disabled'), 'yarn scripts run — the note must say so');
+  assert.ok(yarn.includes('no audit at create'));
+  assert.ok(yarn.includes('npmminimalagegate'), 'the 24h gate the recipe writes for yarn');
+  assert.ok(!yarn.includes('scripts off'), 'never the npm wording for yarn');
+  for (const n of [npm, pnpm, yarn]) {
+    assert.match(n, /transitive/);
+    assert.ok(!n.includes('provenance') && !n.includes('guarantee') && !n.includes('safe from'));
+  }
+  assert.equal(scaffoldPostureNote('nope'), scaffoldPostureNote('npm'), 'unknown manager falls back to npm');
 });

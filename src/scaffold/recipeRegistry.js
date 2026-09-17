@@ -71,6 +71,12 @@ export function getManager(managerId) {
   return recipes.managers[managerId] ?? null;
 }
 
+/** Environment the runner sets on every command of this manager (Yarn's
+ *  linker choice must reach the create CLI's own install). */
+export function managerEnv(managerId) {
+  return { ...(recipes.managers[managerId]?.env ?? {}) };
+}
+
 export function getBackendOptions(wrapperId) {
   return recipes.backends.wrappers.includes(wrapperId) ? recipes.backends.options : [];
 }
@@ -297,6 +303,10 @@ export function deriveScaffoldSteps({ wrapper, framework, language, manager, add
       for (const step of recipe.steps) out.push(materialize(step, ctx, source));
     }
   };
+  // Manager-specific post-create steps come first (Yarn Berry's project marker).
+  if (recipes.managers[manager]?.postCreate?.length) {
+    apply([{ when: {}, steps: recipes.managers[manager].postCreate }], `manager:${manager}`);
+  }
   apply(recipes.wrappers[wrapper]?.frameworkRecipes?.[framework], `framework:${framework}`);
   for (const addon of orderAddons(addons)) apply(recipes.addons[addon]?.recipes, `addon:${addon}`);
   if (backend && backend !== 'none' && getBackendOptions(wrapper).includes(backend)) {
