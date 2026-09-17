@@ -59,6 +59,19 @@ pub(crate) struct Manager {
     pub exec: Vec<String>,
     pub install: Vec<String>,
     pub dev_flag: String,
+    /// Lowest major the recipes are written for (ADR-028 §5): Yarn 2+ (dlx,
+    /// add), pnpm 9+, npm 7+. The runner reads `<pm> --version` and refuses
+    /// an older global before executing anything.
+    #[serde(default)]
+    pub min_major: Option<u32>,
+    /// Steps that run right after the create CLI for this manager (Yarn
+    /// Berry's empty `yarn.lock` project marker), before any add-on.
+    #[serde(default)]
+    pub post_create: Vec<Value>,
+    /// Environment for every command this manager runs (Yarn's linker must
+    /// reach the create CLI's own install, which precedes `postCreate`).
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -473,6 +486,7 @@ pub(crate) fn derive_steps(
         name: project_name,
     };
     let mut out = Vec::new();
+    let post_create = Recipe { when: HashMap::new(), steps: m.post_create.clone() };
     let mut apply = |recipes: &[Recipe], source: &str| -> Result<(), String> {
         for recipe in recipes {
             if !ctx.matches(&recipe.when) {
@@ -484,6 +498,9 @@ pub(crate) fn derive_steps(
         }
         Ok(())
     };
+    if !post_create.steps.is_empty() {
+        apply(std::slice::from_ref(&post_create), &format!("manager:{manager}"))?;
+    }
     if let Some(fw) = w.framework_recipes.get(framework) {
         apply(fw, &format!("framework:{framework}"))?;
     }
@@ -570,6 +587,20 @@ pub(crate) fn unverified_addon(
         }
     }
     None
+}
+
+/// Environment the runner sets on every command of a manager.
+pub(crate) fn manager_env(manager: &str) -> Vec<(String, String)> {
+    registry()
+        .managers
+        .get(manager)
+        .map(|m| m.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
+}
+
+/// The registry's floor for a manager's major version, if any.
+pub(crate) fn manager_min_major(manager: &str) -> Option<u32> {
+    registry().managers.get(manager).and_then(|m| m.min_major)
 }
 
 /// The platform id the coverage table uses for this build.

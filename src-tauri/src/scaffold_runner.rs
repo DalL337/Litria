@@ -26,7 +26,7 @@ use crate::bundled_runtime;
 use crate::errors::{CommandError, CommandResult};
 use crate::scaffold_recipes::{
     coverage_status, current_platform, derive_primary, derive_steps, is_selectable_status,
-    registry, unverified_addon, DerivedPrimary,
+    manager_env, manager_min_major, registry, unverified_addon, DerivedPrimary,
 };
 use crate::scaffold_types::*;
 
@@ -154,12 +154,15 @@ pub(crate) fn run_scaffold(
     let mut primary_args = pm.prefix_args.clone();
     primary_args.extend(derived.argv.iter().cloned());
 
+    // ADR-028 §5: the manager's registry env (Yarn's node_modules linker)
+    // reaches the create CLI's own install, which runs before any post step.
+    let pm_env = manager_env(config.manager.id());
     steps.push(ScaffoldStep {
         label: format!("Creating {} project", wrapper_label(&config.wrapper)),
         executable: pm.executable.clone(),
         args: primary_args,
         cwd: location.to_path_buf(),
-        env: Vec::new(),
+        env: pm_env.clone(),
     });
 
     // Post-scaffold steps (ADR-028 §4): the validated plan's steps — Electron
@@ -167,7 +170,11 @@ pub(crate) fn run_scaffold(
     // a manager command or an in-process file operation.
     let mut post: Vec<PostStep> = Vec::new();
     for step in &config.plan.steps {
-        post.push(post_step(step, &pm, &project_dir));
+        let mut p = post_step(step, &pm, &project_dir);
+        if let PostAction::Command(cmd) = &mut p.action {
+            cmd.env.extend(pm_env.iter().cloned());
+        }
+        post.push(p);
     }
     let mut command_steps: Vec<&mut ScaffoldStep> = post
         .iter_mut()
@@ -247,19 +254,9 @@ pub(crate) fn run_scaffold(
     // scripts have run). Reaching this point means the primary step succeeded.
     let audit_status = run_dependency_audit(&config, &pm, &project_dir, channel);
 
-    // ADR-021 §2: pnpm projects get pnpm's native full-tree cooldown written
-    // into their config (npm has no equivalent setting to write).
-    if matches!(config.manager, PackageManager::Pnpm) {
-        match write_pnpm_release_age(&project_dir) {
-            Ok(Some(label)) => completed.push(label),
-            Ok(None) => {} // scaffold already configured its own cooldown
-            Err(e) => {
-                let msg = format!("Writing pnpm minimumReleaseAge: {e}");
-                let _ = channel.send(ScaffoldEvent::Warning { line: msg.clone() });
-                errors.push(msg);
-            }
-        }
-    }
+    // ADR-021 §2 for pnpm: minimumReleaseAge is written by the registry's
+    // pnpm `postCreate` step (pnpm-workspace.yaml, before any install) —
+    // see recipes.json managers.pnpm.
 
     let success = errors.is_empty();
     let _ = channel.send(ScaffoldEvent::Done { success });
@@ -423,9 +420,50 @@ struct ResolvedPM {
 fn resolve_pm(manager: &PackageManager, app: &AppHandle) -> Result<ResolvedPM, String> {
     match manager {
         PackageManager::Npm => resolve_npm(app),
-        PackageManager::Pnpm => resolve_global_pm("pnpm"),
-        PackageManager::Yarn => resolve_global_pm("yarn"),
+        PackageManager::Pnpm => resolve_global_pm_with_floor("pnpm"),
+        PackageManager::Yarn => resolve_global_pm_with_floor("yarn"),
     }
+}
+
+/// Global manager, then the registry's major floor (ADR-028 §5): the
+/// recipes use `add`/`dlx`, which Yarn Classic (1.x) does not have, so an old
+/// global is refused with the upgrade path instead of failing mid-scaffold
+/// with a syntax error (F4, R3).
+fn resolve_global_pm_with_floor(name: &str) -> Result<ResolvedPM, String> {
+    let pm = resolve_global_pm(name)?;
+    let Some(floor) = manager_min_major(name) else { return Ok(pm) };
+    let version = version_of(&pm)
+        .ok_or_else(|| format!("{name} is installed but `{name} --version` did not answer; cannot confirm it is {name} {floor}+."))?;
+    match major_of(&version) {
+        Some(major) if major >= floor => Ok(pm),
+        Some(major) => Err(format!(
+            "{name} {version} is not supported: Litria's {name} recipes need {name} {floor}+ (this is {name} {major}.x). \
+             Upgrade — for Yarn: `corepack enable && yarn set version stable` — or pick npm."
+        )),
+        None => Err(format!("{name} reported an unrecognised version '{version}'; cannot confirm it is {name} {floor}+.")),
+    }
+}
+
+/// `<pm> --version` through the resolved absolute executable.
+fn version_of(pm: &ResolvedPM) -> Option<String> {
+    let mut cmd = hidden_command(&pm.executable);
+    cmd.args(&pm.prefix_args).arg("--version");
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// Leading major from a version string (`1.22.22` → 1, `v4.18.0` → 4).
+fn major_of(version: &str) -> Option<u32> {
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split(['.', '-'])
+        .next()
+        .and_then(|s| s.parse().ok())
 }
 
 fn resolve_npm(app: &AppHandle) -> Result<ResolvedPM, String> {
@@ -1077,31 +1115,6 @@ fn run_dependency_audit(
     }
 }
 
-/// Write pnpm's `minimumReleaseAge` cooldown (24h, in minutes) into the
-/// scaffolded project. Returns the step label on write, `None` when the
-/// scaffold already configured its own cooldown.
-fn write_pnpm_release_age(project_dir: &Path) -> Result<Option<String>, String> {
-    let path = project_dir.join("pnpm-workspace.yaml");
-    let existing = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("reading {}: {e}", path.display())),
-    };
-    if existing.contains("minimumReleaseAge") {
-        return Ok(None);
-    }
-    let mut content = existing;
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(
-        "# Litria (ADR-021): wait 24h after a version is published before installing it.\n\
-         minimumReleaseAge: 1440\n",
-    );
-    std::fs::write(&path, content).map_err(|e| format!("writing {}: {e}", path.display()))?;
-    Ok(Some("Enabled pnpm 24h release-age cooldown".into()))
-}
-
 fn wrapper_label(wrapper: &ScaffoldWrapper) -> &'static str {
     match wrapper {
         ScaffoldWrapper::Tauri => "Tauri",
@@ -1321,12 +1334,18 @@ fn apply_file_step(project_dir: &Path, step: &serde_json::Value) -> Result<Vec<S
     match op {
         "write" => {
             let content = step_str(step, "content");
-            let replace = step_str(step, "mode") == "replace";
-            if !replace && target.exists() {
-                return Err(format!("{rel}: already exists (recipe expected to create it)"));
+            let mode = step_str(step, "mode");
+            if target.exists() {
+                match mode {
+                    "replace" => {}
+                    // `keep`: a marker the create CLI may already have written
+                    // (Yarn's lockfile) — the existing file wins.
+                    "keep" => return Ok(vec![format!("{rel}: already present, kept")]),
+                    _ => return Err(format!("{rel}: already exists (recipe expected to create it)")),
+                }
             }
             write(content)?;
-            Ok(vec![format!("{} {rel}", if replace { "replaced" } else { "wrote" })])
+            Ok(vec![format!("{} {rel}", if mode == "replace" { "replaced" } else { "wrote" })])
         }
         "prepend" | "append" => {
             let text = step_str(step, "text");
@@ -1862,6 +1881,12 @@ mod tests {
         assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "src/a.css", "mode": "create", "content": "y"}))).is_err());
         apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "src/a.css", "mode": "replace", "content": "z"}))).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("src/a.css")).unwrap(), "z");
+        // keep: an existing file wins, a missing one is written.
+        apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "yarn.lock", "mode": "keep", "content": ""}))).unwrap();
+        std::fs::write(dir.join("yarn.lock"), "existing").unwrap();
+        let kept = apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "yarn.lock", "mode": "keep", "content": ""}))).unwrap();
+        assert!(kept[0].contains("kept"));
+        assert_eq!(std::fs::read_to_string(dir.join("yarn.lock")).unwrap(), "existing");
         // prepend is idempotent.
         std::fs::write(dir.join("main.ts"), "import App from './App';\nrender(<App />);\n").unwrap();
         apply_file_step(&dir, &j(serde_json::json!({"op": "prepend", "path": "main.ts", "text": "import './tw.css';\n"}))).unwrap();
@@ -1902,6 +1927,71 @@ mod tests {
         assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "../escape.txt", "mode": "create", "content": ""}))).is_err());
         assert!(apply_file_step(&dir, &j(serde_json::json!({"op": "write", "path": "C:/abs.txt", "mode": "create", "content": ""}))).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Manager env (ADR-028 §5) ----
+
+    #[test]
+    fn yarn_commands_carry_the_node_modules_linker_env() {
+        let env = manager_env("yarn");
+        assert!(env.iter().any(|(k, v)| k == "YARN_NODE_LINKER" && v == "node-modules"));
+        assert!(manager_env("npm").is_empty());
+        // Manager post-create steps precede everything else.
+        let yarn = with_steps(
+            planned_config(ScaffoldWrapper::Web, ScaffoldFramework::React, ScaffoldLanguage::TypeScript, PackageManager::Yarn),
+            vec![ScaffoldAddon::Tailwind],
+            None,
+        );
+        assert_eq!(yarn.plan.steps[0]["source"], "manager:yarn");
+        assert_eq!(yarn.plan.steps[0]["path"], "yarn.lock");
+        assert_eq!(yarn.plan.steps[1]["path"], ".yarnrc.yml");
+        let pnpm = with_steps(
+            planned_config(ScaffoldWrapper::Web, ScaffoldFramework::React, ScaffoldLanguage::TypeScript, PackageManager::Pnpm),
+            vec![],
+            None,
+        );
+        assert_eq!(pnpm.plan.steps[0]["path"], "pnpm-workspace.yaml");
+        assert!(pnpm.plan.steps[0]["content"].as_str().unwrap().contains("minimumReleaseAge"));
+    }
+
+    // ---- Manager floors (ADR-028 §5) ----
+
+    #[test]
+    fn manager_major_is_parsed_from_version_strings() {
+        assert_eq!(major_of("1.22.22"), Some(1));
+        assert_eq!(major_of("4.18.0"), Some(4));
+        assert_eq!(major_of("v10.34.5"), Some(10));
+        assert_eq!(major_of("12.4.2-beta.1"), Some(12));
+        assert_eq!(major_of("garbage"), None);
+    }
+
+    #[test]
+    fn registry_floors_refuse_yarn_classic() {
+        assert_eq!(manager_min_major("yarn"), Some(2));
+        assert_eq!(manager_min_major("pnpm"), Some(9));
+        assert!(manager_min_major("npm").is_some());
+        // 1.22.22 (still `yarn@latest` on the registry) is below the floor.
+        assert!(major_of("1.22.22").unwrap() < manager_min_major("yarn").unwrap());
+    }
+
+    #[test]
+    fn install_steps_use_the_managers_verb() {
+        let yarn = with_steps(
+            planned_config(ScaffoldWrapper::Web, ScaffoldFramework::React, ScaffoldLanguage::TypeScript, PackageManager::Yarn),
+            vec![ScaffoldAddon::Tailwind],
+            None,
+        );
+        let install = yarn.plan.steps.iter().find(|s| s["op"] == "install").unwrap();
+        assert_eq!(install["argv"][0], "add", "Yarn Berry adds, it does not `install <pkg>` (F4)");
+        assert_eq!(install["argv"][1], "-D");
+        let pnpm = with_steps(
+            planned_config(ScaffoldWrapper::Web, ScaffoldFramework::React, ScaffoldLanguage::TypeScript, PackageManager::Pnpm),
+            vec![ScaffoldAddon::Tailwind],
+            None,
+        );
+        assert_eq!(pnpm.plan.steps.iter().find(|s| s["op"] == "install").unwrap()["argv"][0], "add");
+        let npm = with_steps(web_react_ts_npm(), vec![ScaffoldAddon::Tailwind], None);
+        assert_eq!(npm.plan.steps.iter().find(|s| s["op"] == "install").unwrap()["argv"][0], "install");
     }
 
     // ---- Release-age gate (ADR-021 §2) ----
@@ -2046,27 +2136,6 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn pnpm_cooldown_creates_workspace_yaml() {
-        let dir = temp_project_dir("create");
-        let label = write_pnpm_release_age(&dir).unwrap();
-        assert!(label.is_some());
-        let content = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
-        assert!(content.contains("minimumReleaseAge: 1440"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn pnpm_cooldown_appends_to_existing_yaml() {
-        let dir = temp_project_dir("append");
-        std::fs::write(dir.join("pnpm-workspace.yaml"), "packages:\n  - '.'\n").unwrap();
-        write_pnpm_release_age(&dir).unwrap();
-        let content = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
-        assert!(content.starts_with("packages:"), "existing content preserved");
-        assert!(content.contains("minimumReleaseAge: 1440"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     // ---- Scripts-off choke point (ADR-021 §3) ----
 
     fn fake_step(args: &[&str]) -> ScaffoldStep {
@@ -2108,16 +2177,6 @@ mod tests {
             assert!(steps[0].env.is_empty());
             assert!(!steps[0].args.contains(&"--ignore-scripts".to_string()));
         }
-    }
-
-    #[test]
-    fn pnpm_cooldown_respects_existing_setting() {
-        let dir = temp_project_dir("respect");
-        std::fs::write(dir.join("pnpm-workspace.yaml"), "minimumReleaseAge: 4320\n").unwrap();
-        assert!(write_pnpm_release_age(&dir).unwrap().is_none());
-        let content = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
-        assert!(!content.contains("1440"), "existing cooldown left untouched");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

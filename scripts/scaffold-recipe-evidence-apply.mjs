@@ -52,6 +52,25 @@ for (const file of files) {
       };
       addonByKey.set(addonKey(entry), entry);
       applied += 1;
+      // A verified add-on run also exercised the primary path (same create
+      // argv, install and build; the add-on steps only add files). When the
+      // primary combination has no direct entry, record it as
+      // covered-by-equivalence naming this run — the explicit mapping brief
+      // §6 requires. A direct primary run still wins when present.
+      if (r.status === 'verified' && !byKey.has(key(entry))) {
+        byKey.set(key(entry), {
+          wrapper: r.wrapper, framework: r.framework, language: r.language, manager: r.manager, platform: r.platform,
+          status: 'covered-by-equivalence',
+          evidence: {
+            date: r.date,
+            representative: `addon run ${r.wrapper}/${r.framework}/${r.language} ${r.manager} ${r.platform} [${r.addons.join('+')}${r.backend ? ` +${r.backend}` : ''}]`,
+            rationale: 'same create argv, install and build as the primary path; the add-on steps only add files before the build',
+            recipe: { package: r.recipe.package, version: r.recipe.version, template: r.recipe.template, argv: r.recipe.argv },
+            versions: r.versions,
+            source: 'scripts/scaffold-recipe-evidence-apply.mjs',
+          },
+        });
+      }
       continue;
     }
     const entry = {

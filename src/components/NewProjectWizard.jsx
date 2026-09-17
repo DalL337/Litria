@@ -33,7 +33,7 @@ import {
   backendAvailability,
   listManagers,
 } from '../scaffold/recipeRegistry';
-import { SCAFFOLD_POSTURE_NOTE } from '../scaffold/create-cli-versions';
+import { scaffoldPostureNote } from '../scaffold/create-cli-versions';
 import { buildScaffoldPlan, BLANK_FILES, normalizePlatform } from '../scaffold/scaffoldPlan';
 import {
   PY_ARCHETYPES,
@@ -1232,10 +1232,11 @@ function NewProjectWizard({
                   <span>Select a stack to see the scaffold command...</span>
                 )}
               </div>
-              {/* Posture note (ADR-021 §5) — npm-backed stacks only; states
-                  exactly what the gate does and its one gap. */}
+              {/* Posture note (ADR-021 §5, per manager — ADR-028 §5): states
+                  exactly what the gate does for the SELECTED manager and its
+                  gaps. Yarn and pnpm get their own coverage, not npm's. */}
               {!isBlank && !isPython && state.wrapper !== null && (
-                <div className="npw-posture-note">{SCAFFOLD_POSTURE_NOTE}</div>
+                <div className="npw-posture-note">{scaffoldPostureNote(state.manager)}</div>
               )}
             </div>
           )}
