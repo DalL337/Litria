@@ -1738,9 +1738,10 @@ mod tests {
 
     #[test]
     fn enforce_coverage_refuses_combinations_without_evidence() {
-        // Yarn has no evidence anywhere yet (no yarn on the evidence machine).
+        // Electron on Yarn has no evidence entry (S4 verified Yarn on the web
+        // wrapper only), so it must be refused with the "no evidence" reason.
         let config = planned_config(
-            ScaffoldWrapper::Web,
+            ScaffoldWrapper::Electron,
             ScaffoldFramework::React,
             ScaffoldLanguage::TypeScript,
             PackageManager::Yarn,
@@ -2122,18 +2123,6 @@ mod tests {
             "unavailable"
         );
         assert_eq!(classify_audit_output(false, ""), "unavailable");
-    }
-
-    // ---- pnpm cooldown write-through (ADR-021 §2) ----
-
-    fn temp_project_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "litria_age_gate_{tag}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     // ---- Scripts-off choke point (ADR-021 §3) ----

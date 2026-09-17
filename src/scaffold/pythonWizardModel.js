@@ -61,7 +61,43 @@ export function derivePythonNames(projectName) {
   const distName = collapsed || 'my-app';
   let moduleName = distName.replace(/-/g, '_');
   if (/^[0-9]/.test(moduleName)) moduleName = `_${moduleName}`;
-  return { distName, moduleName };
+  // ADR-028 §9 (F33): a keyword cannot be imported, so it is refused with a
+  // visible reason (the plan is unselectable) instead of rewritten — the
+  // runner refuses the same names (python_scaffold.rs PYTHON_KEYWORDS).
+  const problem = PYTHON_KEYWORDS.has(moduleName)
+    ? `"${moduleName}" is a Python keyword and cannot be imported — choose another project name.`
+    : null;
+  return { distName, moduleName, problem };
+}
+
+/** Python's hard keywords (`keyword.kwlist`, 3.13). Lowercase module names
+ *  can only collide with the lowercase ones, but the list stays complete so
+ *  it mirrors the Rust side exactly. */
+export const PYTHON_KEYWORDS = new Set([
+  'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class',
+  'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global',
+  'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return',
+  'try', 'while', 'with', 'yield',
+]);
+
+/**
+ * Why the Python plan cannot be created as it stands, or null. One place for
+ * every input refusal the runner would make (ADR-028 §9): the Create button
+ * carries this reason, so nothing is refused after the fact that the wizard
+ * could have said up front.
+ */
+export function pythonPlanProblem(state) {
+  if (!state.framework) return 'Pick a project type.';
+  const { problem } = derivePythonNames(state.name);
+  if (problem) return problem;
+  const floor = state.pyRequiresFloor?.trim();
+  if (floor && !isValidPythonFloor(floor)) {
+    return `requires-python must look like 3.13 (digits and dots), got "${floor}".`;
+  }
+  if (state.pyEnvMode === 'existing' && !(state.pyExistingEnv ?? '').trim()) {
+    return 'Enter the path of the existing environment.';
+  }
+  return null;
 }
 
 /**
@@ -162,8 +198,10 @@ export function buildPythonPlanPreview(state, probe) {
       parts.push({ type: 'key', text: '\nrun' });
       parts.push({
         type: 'val',
+        // Mirrors python_scaffold.rs env_command: uv never downloads an
+        // interpreter on the offline path (F28).
         text: engine === 'uv'
-          ? ` uv venv .venv${selected ? ` --python ${selected.path}` : ''}`
+          ? ` uv venv --no-python-downloads .venv${selected ? ` --python ${selected.path}` : ''}`
           : ` ${selected.path} -m venv .venv`,
       });
       parts.push({ type: 'comment', text: ' # offline, local only' });
@@ -241,10 +279,19 @@ export function buildPythonReviewRows(state, probe) {
  * entry, otherwise null (none found — creation proceeds files-only).
  */
 export function pickDefaultInterpreter(interpreters, rememberedPath) {
-  if (!Array.isArray(interpreters) || interpreters.length === 0) return null;
+  // Only what creation will accept (ADR-028 §9, F31): the probe stamps the
+  // shared verdict; entries it marked ineligible are never picked.
+  const usable = eligibleInterpreters(interpreters);
+  if (usable.length === 0) return null;
   if (rememberedPath) {
-    const remembered = interpreters.find((i) => i.path === rememberedPath);
+    const remembered = usable.find((i) => i.path === rememberedPath);
     if (remembered) return remembered.path;
   }
-  return interpreters[0].path;
+  return usable[0].path;
+}
+
+/** The probe's entries creation will accept (`eligible` false ⇒ hidden). */
+export function eligibleInterpreters(interpreters) {
+  if (!Array.isArray(interpreters)) return [];
+  return interpreters.filter((i) => i && typeof i.path === 'string' && i.eligible !== false);
 }

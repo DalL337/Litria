@@ -44,6 +44,7 @@ import {
   derivePythonFloor,
   buildPythonReviewRows,
   pickDefaultInterpreter,
+  eligibleInterpreters,
 } from '../scaffold/pythonWizardModel';
 import { isDestinationError } from '../scaffold/creationErrors';
 import {
@@ -404,6 +405,9 @@ function NewProjectWizard({
   const [pyProbe, setPyProbe] = useState({
     status: 'idle',
     interpreters: [],
+    // Entries the probe found but creation would refuse (ADR-028 §9, F31):
+    // never offered; named in the empty state so "no Python" is explained.
+    ineligible: [],
     excluded: [],
     uvAvailable: false,
   });
@@ -432,10 +436,15 @@ function NewProjectWizard({
     try {
       const { detectPythonInterpreters } = await runtime.lsp();
       const report = await detectPythonInterpreters();
-      const interpreters = Array.isArray(report?.interpreters) ? report.interpreters : [];
+      const found = Array.isArray(report?.interpreters) ? report.interpreters : [];
+      // Only what creation will accept is offered (F31): the probe and the
+      // runner share one eligibility predicate, so nothing offered here can
+      // be refused later.
+      const interpreters = eligibleInterpreters(found);
       setPyProbe({
         status: 'ready',
         interpreters,
+        ineligible: found.filter((i) => i?.eligible === false),
         excluded: Array.isArray(report?.excluded) ? report.excluded : [],
         uvAvailable: report?.uvAvailable === true,
       });
@@ -452,7 +461,7 @@ function NewProjectWizard({
     } catch (err) {
       // Never silent (F23): the scan failing is a fact worth a crash-log crumb.
       captureError('wizard', err, { source: 'python-probe' });
-      setPyProbe({ status: 'error', interpreters: [], excluded: [], uvAvailable: false });
+      setPyProbe({ status: 'error', interpreters: [], ineligible: [], excluded: [], uvAvailable: false });
     }
   }, [runtime, state.pyInterpreter]);
 
@@ -1199,6 +1208,14 @@ function NewProjectWizard({
                         shortcut, not an installation.
                       </div>
                     )}
+                    {pyProbe.ineligible.map((i) => (
+                      // Found, but creation would refuse it (F31) — say why
+                      // instead of offering a pick that fails at Create.
+                      <div key={i.path} className="npw-env-caption npw-env-stub">
+                        <TriangleAlert size={12} aria-hidden="true" />
+                        {`Not usable (${i.ineligibleReason ?? 'ineligible'}): ${i.path}`}
+                      </div>
+                    ))}
                     <div className="npw-env-caption">
                       Install via python.org (Python Install Manager)
                       {pyProbe.uvAvailable ? ' — or run `uv python install 3.13` in a terminal' : ''}.

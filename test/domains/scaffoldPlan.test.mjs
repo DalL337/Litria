@@ -46,6 +46,24 @@ test('python plan: engine resolved once for preview and payload', () => {
   ]);
 });
 
+test('python plan: every runner refusal is a reason up front (F32, F33, F36)', () => {
+  const state = { ...base, wrapper: 'python', framework: 'py-lib', lang: 'py' };
+  assert.equal(buildScaffoldPlan(state, probe, WIN).availability.selectable, true);
+  const keyword = buildScaffoldPlan({ ...state, name: 'class' }, probe, WIN);
+  assert.equal(keyword.availability.selectable, false);
+  assert.match(keyword.availability.reason, /"class" is a Python keyword/);
+  assert.equal(keyword.payload.moduleName, 'class', 'the payload still says what the wizard derived');
+  const floor = buildScaffoldPlan({ ...state, pyRequiresFloor: '3.13.' }, probe, WIN);
+  assert.equal(floor.availability.selectable, false);
+  assert.match(floor.availability.reason, /requires-python must look like 3\.13/);
+  const existing = buildScaffoldPlan({ ...state, pyEnvMode: 'existing', pyExistingEnv: '' }, probe, WIN);
+  assert.equal(existing.availability.selectable, false);
+  assert.equal(existing.availability.reason, 'Enter the path of the existing environment.');
+  assert.equal(existing.payload.existingEnv, null);
+  const none = buildScaffoldPlan({ ...state, framework: null }, probe, WIN);
+  assert.equal(none.availability.reason, 'Pick a project type.');
+});
+
 test('npm plan: incomplete stack has no preview and is not submittable', () => {
   const plan = buildScaffoldPlan({ ...base, wrapper: 'web', framework: 'react' }, probe, WIN);
   assert.equal(plan.preview, null);

@@ -12,6 +12,9 @@ import {
   buildPythonPlanPreview,
   buildPythonReviewRows,
   pickDefaultInterpreter,
+  eligibleInterpreters,
+  pythonPlanProblem,
+  PYTHON_KEYWORDS,
   isPythonWrapper,
 } from '../../src/scaffold/pythonWizardModel.js';
 import { getFrameworks, getLanguages, getAddons, isLanguageLocked } from '../../src/scaffold/compatibility-matrix.js';
@@ -47,13 +50,44 @@ test('matrix scopes python addons: declaration-only tools, no JS addons; py-lib 
 // ---------------------------------------------------------------------------
 
 test('derivePythonNames normalizes project names to dist + module names', () => {
-  assert.deepEqual(derivePythonNames('My App'), { distName: 'my-app', moduleName: 'my_app' });
-  assert.deepEqual(derivePythonNames('data--Cruncher!'), { distName: 'data-cruncher', moduleName: 'data_cruncher' });
+  assert.deepEqual(derivePythonNames('My App'), { distName: 'my-app', moduleName: 'my_app', problem: null });
+  assert.deepEqual(derivePythonNames('data--Cruncher!'), { distName: 'data-cruncher', moduleName: 'data_cruncher', problem: null });
   // Leading digit gets an underscore prefix (modules cannot start with one).
   assert.equal(derivePythonNames('3d-tools').moduleName, '_3d_tools');
   // Degenerate input falls back instead of producing an empty name.
-  assert.deepEqual(derivePythonNames('!!!'), { distName: 'my-app', moduleName: 'my_app' });
-  assert.deepEqual(derivePythonNames(''), { distName: 'my-app', moduleName: 'my_app' });
+  assert.deepEqual(derivePythonNames('!!!'), { distName: 'my-app', moduleName: 'my_app', problem: null });
+  assert.deepEqual(derivePythonNames(''), { distName: 'my-app', moduleName: 'my_app', problem: null });
+});
+
+test('derivePythonNames refuses Python keywords with a visible reason (F33)', () => {
+  // ADR-028 §9: `from class import __version__` is a SyntaxError, so the
+  // name is refused, not rewritten; the runner refuses the same list.
+  for (const word of ['class', 'Import', 'FOR', 'lambda', 'yield', 'async']) {
+    const { moduleName, problem } = derivePythonNames(word);
+    assert.equal(moduleName, word.toLowerCase());
+    assert.match(problem, new RegExp(`"${word.toLowerCase()}" is a Python keyword`), word);
+  }
+  assert.equal(derivePythonNames('none').problem, null, 'lowercase none is not the keyword None');
+  assert.equal(derivePythonNames('classes').problem, null);
+  // A trailing underscore is stripped by normalization, so "class_" still
+  // derives "class" — the fix is a different project name, e.g. "class app".
+  assert.equal(derivePythonNames('class_').moduleName, 'class');
+  assert.notEqual(derivePythonNames('class_').problem, null);
+  assert.deepEqual(derivePythonNames('class app'), { distName: 'class-app', moduleName: 'class_app', problem: null });
+  assert.equal(PYTHON_KEYWORDS.size, 35, 'keyword.kwlist for Python 3.13');
+});
+
+test('pythonPlanProblem names every refusal the runner would make (F32, F33, F36)', () => {
+  const ok = { framework: 'py-script', name: 'demo', pyRequiresFloor: '3.13', pyEnvMode: 'venv', pyExistingEnv: '' };
+  assert.equal(pythonPlanProblem(ok), null);
+  assert.equal(pythonPlanProblem({ ...ok, framework: null }), 'Pick a project type.');
+  assert.match(pythonPlanProblem({ ...ok, name: 'import' }), /"import" is a Python keyword/);
+  assert.match(pythonPlanProblem({ ...ok, pyRequiresFloor: '3.13.' }), /requires-python must look like 3\.13 .* got "3\.13\."/);
+  assert.match(pythonPlanProblem({ ...ok, pyRequiresFloor: 'abc' }), /got "abc"/);
+  assert.equal(pythonPlanProblem({ ...ok, pyRequiresFloor: '' }), null, 'an empty floor is omitted, not refused');
+  assert.equal(pythonPlanProblem({ ...ok, pyRequiresFloor: null }), null);
+  assert.equal(pythonPlanProblem({ ...ok, pyEnvMode: 'existing', pyExistingEnv: '  ' }), 'Enter the path of the existing environment.');
+  assert.equal(pythonPlanProblem({ ...ok, pyEnvMode: 'existing', pyExistingEnv: 'C:\\envs\\shared' }), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -150,7 +184,8 @@ test('plan preview shows the exact venv command for the resolved engine', () => 
   assert.match(stdlibText, /zero dependencies/);
 
   const uv = buildPythonPlanPreview(BASE_STATE, { ...BASE_PROBE, uvAvailable: true });
-  assert.match(uv.map((p) => p.text).join(''), /uv venv \.venv --python C:\\Py\\python\.exe/);
+  // F28: the preview shows the exact flags creation runs — downloads off.
+  assert.match(uv.map((p) => p.text).join(''), /uv venv --no-python-downloads \.venv --python C:\\Py\\python\.exe/);
 });
 
 test('plan preview defers the environment when no interpreter exists', () => {
@@ -202,6 +237,19 @@ test('pickDefaultInterpreter prefers a still-present remembered path, else the f
   assert.equal(pickDefaultInterpreter(list, 'gone'), 'A');
   assert.equal(pickDefaultInterpreter(list, undefined), 'A');
   assert.equal(pickDefaultInterpreter([], 'B'), null);
+});
+
+test('pickDefaultInterpreter and eligibleInterpreters skip entries the probe marked ineligible (F31)', () => {
+  const list = [
+    { path: 'A', eligible: false, ineligibleReason: 'not found on disk' },
+    { path: 'B', eligible: true },
+    { path: 'C' },
+  ];
+  assert.deepEqual(eligibleInterpreters(list).map((i) => i.path), ['B', 'C'], 'absent flag means eligible (older reports)');
+  assert.equal(pickDefaultInterpreter(list, 'A'), 'B', 'a remembered but ineligible path is not restored');
+  assert.equal(pickDefaultInterpreter(list, 'C'), 'C');
+  assert.equal(pickDefaultInterpreter([{ path: 'A', eligible: false }], undefined), null);
+  assert.deepEqual(eligibleInterpreters(null), []);
 });
 
 test('isPythonWrapper matches only the python runtime id', () => {
