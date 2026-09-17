@@ -152,3 +152,65 @@ test('changing the runtime after reaching Create clamps the stepper and disables
   assert.equal(button(container, 'Create Project'), null, 'Create is not reachable with an incomplete stack');
   await act(async () => { root.unmount(); });
 });
+
+test('Cancel during a run reaches the runner and the run ends failed with the report (F30, R7)', async () => {
+  // A fake runner: scaffold_project stays pending until cancel_scaffold
+  // arrives with the same runId, then rejects the way the real runner does
+  // (tree torn down, preservation report in the message).
+  const calls = [];
+  let rejectRun = null;
+  const invokeImpl = (cmd, args) => {
+    calls.push([cmd, args]);
+    if (cmd === 'scaffold_project') {
+      assert.equal(typeof args.config.runId, 'string');
+      assert.ok(args.config.runId.length > 8, 'a fresh run id');
+      assert.ok(args.config.plan.limits, 'limits ride in the plan');
+      return new Promise((_, reject) => { rejectRun = reject; });
+    }
+    if (cmd === 'cancel_scaffold') {
+      const run = calls.find(([c]) => c === 'scaffold_project');
+      assert.equal(args.runId, run[1].config.runId, 'cancel names the live run');
+      setTimeout(() => rejectRun(new Error('`npm` cancelled — its process tree torn down. Partial project retained — C:\\projects\\demo kept: package.json is subprocess output that was never recorded; nothing was deleted.')), 0);
+      return Promise.resolve(true);
+    }
+    return Promise.resolve({});
+  };
+  const container = dom.document.createElement('div');
+  dom.document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(createElement(NewProjectWizard, {
+      onDone: async () => {}, onCancel: () => {}, defaultFolder: 'C:\\projects', platform: 'windows',
+      runtime: makeRuntime({ invokeImpl }),
+    }));
+  });
+  await act(async () => { setInputValue(container.querySelector('#npw-name'), 'demo'); });
+  await act(async () => { button(container, 'Next').click(); });
+  await act(async () => { button(container, 'Web Only').click(); });
+  await act(async () => { button(container, 'React').click(); });
+  await act(async () => { button(container, 'TypeScript').click(); });
+  await act(async () => { button(container, 'Next').click(); });
+  await act(async () => { button(container, 'Next').click(); });
+  const create = button(container, 'Create Project');
+  assert.ok(create && !create.disabled, 'web/react/ts on npm is verified on windows');
+  await act(async () => { create.click(); });
+  await flush();
+
+  // Running: Cancel is live, navigation is frozen.
+  const cancel = container.querySelector('.npw-btn-cancel');
+  assert.ok(!cancel.disabled, 'Cancel is enabled while running (F30)');
+  assert.ok(cancel.textContent.startsWith('Cancel'));
+  assert.ok(Array.from(container.querySelectorAll('.npw-step')).every((b) => b.disabled), 'stepper frozen while running');
+  await act(async () => { cancel.click(); });
+  assert.ok(container.querySelector('.npw-btn-cancel').textContent.startsWith('Stopping'), 'debounced while the runner stops');
+  await flush();
+  await flush();
+
+  assert.ok(calls.some(([c]) => c === 'cancel_scaffold'), 'the runner was asked to stop');
+  const error = container.querySelector('.npw-error')?.textContent ?? '';
+  assert.match(error, /cancelled/);
+  assert.match(error, /Partial project retained/);
+  assert.ok(button(container, 'Create Project') && !button(container, 'Create Project').disabled, 'nothing was created: Create is offered again');
+  assert.ok(!container.querySelector('.npw-btn-cancel').disabled && container.querySelector('.npw-btn-cancel').textContent.startsWith('Cancel'), 'Cancel is back to closing the wizard');
+  await act(async () => { root.unmount(); });
+});

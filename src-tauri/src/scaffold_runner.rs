@@ -10,14 +10,12 @@
 //! through the bundled Node.js runtime; pnpm and yarn must be installed
 //! globally by the user.
 
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 // Every spawn goes through hidden_command: on Windows a release build has
 // no console, and a bare `Command::new` would open one per process.
 use crate::platform::hidden_command;
-use std::sync::mpsc;
 
 use tauri::ipc::Channel;
 use tauri::AppHandle;
@@ -28,6 +26,7 @@ use crate::scaffold_recipes::{
     coverage_status, current_platform, derive_primary, derive_steps, is_selectable_status,
     manager_env, manager_min_major, registry, unverified_addon, DerivedPrimary,
 };
+use crate::process_control::StepFailure;
 use crate::scaffold_types::*;
 
 // ---------------------------------------------------------------------------
@@ -191,6 +190,15 @@ pub(crate) fn run_scaffold(
 
     // ---- Execute steps ----
 
+    // ADR-028 §8: one control block per run — `cancel_scaffold(runId)`
+    // reaches it — and every subprocess runs under the registry's limits for
+    // its step kind. ADR-028 §7: the create CLI's output is unrecorded, so a
+    // torn-down run removes the target only while it is still empty.
+    let run_id = config.run_id.as_deref();
+    let control = crate::process_control::register_run(run_id);
+    let attempt = crate::creation_ownership::Attempt::external(&project_dir, "npm");
+    let limits = &registry().limits;
+
     let total = (steps.len() + post.len()) as u32;
     let mut completed = Vec::new();
     let mut errors = Vec::new();
@@ -204,19 +212,36 @@ pub(crate) fn run_scaffold(
     for (i, step) in all.iter().enumerate() {
         let step_num = (i + 1) as u32;
 
+        if control.is_cancelled() {
+            let _ = channel.send(ScaffoldEvent::StepFailed {
+                label: step.label.clone(),
+                step: step_num,
+                error: "cancelled before the step started".into(),
+            });
+            return abort_run(&attempt, channel, run_id, "Scaffold cancelled", StepFailure::Cancelled);
+        }
+
         let _ = channel.send(ScaffoldEvent::StepStarted {
             label: step.label.clone(),
             step: step_num,
             total,
         });
 
-        let outcome = match &step.action {
-            PostAction::Command(cmd) => run_step_command(cmd, channel),
-            PostAction::File(op) => apply_file_step(&project_dir, op).map(|lines| {
-                for line in lines {
-                    let _ = channel.send(ScaffoldEvent::StepOutput { line });
-                }
-            }),
+        // Failure = (message, Some(failure) when the runner tore the step down).
+        let outcome: Result<(), (String, Option<StepFailure>)> = match &step.action {
+            PostAction::Command(cmd) => {
+                let step_limits = if i == 0 { limits.primary.step_limits() } else { limits.command.step_limits() };
+                let _ = channel.send(ScaffoldEvent::StepOutput { line: step_limits.describe() });
+                run_step_command(cmd, step_limits, &control, channel)
+                    .map_err(|failure| (failure.message(&cmd.executable), failure.is_abort().then_some(failure)))
+            }
+            PostAction::File(op) => apply_file_step(&project_dir, op)
+                .map(|lines| {
+                    for line in lines {
+                        let _ = channel.send(ScaffoldEvent::StepOutput { line });
+                    }
+                })
+                .map_err(|e| (e, None)),
         };
 
         match outcome {
@@ -227,16 +252,23 @@ pub(crate) fn run_scaffold(
                     step: step_num,
                 });
             }
-            Err(e) => {
+            Err((e, abort)) => {
                 let _ = channel.send(ScaffoldEvent::StepFailed {
                     label: step.label.clone(),
                     step: step_num,
                     error: e.clone(),
                 });
 
+                if let Some(failure) = abort {
+                    // Cancelled or timed out: the tree is already torn down
+                    // and reaped; clean up only what can be proven (§7).
+                    return abort_run(&attempt, channel, run_id, &e, failure);
+                }
+
                 if i == 0 {
                     // Primary scaffold failed — nothing to salvage.
                     let _ = channel.send(ScaffoldEvent::Done { success: false });
+                    crate::process_control::finish_run(run_id);
                     return Err(CommandError::internal(
                         "scaffold.primary_failed",
                         format!("Scaffold failed: {e}"),
@@ -248,6 +280,7 @@ pub(crate) fn run_scaffold(
             }
         }
     }
+    crate::process_control::finish_run(run_id);
 
     // ADR-021 §4: advisory check — non-blocking by design. Findings inform;
     // they never roll back the scaffold (the files are inert, no dependency
@@ -653,7 +686,28 @@ fn validate_plan(config: &ScaffoldConfig, name: &str) -> Result<DerivedPrimary, 
             format!("{} step(s) derived from the registry", steps.len()),
         ));
     }
+    // ADR-028 §8: the limits the wizard recorded are the ones that run.
+    let limits = &registry().limits;
+    if plan.limits.as_ref() != Some(limits) {
+        return Err(mismatch(
+            "limits",
+            plan.limits.as_ref().map_or("none".to_string(), describe_limits),
+            describe_limits(limits),
+        ));
+    }
     Ok(derived)
+}
+
+fn describe_limits(limits: &crate::scaffold_recipes::Limits) -> String {
+    format!(
+        "primary {}/{} command {}/{} env {}/{}",
+        limits.primary.idle_seconds,
+        limits.primary.deadline_seconds,
+        limits.command.idle_seconds,
+        limits.command.deadline_seconds,
+        limits.env.idle_seconds,
+        limits.env.deadline_seconds
+    )
 }
 
 /// ADR-028 §10: only combinations with execution evidence for this platform
@@ -1481,67 +1535,47 @@ fn apply_scripts_off(steps: &mut [ScaffoldStep], manager: &PackageManager) {
 
 /// Spawn a process, stream its stdout/stderr line-by-line through the Tauri
 /// `Channel`, and return `Ok(())` on success or `Err(message)` on non-zero exit.
-fn run_step_command(step: &ScaffoldStep, channel: &Channel<ScaffoldEvent>) -> Result<(), String> {
+/// One subprocess step under the registry's limits and the run's cancel
+/// (ADR-028 §8): stdin is EOF (no prompts), merged output streams to the
+/// channel, and the executor owns the child through teardown and reap.
+fn run_step_command(
+    step: &ScaffoldStep,
+    limits: crate::process_control::StepLimits,
+    control: &crate::process_control::RunControl,
+    channel: &Channel<ScaffoldEvent>,
+) -> Result<(), StepFailure> {
     let mut cmd = hidden_command(&step.executable);
     cmd.args(&step.args)
         .current_dir(&step.cwd)
-        .stdin(Stdio::null())    // No interactive prompts — EOF on stdin
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("CI", "true")       // Node.js tools skip prompts when CI=true
+        .env("CI", "true") // Node.js tools skip prompts when CI=true
         .envs(step.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start '{}': {e}", step.executable))?;
-
-    // Stream stdout + stderr through an mpsc channel so we don't need
-    // Channel<ScaffoldEvent> to be Clone.
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    let (tx, rx) = mpsc::channel::<String>();
-    let tx_err = tx.clone();
-
-    let out_thread = std::thread::spawn(move || {
-        if let Some(out) = stdout {
-            for line in BufReader::new(out).lines().flatten() {
-                let _ = tx.send(line);
-            }
-        }
-    });
-
-    let err_thread = std::thread::spawn(move || {
-        if let Some(err) = stderr {
-            for line in BufReader::new(err).lines().flatten() {
-                let _ = tx_err.send(line);
-            }
-        }
-    });
-
-    // Forward merged output to the Tauri Channel.
-    for line in rx {
+    crate::process_control::run_with_limits(cmd, limits, control, |line| {
         let _ = channel.send(ScaffoldEvent::StepOutput { line });
-    }
+    })
+}
 
-    // Reader threads are done — pipes closed, process exited.
-    let _ = out_thread.join();
-    let _ = err_thread.join();
-
-    let status = child
-        .wait()
-        .map_err(|e| format!("Wait failed for '{}': {e}", step.executable))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        let code = status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "unknown".into());
-        Err(format!("Process exited with code {code}"))
-    }
+/// A cancelled or timed-out run: the tree is down; clean up only what this
+/// run can prove it created (ADR-028 §7, R7), report the outcome in the
+/// trace, and end the run with the distinct reason.
+fn abort_run(
+    attempt: &crate::creation_ownership::Attempt,
+    channel: &Channel<ScaffoldEvent>,
+    run_id: Option<&str>,
+    message: &str,
+    failure: StepFailure,
+) -> CommandResult<ScaffoldResult> {
+    let report = match attempt.cleanup_after_abort() {
+        crate::creation_ownership::CleanupOutcome::Removed => {
+            format!("Partial project removed: {}", attempt.root().display())
+        }
+        crate::creation_ownership::CleanupOutcome::Retained { reason } => {
+            format!("Partial project retained — {reason}. Remove the folder to try again.")
+        }
+    };
+    let _ = channel.send(ScaffoldEvent::Warning { line: report.clone() });
+    let _ = channel.send(ScaffoldEvent::Done { success: false });
+    crate::process_control::finish_run(run_id);
+    Err(CommandError::internal(failure.code(), format!("{message}. {report}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1581,7 +1615,9 @@ mod tests {
                 argv: derived.argv.clone(),
                 platform: current_platform().to_string(),
                 steps: vec![],
+                limits: Some(registry().limits.clone()),
             },
+            run_id: None,
         }
     }
 

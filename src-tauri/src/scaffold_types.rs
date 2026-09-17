@@ -133,6 +133,10 @@ pub(crate) struct ScaffoldPlanPayload {
     /// re-derives the same list from the registry and refuses a mismatch.
     #[serde(default)]
     pub steps: Vec<serde_json::Value>,
+    /// Subprocess limits per step kind as previewed (ADR-028 §8); the runner
+    /// compares them with the registry like every other plan field.
+    #[serde(default)]
+    pub limits: Option<crate::scaffold_recipes::Limits>,
 }
 
 impl ScaffoldBackend {
@@ -173,6 +177,10 @@ pub(crate) struct ScaffoldConfig {
     /// The previewed plan; validated against the registry before anything
     /// executes (ADR-028 §2). Pins live in `src/scaffold/recipes.json` only.
     pub plan: ScaffoldPlanPayload,
+    /// The wizard's handle on this run — `cancel_scaffold(runId)` reaches
+    /// the live subprocess through it (ADR-028 §8).
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

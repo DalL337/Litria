@@ -14,6 +14,7 @@ import {
   availability,
   getBackendOptions,
   deriveScaffoldSteps,
+  getLimits,
   describeStep,
   addonAvailability,
   backendAvailability,
@@ -195,6 +196,9 @@ export function buildScaffoldPlan(state, probe, env = {}) {
         // Post-scaffold steps, verbatim (ADR-028 §4): the runner derives the
         // same list from the registry and refuses a payload that differs.
         steps,
+        // Subprocess limits per step kind (ADR-028 §8): part of the plan
+        // record, compared by the runner like every other field.
+        limits: getLimits(),
       },
     },
   };

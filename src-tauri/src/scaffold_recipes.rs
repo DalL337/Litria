@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 const REGISTRY_JSON: &str = include_str!("../../src/scaffold/recipes.json");
@@ -35,6 +35,29 @@ pub(crate) struct Registry {
     pub backends: Backends,
     pub coverage: Coverage,
     pub addon_coverage: AddonCoverage,
+    /// Subprocess limits per step kind (ADR-028 §8).
+    pub limits: Limits,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Limits {
+    pub primary: LimitPair,
+    pub command: LimitPair,
+    pub env: LimitPair,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LimitPair {
+    pub idle_seconds: u64,
+    pub deadline_seconds: u64,
+}
+
+impl LimitPair {
+    pub(crate) fn step_limits(&self) -> crate::process_control::StepLimits {
+        crate::process_control::StepLimits::from_seconds(self.idle_seconds, self.deadline_seconds)
+    }
 }
 // Registry fields the runner does not read (`recordedAt`, `frameworks`,
 // `packages`, `templateManifests`) are not declared: serde ignores them.

@@ -16,23 +16,15 @@
 // Progress streams over the same `Channel<ScaffoldEvent>` the npm scaffolds
 // use, so the wizard's Capstone progress UI needs no new event plumbing.
 
-use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
 use crate::blank_project::validate_project_name;
 use crate::errors::{CommandError, CommandResult};
+use crate::process_control::{finish_run, register_run, run_with_limits, RunControl, StepFailure, StepLimits};
 use crate::scaffold_types::ScaffoldEvent;
-
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 // ---------------------------------------------------------------------------
 // Config / result (camelCase over IPC)
@@ -60,6 +52,10 @@ pub(crate) struct PythonScaffoldConfig {
     pub env_engine: String,
     pub interpreter_path: Option<String>,
     pub existing_env: Option<String>,
+    /// The wizard's handle on this run — `cancel_scaffold(runId)` reaches
+    /// the environment subprocess through it (ADR-028 §8).
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -519,65 +515,23 @@ fn env_command(config: &PythonScaffoldConfig) -> Option<(String, Vec<String>)> {
     }
 }
 
-/// Run the environment command in the project root, streaming merged
-/// stdout/stderr lines over the channel. Errors are returned, not panicked —
-/// the caller records them as non-fatal.
+/// Run the environment command in the project root under the registry's
+/// `env` limits and the run's cancel (ADR-028 §8), streaming merged
+/// stdout/stderr lines over the channel. The executor owns the child
+/// through teardown and reap; the caller decides what a failure means.
 fn run_env_command(
     program: &str,
     args: &[String],
     cwd: &Path,
+    limits: StepLimits,
+    control: &RunControl,
     on_event: &Channel<ScaffoldEvent>,
-) -> Result<(), String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to start `{program}`: {e}"))?;
-
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let mut readers = Vec::new();
-    if let Some(stdout) = child.stdout.take() {
-        let tx = tx.clone();
-        readers.push(std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let _ = tx.send(line);
-            }
-        }));
-    }
-    if let Some(stderr) = child.stderr.take() {
-        let tx = tx.clone();
-        readers.push(std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = tx.send(line);
-            }
-        }));
-    }
-    drop(tx);
-    for line in rx {
+) -> Result<(), StepFailure> {
+    let mut command = crate::platform::hidden_command(program);
+    command.args(args).current_dir(cwd);
+    run_with_limits(command, limits, control, |line| {
         let _ = on_event.send(ScaffoldEvent::StepOutput { line });
-    }
-    for reader in readers {
-        let _ = reader.join();
-    }
-
-    let status = child
-        .wait()
-        .map_err(|e| format!("Failed to wait for `{program}`: {e}"))?;
-    if !status.success() {
-        return Err(format!(
-            "`{program}` exited with {}",
-            status.code().map_or("signal".to_string(), |c| c.to_string())
-        ));
-    }
-    Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -606,44 +560,14 @@ pub(crate) fn run_python_scaffold(
     })?;
     let root: PathBuf = base.join(name);
 
-    // Same target-folder policy as Blank: nonexistent or empty is fine, and a
-    // folder holding only OUR blueprint files is a retryable previous attempt.
-    // Anything else refuses — creation never eats foreign content.
-    if root.exists() {
-        if !root.is_dir() {
-            return Err(CommandError::conflict(
-                "python_scaffold.root.not_dir",
-                format!("Path exists but is not a directory: {}", root.display()),
-            ));
-        }
-        let own_top_level: Vec<&str> = files
-            .iter()
-            .map(|(path, _)| path.split(['/', '\\']).next().unwrap_or(path.as_str()))
-            .chain([".venv"])
-            .collect();
-        let entries = fs::read_dir(&root).map_err(|e| {
-            CommandError::from_io("python_scaffold.root.read", &e, "Unable to inspect target folder")
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|e| {
-                CommandError::from_io("python_scaffold.root.read", &e, "Unable to inspect target folder")
-            })?;
-            let entry_name = entry.file_name();
-            let is_own = own_top_level
-                .iter()
-                .any(|own| entry_name.eq_ignore_ascii_case(own));
-            if !is_own {
-                return Err(CommandError::conflict(
-                    "python_scaffold.root.not_empty",
-                    format!("Folder already exists and is not empty: {}", root.display()),
-                ));
-            }
-        }
-    } else {
-        fs::create_dir_all(&root).map_err(|e| {
-            CommandError::from_io("python_scaffold.root.mkdir", &e, "Unable to create project directory")
-        })?;
-    }
+    // ADR-028 §7: claim the root before writing. An empty folder the user
+    // made first is fine; a previous attempt is accepted only when its
+    // marker and manifest prove every entry is our unchanged output (a
+    // partial `.venv` is subprocess output and blocks retry by name);
+    // foreign content refuses. Files are written under `create_new` with
+    // symlinks refused on every component (creation_ownership.rs).
+    let mut attempt = crate::creation_ownership::Attempt::claim_root(&root, "python", true)
+        .map_err(|e| CommandError::conflict(&format!("python_scaffold.{}", e.code), e.message))?;
 
     let env_step = env_command(&config);
     let total: u32 = if env_step.is_some() { 2 } else { 1 };
@@ -656,15 +580,9 @@ pub(crate) fn run_python_scaffold(
         total,
     });
     for (relative, contents) in &files {
-        let target = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                CommandError::from_io("python_scaffold.file.mkdir", &e, "Unable to create project subdirectory")
-            })?;
-        }
-        fs::write(&target, contents).map_err(|e| {
-            CommandError::from_io("python_scaffold.file.write", &e, "Unable to write project file")
-        })?;
+        attempt
+            .write_file(relative, contents.as_bytes())
+            .map_err(|message| CommandError::internal("python_scaffold.file.write", message))?;
         let _ = on_event.send(ScaffoldEvent::StepOutput {
             line: format!("wrote {relative}"),
         });
@@ -677,6 +595,11 @@ pub(crate) fn run_python_scaffold(
     // ── Step 2: create the environment (non-fatal, ADR-020 §4) ────────────
     let mut env_created = false;
     if let Some((program, args)) = env_step {
+        // The environment is subprocess output: never provable, so it is
+        // declared unrecorded before it exists (ADR-028 §7).
+        attempt
+            .note_unrecorded(".venv")
+            .map_err(|message| CommandError::internal("python_scaffold.marker.write", message))?;
         let label = if program == "uv" {
             "Creating environment (.venv via uv)".to_string()
         } else {
@@ -687,12 +610,40 @@ pub(crate) fn run_python_scaffold(
             step: 2,
             total,
         });
-        match run_env_command(&program, &args, &root, on_event) {
+        // ADR-028 §8: the registry's `env` limits and the run's cancel.
+        let run_id = config.run_id.as_deref();
+        let control = register_run(run_id);
+        let limits = crate::scaffold_recipes::registry().limits.env.step_limits();
+        let _ = on_event.send(ScaffoldEvent::StepOutput { line: limits.describe() });
+        let outcome = run_env_command(&program, &args, &root, limits, &control, on_event);
+        finish_run(run_id);
+        match outcome {
             Ok(()) => {
                 env_created = true;
                 let _ = on_event.send(ScaffoldEvent::StepCompleted { label, step: 2 });
             }
-            Err(error) => {
+            Err(StepFailure::Cancelled) => {
+                // The user stopped the run: the tree is down; clean up only
+                // what can be proven (a started `.venv` is retained, named).
+                let error = StepFailure::Cancelled.message(&program);
+                let _ = on_event.send(ScaffoldEvent::StepFailed { label, step: 2, error: error.clone() });
+                let report = match attempt.cleanup_after_abort() {
+                    crate::creation_ownership::CleanupOutcome::Removed => {
+                        format!("Partial project removed: {}", root.display())
+                    }
+                    crate::creation_ownership::CleanupOutcome::Retained { reason } => {
+                        format!("Partial project retained — {reason}. Remove the folder to try again.")
+                    }
+                };
+                let _ = on_event.send(ScaffoldEvent::Warning { line: report.clone() });
+                let _ = on_event.send(ScaffoldEvent::Done { success: false });
+                return Err(CommandError::internal("scaffold.cancelled", format!("{error}. {report}")));
+            }
+            Err(failure) => {
+                // Exit, idle timeout, or deadline: non-fatal (ADR-020 §4) —
+                // the tree is down, the files stand, first open offers to
+                // finish the environment.
+                let error = failure.message(&program);
                 errors.push(error.clone());
                 let _ = on_event.send(ScaffoldEvent::StepFailed { label, step: 2, error });
                 let _ = on_event.send(ScaffoldEvent::StepOutput {
@@ -719,6 +670,7 @@ pub(crate) fn run_python_scaffold(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn config(archetype: &str) -> PythonScaffoldConfig {
         PythonScaffoldConfig {
@@ -733,6 +685,7 @@ mod tests {
             env_engine: "venv".into(),
             interpreter_path: Some("C:\\Py\\python.exe".into()),
             existing_env: None,
+            run_id: None,
         }
     }
 
@@ -1011,9 +964,16 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let result = run_env_command("uv", &args, &base.0, &channel);
+        let result = run_env_command(
+            "uv",
+            &args,
+            &base.0,
+            StepLimits::from_seconds(60, 120),
+            &RunControl::default(),
+            &channel,
+        );
         match result {
-            Err(message) => eprintln!("uv refused as expected: {message}"),
+            Err(failure) => eprintln!("uv refused as expected: {}", failure.message("uv")),
             Ok(()) => panic!("uv must not satisfy 3.99 without a download"),
         }
         assert!(!base.0.join(".venv").exists(), "no environment may be created");

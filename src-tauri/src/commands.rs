@@ -277,6 +277,14 @@ pub(crate) async fn scaffold_python_project(
     .map_err(|e| CommandError::internal("python_scaffold.thread_error", e.to_string()))?
 }
 
+/// Cancel a running scaffold (ADR-028 §8): the executing thread tears the
+/// live process tree down on its next tick, cleans up only what it can
+/// prove it created, and reports. Returns false when no such run is live.
+#[tauri::command]
+pub(crate) fn cancel_scaffold(run_id: String) -> bool {
+    crate::process_control::cancel_run(&run_id)
+}
+
 /// Enumerate every Python interpreter on this machine (ADR-020 Slice 1).
 /// Structured probes: uv JSON, PEP 514 registry, py launcher, PATH — merged,
 /// deduplicated, sorted best-first. Empty result = none found (not an error);

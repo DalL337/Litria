@@ -113,6 +113,12 @@ test('the wizard derives every guard from runState and keeps the created payload
   assert.ok(/if \(state\.wrapper === action\.value\) return state;/.test(jsx), 'same-value reducer guard (F21)');
   // ADR-028 §9 (F31): only interpreters creation will accept are offered.
   assert.ok(/const interpreters = eligibleInterpreters\(found\);/.test(jsx), 'the select lists eligible entries only');
+  // ADR-028 §8 (F30): Cancel during a run reaches the runner by runId; the
+  // button is enabled while running and both creation paths carry the id.
+  assert.ok(/invoke\('cancel_scaffold', \{ runId: runIdRef\.current \}\)/.test(jsx), 'Cancel invokes cancel_scaffold with the run id');
+  assert.equal((jsx.match(/runId: runIdRef\.current/g) || []).length, 3, 'npm and python configs carry runId (plus the cancel call)');
+  assert.ok(/disabled=\{cancelKind === null \|\| cancelling\}/.test(jsx), 'Cancel is enabled while running (abort mode)');
+  assert.ok(!/cancelKind === 'abort' \|\| cancelKind === null\) return;/.test(jsx), 'no path still treats abort as disabled');
   assert.ok(/ineligible: found\.filter\(\(i\) => i\?\.eligible === false\)/.test(jsx), 'ineligible entries are kept to explain the empty state');
   // The existing-environment input lives in the env strip, not the Advanced fold.
   const envInput = jsx.indexOf('aria-label="Existing environment path"');

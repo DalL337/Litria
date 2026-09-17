@@ -320,8 +320,19 @@ Language packs are `&'static str` in Rust source. Not loaded from config files, 
 ### Project-name validation — GOOD (but see ISSUE 12) *(audited 2026-07-16)*
 `blank_project::validate_project_name` rejects path separators, `.`/`..`, control chars, Win32 forbidden chars, trailing dots, and reserved device names (CON, NUL, COM1…) — test-covered. Used by the Blank and Python creation paths.
 
-### Python creation (ADR-020) — SAFE by design *(audited 2026-07-16)*
-`python_scaffold.rs` writes every file itself; the only subprocess is local env creation (`<interpreter> -m venv` / `uv venv`). Zero network, zero third-party code execution at create time. dist-name/module-name/floor validators enforced.
+### Python creation (ADR-020) — SAFE by design *(audited 2026-07-16; ADR-028 S6/S7 2026-09-17)*
+`python_scaffold.rs` writes every file itself; the only subprocess is local env creation (`<interpreter> -m venv` / `uv venv --no-python-downloads`). Zero network, zero third-party code execution at create time. dist-name/module-name (keywords refused)/floor validators enforced; the interpreter guard is the probe's own `interpreter_eligibility` predicate and runs in every environment mode; `pyproject.toml` is rendered by the `toml` serializer.
+
+### Creation ownership and subprocess limits (ADR-028 §7–§8) — register *(added 2026-09-17, security-policy Rule 4)*
+The register of every creation path and the checks it carries lives at the chokepoint, in the header of `src-tauri/src/creation_ownership.rs` (test-enforced: `register_names_every_creation_path_and_both_limits`). Summary:
+
+| Path | Ownership | Content preservation | Symlinks / reparse points | Subprocess limits |
+|---|---|---|---|---|
+| Blank (`blank_project.rs`) | `Attempt::claim_root` + `.litria/scaffold-attempt.json` under `create_new` | retry only over marker + SHA-256 manifest; foreign entries refused by name | refused on the root and every written component | none |
+| Python (`python_scaffold.rs`) | same | same; `.venv` declared unrecorded (blocks retry/cleanup by name); cleanup after cancel moves the root aside atomically, verifies, then deletes — else retains and reports | same | env step: registry `limits.env` (idle + deadline), cancellable via `cancel_scaffold` |
+| npm / Angular (`scaffold_runner.rs`) | target must not exist; `Attempt::external` | CLI output is unrecorded: cleanup removes only an empty target; retry needs the user to remove the folder | `project_file` (relative, canonical inside the root) | primary: `limits.primary`; add-on/backend commands: `limits.command`; cancellable |
+
+Every subprocess runs through `process_control::run_with_limits`: an idle-output timeout reset by output and an absolute deadline output cannot extend, both from `recipes.json` and recorded in the plan (`validate_plan` refuses a payload whose limits differ) and the trace. Expiry or `cancel_scaffold` tears the process tree down (Windows: Job Object with kill-on-close plus `taskkill /T`; Unix: process group signal), reaps the child, then cleans up only what the run can prove it created.
 
 ### Frontend HTML injection — NONE *(audited 2026-07-16; re-checked 2026-09-07 after the wizard/Preferences rewrites)*
 No `innerHTML` / `outerHTML` / `dangerouslySetInnerHTML` / `document.write` / `eval` / `new Function` anywhere in `src/`, and no markdown-to-HTML rendering library. React's default escaping is the only rendering path. (This is what makes the missing CSP — ISSUE 10 — a latent gap rather than an active hole.)
