@@ -263,12 +263,60 @@ fn force_kill_tree(pid: u32) {
         .status();
 }
 
+/// The process group a live pid belongs to, read from the kernel: Linux
+/// `/proc/<pid>/stat` (field 5, after the parenthesised comm), elsewhere
+/// `ps -o pgid=`. None when the process is gone or unreadable.
 #[cfg(not(windows))]
-fn signal_tree(pid: u32) {
-    // The child leads its own process group (see `run_with_limits`), so a
-    // negative pid reaches every descendant that stayed in the group.
+fn process_group_of(pid: u32) -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let after_comm = &stat[stat.rfind(')')? + 1..];
+        // fields after comm: state ppid pgrp …
+        after_comm.split_whitespace().nth(2)?.parse().ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let out = crate::platform::hidden_command("ps")
+            .args(["-o", "pgid=", "-p", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    }
+}
+
+/// The `kill` argv for one target. Always `-s SIG -- <target>`: with
+/// procps-ng 3.3.17 (Ubuntu 22.04) the shorthand `kill -TERM -<pgid>`
+/// issues the syscall `kill(0, SIGTERM)` — the CALLER'S OWN process group —
+/// which on a CI runner is the runner itself (v1.0.8 release runs
+/// 35226000578 and 35228192525 died of "runner received a shutdown signal"
+/// at exactly this call; traced with strace on 2026-09-17). `-s SIG --`
+/// yields `kill(-pgid, SIGTERM)` on procps 3.3 and 4.0, util-linux and the
+/// shell builtins alike.
+#[cfg(not(windows))]
+fn kill_argv(signal: &str, target: &str) -> [String; 4] {
+    ["-s".to_string(), signal.to_string(), "--".to_string(), target.to_string()]
+}
+
+/// Send `signal` to the child's tree. The group is signalled ONLY when the
+/// kernel confirms the child leads its own group (the `process_group(0)`
+/// in `run_with_limits` took effect); otherwise only the child is
+/// signalled. A group signal aimed anywhere else reaches whatever spawned
+/// Litria.
+#[cfg(not(windows))]
+fn signal(pid: u32, signal: &str) {
+    if pid <= 1 {
+        return;
+    }
+    let target = match process_group_of(pid) {
+        Some(group) if group == pid => format!("-{pid}"),
+        Some(_) => pid.to_string(),
+        None => return, // already gone; nothing to reap here
+    };
     let _ = crate::platform::hidden_command("kill")
-        .args(["-TERM", &format!("-{pid}")])
+        .args(kill_argv(signal, &target))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -276,13 +324,13 @@ fn signal_tree(pid: u32) {
 }
 
 #[cfg(not(windows))]
+fn signal_tree(pid: u32) {
+    signal(pid, "TERM");
+}
+
+#[cfg(not(windows))]
 fn force_kill_tree(pid: u32) {
-    let _ = crate::platform::hidden_command("kill")
-        .args(["-KILL", &format!("-{pid}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    signal(pid, "KILL");
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +604,30 @@ mod tests {
         let mut cmd = node();
         cmd.args(["-e", "console.log('never')"]);
         assert_eq!(run_with_limits(cmd, StepLimits::from_seconds(5, 5), &control, |_| panic!("no output")), Err(StepFailure::Cancelled));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn group_signals_use_the_explicit_form_and_only_the_childs_own_group() {
+        // The shorthand `-TERM -<pgid>` is `kill(0, SIGTERM)` on procps 3.3.17.
+        assert_eq!(kill_argv("TERM", "-123"), ["-s", "TERM", "--", "-123"]);
+        assert_eq!(kill_argv("KILL", "123"), ["-s", "KILL", "--", "123"]);
+        // A child spawned by run_with_limits leads its own group.
+        let mut cmd = node();
+        cmd.args(["-e", "setInterval(() => {}, 1000)"]);
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id();
+        assert_eq!(process_group_of(pid), Some(pid), "the child leads its own group");
+        // Our own group is not the child's, and the test process must survive
+        // the child's teardown — that is the runner-shutdown regression.
+        assert_ne!(process_group_of(std::process::id()), Some(pid));
+        ProcessTree::adopt(&child).teardown(&mut child);
+        assert!(process_group_of(pid).is_none(), "child gone after teardown");
     }
 
     #[test]
