@@ -1,5 +1,79 @@
 # Release Notes
 
+## v1.0.7 — Honest save state and process teardown
+
+**Date:** 2026-09-16 (PRs #38–#43)
+
+> Platform status: unsigned artifacts everywhere; macOS run once by a tester;
+> **Linux** passed the source-build parity checklist on Fedora 44, but the packaged
+> AppImage / deb / rpm have not yet been launched by a human.
+
+A release about telling the truth. A two-agent audit of the codebase found three
+places where Litria could report success it had not achieved, one process-cleanup
+rule that was written down but not enforced, and several documented capabilities
+the program did not have. All are fixed, and the capability document now says
+only what the code does.
+
+### Fixed
+
+- **A failed file save no longer looks like a successful one.** Saving to a file
+  the OS refuses (read-only, locked) used to turn the tab clean and the node LED
+  green while the old text stayed on disk. The tab now stays dirty, a notice
+  appears at the top of the canvas — *Couldn't save "path": reason. Your edits are
+  still in the editor.* — and switching project or exiting prompts again instead
+  of walking away from the unsaved text. Keystrokes typed while a save is in
+  flight stay dirty. Save All reports each file on its own, so one refusal cannot
+  mark the others clean.
+- **Dragged layout is never silently lost.** A layout write that failed while the
+  database was busy used to drop those moves until the node was moved again. They
+  are now kept and retried with increasing delay (2 s doubling to 30 s) for as
+  long as the project is open.
+- **Language servers are shut down properly.** Stopping a server, and closing the
+  app, now asks it to exit and waits briefly before killing it, then reaps the
+  process. Previously the server was killed immediately and never waited on,
+  which could leave orphaned processes.
+
+### Changed
+
+- The canvas shortcut layer no longer inspects the editor's internals to decide
+  whether text has focus; the editor registers that capability itself. No
+  visible change; it removes the last engine-specific coupling outside the
+  editor package.
+- TLS library updated (rustls 0.23.45, RUSTSEC-2026-0285) on the path that
+  downloads managed language servers.
+
+### Documentation
+
+- `CAPABILITIES.md` no longer claims unsaved edits survive a restart (they do
+  not: a crash loses unsaved edits; deliberate exits are gated; saved files are
+  safe), attributes go-to-definition to its real providers, and gains a
+  language-tier table (editable / discovered / indexed / LSP-served).
+- The README's Linux line now says what has actually been run.
+- Release policy records that the GitHub release object must exist before the
+  workflow's upload step.
+
+### Internal
+
+- 22 new JavaScript tests (save coordinator, save outcome, outbox retry, engine
+  capability, reducer, notices) and 2 new Rust tests (cooperative and stubborn
+  child teardown). Editor-engine guard reports zero temporary debt.
+
+### Known limitations
+
+- **Per-project override for "Wire drop on collapsed group" is not wired.** The
+  row says so and follows the global value.
+- **macOS Dock icon shows a black square.** The source artwork is opaque with no
+  transparency, and macOS does not round app icons itself.
+- Import de-duplication treats `./thing` and `./thing/index` as different modules,
+  so connecting a wire can write a redundant (harmless) import.
+- The Python import writer can still insert inside a parenthesised
+  `from x import ( … )`.
+- Collapsed group pills can report a file count that does not match the project.
+- Unsaved edits do not survive a crash. Exits and project switches are gated;
+  a durable draft store is a possible later addition, not a current feature.
+
+---
+
 ## v1.0.6 — Workspace database durability
 
 **Date:** 2026-09-15 (PRs #36–#37)

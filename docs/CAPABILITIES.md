@@ -1,6 +1,6 @@
 # Litria — Capabilities & Features
 
-> **Version**: 1.0.6 | **Date**: 2026-09-15 | **Status**: Public Beta (MIT)
+> **Version**: 1.0.7 | **Date**: 2026-09-16 | **Status**: Public Beta (MIT)
 
 ## How to read this document
 
@@ -243,7 +243,7 @@ a pane-aware session domain — editor state is project state.
   schemas, jsonc comment tolerance)
 - Tabs/panes/session persist per project and restore tolerantly
 
-*Built on:* ADR-017 (split panes), Monaco ESM setup notes in
+*Built on:* ADR-017 (split panes), ADR-027 (save state follows disk), Monaco ESM setup notes in
 `docs/plans/editor/`.
 
 ---
@@ -291,8 +291,12 @@ TOML for preferences — every kind of state has one physical home, and
   corruption reported with the recovery step (rebuild from `litria.toml`)
 - Read-only workspaces open for viewing with a canvas pill; failed layout
   writes surface as rate-limited notices instead of console lines
+- A failed file save keeps the tab dirty and reports in the same pill with the
+  path and reason; a failed layout batch is re-queued and retried with capped
+  backoff, never dropped (ADR-027)
 
-*Built on:* ADR-015, ADR-016, ADR-019 (stores split), ADR-026 (durability).
+*Built on:* ADR-015, ADR-016, ADR-019 (stores split), ADR-026 (durability),
+ADR-027 (honest save state, outbox retry).
 
 ---
 
