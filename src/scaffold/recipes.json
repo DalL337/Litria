@@ -1,0 +1,1906 @@
+{
+  "$comment": "ADR-028 §1 — the scaffold recipe registry. The ONLY place a create-CLI version, template identifier, manager verb, or support claim for a generated project lives. Read by src/scaffold/recipeRegistry.js (frontend) and src-tauri/src/scaffold_recipes.rs (include_str!). The wizard's compatibility matrix and preview, and the Rust runner's argv, are all projections of this file. Bumping a pin: verify the version is ≥24h old (`npm view <pkg> time --json`, ADR-021 §2), refresh `templateManifests` below from the published package, re-run scripts/scaffold-recipe-evidence.mjs for the affected recipes, and update `coverage`.",
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-16",
+  "tools": {
+    "create-tauri-app": {
+      "invoke": "tauri-app",
+      "version": "4.6.2",
+      "publishedAt": "2025-08-05",
+      "kind": "initializer"
+    },
+    "create-vite": {
+      "invoke": "vite",
+      "version": "9.1.1",
+      "publishedAt": "2026-06-30",
+      "kind": "initializer"
+    },
+    "create-electron-app": {
+      "invoke": "electron-app",
+      "version": "7.11.2",
+      "publishedAt": "2026-05-20",
+      "kind": "initializer"
+    },
+    "shadcn": {
+      "version": "4.13.0",
+      "publishedAt": "2026-07-03",
+      "kind": "addon-cli"
+    },
+    "shadcn-svelte": {
+      "version": "1.4.1",
+      "publishedAt": "2026-07-09",
+      "kind": "addon-cli"
+    },
+    "shadcn-vue": {
+      "version": "2.7.4",
+      "publishedAt": "2026-06-03",
+      "kind": "addon-cli"
+    }
+  },
+  "managers": {
+    "npm": {
+      "label": "npm",
+      "create": [
+        "create",
+        "--yes"
+      ],
+      "forwardSeparator": "--",
+      "exec": [
+        "exec",
+        "--yes",
+        "--"
+      ],
+      "install": [
+        "install"
+      ],
+      "devFlag": "-D",
+      "scriptsOff": "env+flag",
+      "auditAtCreate": true
+    },
+    "pnpm": {
+      "label": "pnpm",
+      "create": [
+        "create"
+      ],
+      "forwardSeparator": null,
+      "exec": [
+        "dlx"
+      ],
+      "install": [
+        "install"
+      ],
+      "devFlag": "-D",
+      "scriptsOff": "native",
+      "auditAtCreate": false
+    },
+    "yarn": {
+      "label": "yarn",
+      "create": [
+        "create"
+      ],
+      "forwardSeparator": null,
+      "exec": [
+        "dlx"
+      ],
+      "install": [
+        "install"
+      ],
+      "devFlag": "-D",
+      "scriptsOff": "none",
+      "auditAtCreate": false
+    }
+  },
+  "wrappers": {
+    "tauri": {
+      "kind": "npm",
+      "frameworks": [
+        "react",
+        "svelte",
+        "vue",
+        "angular",
+        "solid"
+      ],
+      "route": {
+        "kind": "initializer",
+        "tool": "create-tauri-app",
+        "args": [
+          "--yes",
+          "--template",
+          "{template}",
+          "--manager",
+          "{manager}"
+        ]
+      },
+      "templates": {
+        "react": {
+          "ts": "react-ts",
+          "js": "react"
+        },
+        "svelte": {
+          "ts": "svelte-ts",
+          "js": "svelte"
+        },
+        "vue": {
+          "ts": "vue-ts",
+          "js": "vue"
+        },
+        "angular": {
+          "ts": "angular"
+        },
+        "solid": {
+          "ts": "solid-ts",
+          "js": "solid"
+        }
+      }
+    },
+    "electron": {
+      "kind": "npm",
+      "frameworks": [
+        "react",
+        "svelte",
+        "vue",
+        "solid"
+      ],
+      "route": {
+        "kind": "initializer",
+        "tool": "create-electron-app",
+        "args": [
+          "--template={template}"
+        ]
+      },
+      "templates": {
+        "react": {
+          "ts": "vite-typescript",
+          "js": "vite"
+        },
+        "svelte": {
+          "ts": "vite-typescript",
+          "js": "vite"
+        },
+        "vue": {
+          "ts": "vite-typescript",
+          "js": "vite"
+        },
+        "solid": {
+          "ts": "vite-typescript",
+          "js": "vite"
+        }
+      }
+    },
+    "web": {
+      "kind": "npm",
+      "frameworks": [
+        "react",
+        "svelte",
+        "vue",
+        "angular",
+        "solid"
+      ],
+      "route": {
+        "kind": "initializer",
+        "tool": "create-vite",
+        "args": [
+          "--template",
+          "{template}"
+        ]
+      },
+      "templates": {
+        "react": {
+          "ts": "react-ts",
+          "js": "react"
+        },
+        "svelte": {
+          "ts": "svelte-ts",
+          "js": "svelte"
+        },
+        "vue": {
+          "ts": "vue-ts",
+          "js": "vue"
+        },
+        "solid": {
+          "ts": "solid-ts",
+          "js": "solid"
+        }
+      },
+      "$comment": "web + angular has NO template entry on purpose (F1): create-vite ships no Angular template and silently falls back to vanilla-ts in non-TTY mode. ADR-028 §3 gives Angular an `exec` route through the Angular CLI in slice S2; until then the registry refuses the combination and the wizard shows it disabled with this reason.",
+      "unsupported": {
+        "angular": "Angular on the Web wrapper arrives with the Angular CLI route (ADR-028 §3, slice S2). create-vite has no Angular template."
+      }
+    },
+    "python": {
+      "kind": "blueprint",
+      "frameworks": [
+        "py-script",
+        "py-cli",
+        "py-lib",
+        "py-fastapi"
+      ]
+    },
+    "blank": {
+      "kind": "blank",
+      "frameworks": []
+    }
+  },
+  "frameworks": {
+    "react": {
+      "languages": [
+        "ts",
+        "js"
+      ],
+      "addons": [
+        "tailwind",
+        "shadcn",
+        "router"
+      ]
+    },
+    "svelte": {
+      "languages": [
+        "ts",
+        "js"
+      ],
+      "addons": [
+        "tailwind",
+        "shadcn"
+      ]
+    },
+    "vue": {
+      "languages": [
+        "ts",
+        "js"
+      ],
+      "addons": [
+        "tailwind",
+        "shadcn",
+        "router"
+      ]
+    },
+    "angular": {
+      "languages": [
+        "ts"
+      ],
+      "addons": [
+        "tailwind"
+      ]
+    },
+    "solid": {
+      "languages": [
+        "ts",
+        "js"
+      ],
+      "addons": [
+        "tailwind",
+        "router"
+      ]
+    },
+    "py-script": {
+      "languages": [
+        "py"
+      ],
+      "addons": [
+        "pytest",
+        "ruff"
+      ]
+    },
+    "py-cli": {
+      "languages": [
+        "py"
+      ],
+      "addons": [
+        "pytest",
+        "ruff"
+      ]
+    },
+    "py-lib": {
+      "languages": [
+        "py"
+      ],
+      "addons": [
+        "ruff"
+      ]
+    },
+    "py-fastapi": {
+      "languages": [
+        "py"
+      ],
+      "addons": [
+        "pytest",
+        "ruff"
+      ]
+    }
+  },
+  "addons": {
+    "tailwind": {
+      "requires": []
+    },
+    "shadcn": {
+      "requires": [
+        "tailwind"
+      ],
+      "cli": {
+        "react": "shadcn",
+        "svelte": "shadcn-svelte",
+        "vue": "shadcn-vue"
+      }
+    },
+    "router": {
+      "requires": []
+    },
+    "pytest": {
+      "requires": []
+    },
+    "ruff": {
+      "requires": []
+    }
+  },
+  "backends": {
+    "wrappers": [
+      "web"
+    ],
+    "options": [
+      "none",
+      "express",
+      "fastify"
+    ]
+  },
+  "templateManifests": {
+    "$comment": "Template identifiers each pinned initializer actually ships, taken from the published package (tarball `template-*` directories for create-vite; the pinned README for create-tauri-app; the @electron-forge/template-* packages for Forge). test/domains/scaffoldRecipes.test.mjs refuses any route whose template is not listed here — the check that would have caught web + angular (F1).",
+    "create-vite": [
+      "lit",
+      "lit-ts",
+      "preact",
+      "preact-ts",
+      "qwik",
+      "qwik-ts",
+      "react",
+      "react-ts",
+      "solid",
+      "solid-ts",
+      "svelte",
+      "svelte-ts",
+      "vanilla",
+      "vanilla-ts",
+      "vue",
+      "vue-ts"
+    ],
+    "create-tauri-app": [
+      "vanilla",
+      "vanilla-ts",
+      "vue",
+      "vue-ts",
+      "svelte",
+      "svelte-ts",
+      "react",
+      "react-ts",
+      "preact",
+      "preact-ts",
+      "solid",
+      "solid-ts",
+      "angular",
+      "yew",
+      "leptos",
+      "sycamore",
+      "blazor"
+    ],
+    "create-electron-app": [
+      "vite",
+      "vite-typescript"
+    ]
+  },
+  "coverage": {
+    "$comment": "ADR-028 §10 / brief §6. One entry per (wrapper, framework, language, manager, platform) that has been exercised. Statuses: verified | covered-by-equivalence | unverified | failing. A combination with no entry is `unverified` and is not selectable; the runner refuses it too. Evidence: scripts/scaffold-recipe-evidence.mjs output, recorded per dependency-change policy Rule 6. Offline routes (blank, python) are covered by the Rust test suite and the owner's live passes and carry no per-manager entries.",
+    "entries": [
+      {
+        "wrapper": "electron",
+        "framework": "react",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-react-js",
+              "--",
+              "--template=vite"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "electron": "44.4.1",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite-typescript",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-react-ts",
+              "--",
+              "--template=vite-typescript"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "@types/electron-squirrel-startup": "^1.0.2",
+              "@typescript-eslint/eslint-plugin": "^5.62.0",
+              "@typescript-eslint/parser": "^5.62.0",
+              "electron": "44.4.1",
+              "eslint": "^8.57.1",
+              "eslint-plugin-import": "^2.32.0",
+              "typescript": "~4.5.4",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "solid",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-solid-js",
+              "--",
+              "--template=vite"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "electron": "44.4.1",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "solid",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite-typescript",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-solid-ts",
+              "--",
+              "--template=vite-typescript"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "@types/electron-squirrel-startup": "^1.0.2",
+              "@typescript-eslint/eslint-plugin": "^5.62.0",
+              "@typescript-eslint/parser": "^5.62.0",
+              "electron": "44.4.1",
+              "eslint": "^8.57.1",
+              "eslint-plugin-import": "^2.32.0",
+              "typescript": "~4.5.4",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "svelte",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-svelte-js",
+              "--",
+              "--template=vite"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "electron": "44.4.1",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite-typescript",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-svelte-ts",
+              "--",
+              "--template=vite-typescript"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "@types/electron-squirrel-startup": "^1.0.2",
+              "@typescript-eslint/eslint-plugin": "^5.62.0",
+              "@typescript-eslint/parser": "^5.62.0",
+              "electron": "44.4.1",
+              "eslint": "^8.57.1",
+              "eslint-plugin-import": "^2.32.0",
+              "typescript": "~4.5.4",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "vue",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-vue-js",
+              "--",
+              "--template=vite"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "electron": "44.4.1",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "vue",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-electron-app",
+            "version": "7.11.2",
+            "template": "vite-typescript",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "electron-app@7.11.2",
+              "fx-electron-vue-ts",
+              "--",
+              "--template=vite-typescript"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)"
+          ],
+          "notExercised": [
+            "build: no build script — creation-stage evidence only (runnable stage needs consented scripts)"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "package",
+              "make",
+              "publish",
+              "lint"
+            ],
+            "dependencies": {
+              "electron-squirrel-startup": "^1.0.1"
+            },
+            "devDependencies": {
+              "@electron-forge/cli": "^7.11.2",
+              "@electron-forge/maker-deb": "^7.11.2",
+              "@electron-forge/maker-rpm": "^7.11.2",
+              "@electron-forge/maker-squirrel": "^7.11.2",
+              "@electron-forge/maker-zip": "^7.11.2",
+              "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+              "@electron-forge/plugin-fuses": "^7.11.2",
+              "@electron-forge/plugin-vite": "^7.11.2",
+              "@electron/fuses": "^1.8.0",
+              "@types/electron-squirrel-startup": "^1.0.2",
+              "@typescript-eslint/eslint-plugin": "^5.62.0",
+              "@typescript-eslint/parser": "^5.62.0",
+              "electron": "44.4.1",
+              "eslint": "^8.57.1",
+              "eslint-plugin-import": "^2.32.0",
+              "typescript": "~4.5.4",
+              "vite": "^5.4.21"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "angular",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-angular-ts",
+              "--",
+              "--yes",
+              "--template",
+              "angular",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "ng",
+              "start",
+              "build",
+              "watch",
+              "tauri"
+            ],
+            "dependencies": {
+              "@angular/common": "^20.1.4",
+              "@angular/compiler": "^20.1.4",
+              "@angular/core": "^20.1.4",
+              "@angular/forms": "^20.1.4",
+              "@angular/platform-browser": "^20.1.4",
+              "@angular/router": "^20.1.4",
+              "rxjs": "~7.8.2",
+              "tslib": "^2.8.1",
+              "zone.js": "~0.15.1",
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "@angular/build": "^20.1.4",
+              "@angular/cli": "^20.1.4",
+              "@angular/compiler-cli": "^20.1.4",
+              "@tauri-apps/cli": "^2",
+              "typescript": "~5.8.3"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "react",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "react",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-react-js",
+              "--",
+              "--yes",
+              "--template",
+              "react",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview",
+              "tauri"
+            ],
+            "dependencies": {
+              "react": "^19.1.0",
+              "react-dom": "^19.1.0",
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "@vitejs/plugin-react": "^4.6.0",
+              "vite": "^7.0.4",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "react-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-react-ts",
+              "--",
+              "--yes",
+              "--template",
+              "react-ts",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview",
+              "tauri"
+            ],
+            "dependencies": {
+              "react": "^19.1.0",
+              "react-dom": "^19.1.0",
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "@types/react": "^19.1.8",
+              "@types/react-dom": "^19.1.6",
+              "@vitejs/plugin-react": "^4.6.0",
+              "typescript": "~5.8.3",
+              "vite": "^7.0.4",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "solid",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "solid",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-solid-js",
+              "--",
+              "--yes",
+              "--template",
+              "solid",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "dev",
+              "build",
+              "serve",
+              "tauri"
+            ],
+            "dependencies": {
+              "solid-js": "^1.9.3",
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "vite": "^6.0.3",
+              "vite-plugin-solid": "^2.11.0",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "solid",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "solid-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-solid-ts",
+              "--",
+              "--yes",
+              "--template",
+              "solid-ts",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "start",
+              "dev",
+              "build",
+              "serve",
+              "tauri"
+            ],
+            "dependencies": {
+              "solid-js": "^1.9.3",
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "typescript": "~5.6.2",
+              "vite": "^6.0.3",
+              "vite-plugin-solid": "^2.11.0",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "svelte",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "svelte",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-svelte-js",
+              "--",
+              "--yes",
+              "--template",
+              "svelte",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview",
+              "check",
+              "check:watch",
+              "tauri"
+            ],
+            "dependencies": {
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "@sveltejs/adapter-static": "^3.0.6",
+              "@sveltejs/kit": "^2.9.0",
+              "@sveltejs/vite-plugin-svelte": "^5.0.0",
+              "svelte": "^5.0.0",
+              "svelte-check": "^4.0.0",
+              "typescript": "~5.6.2",
+              "vite": "^6.0.3",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "svelte-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-svelte-ts",
+              "--",
+              "--yes",
+              "--template",
+              "svelte-ts",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview",
+              "check",
+              "check:watch",
+              "tauri"
+            ],
+            "dependencies": {
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "@sveltejs/adapter-static": "^3.0.6",
+              "@sveltejs/kit": "^2.9.0",
+              "@sveltejs/vite-plugin-svelte": "^5.0.0",
+              "svelte": "^5.0.0",
+              "svelte-check": "^4.0.0",
+              "typescript": "~5.6.2",
+              "vite": "^6.0.3",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "vue",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "vue",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-vue-js",
+              "--",
+              "--yes",
+              "--template",
+              "vue",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview",
+              "tauri"
+            ],
+            "dependencies": {
+              "vue": "^3.5.13",
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "@vitejs/plugin-vue": "^5.2.1",
+              "vite": "^6.0.3",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "vue",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-tauri-app",
+            "version": "4.6.2",
+            "template": "vue-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "tauri-app@4.6.2",
+              "fx-tauri-vue-ts",
+              "--",
+              "--yes",
+              "--template",
+              "vue-ts",
+              "--manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview",
+              "tauri"
+            ],
+            "dependencies": {
+              "vue": "^3.5.13",
+              "@tauri-apps/api": "^2",
+              "@tauri-apps/plugin-opener": "^2"
+            },
+            "devDependencies": {
+              "@vitejs/plugin-vue": "^5.2.1",
+              "typescript": "~5.6.2",
+              "vite": "^6.0.3",
+              "vue-tsc": "^2.1.10",
+              "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "react",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-react-js",
+              "--",
+              "--template",
+              "react"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "lint",
+              "preview"
+            ],
+            "dependencies": {
+              "react": "^19.2.7",
+              "react-dom": "^19.2.7"
+            },
+            "devDependencies": {
+              "@types/react": "^19.2.17",
+              "@types/react-dom": "^19.2.3",
+              "@vitejs/plugin-react": "^6.0.3",
+              "oxlint": "^1.71.0",
+              "vite": "^8.1.1"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "react-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-react-ts",
+              "--",
+              "--template",
+              "react-ts"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "lint",
+              "preview"
+            ],
+            "dependencies": {
+              "react": "^19.2.7",
+              "react-dom": "^19.2.7"
+            },
+            "devDependencies": {
+              "@types/node": "^24.13.2",
+              "@types/react": "^19.2.17",
+              "@types/react-dom": "^19.2.3",
+              "@vitejs/plugin-react": "^6.0.3",
+              "oxlint": "^1.71.0",
+              "typescript": "~6.0.2",
+              "vite": "^8.1.1"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "solid",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "solid",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-solid-js",
+              "--",
+              "--template",
+              "solid"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview"
+            ],
+            "dependencies": {
+              "solid-js": "^1.9.13"
+            },
+            "devDependencies": {
+              "vite": "^8.1.1",
+              "vite-plugin-solid": "^2.11.12"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "solid",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "solid-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-solid-ts",
+              "--",
+              "--template",
+              "solid-ts"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview"
+            ],
+            "dependencies": {
+              "solid-js": "^1.9.13"
+            },
+            "devDependencies": {
+              "@types/node": "^24.13.2",
+              "typescript": "~6.0.2",
+              "vite": "^8.1.1",
+              "vite-plugin-solid": "^2.11.12"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "svelte",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "svelte",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-svelte-js",
+              "--",
+              "--template",
+              "svelte"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview"
+            ],
+            "dependencies": {},
+            "devDependencies": {
+              "@sveltejs/vite-plugin-svelte": "^7.1.2",
+              "svelte": "^5.56.4",
+              "vite": "^8.1.1"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "svelte-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-svelte-ts",
+              "--",
+              "--template",
+              "svelte-ts"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview",
+              "check"
+            ],
+            "dependencies": {},
+            "devDependencies": {
+              "@sveltejs/vite-plugin-svelte": "^7.1.2",
+              "@tsconfig/svelte": "^5.0.8",
+              "@types/node": "^24.13.2",
+              "svelte": "^5.56.4",
+              "svelte-check": "^4.7.1",
+              "typescript": "~6.0.2",
+              "vite": "^8.1.1"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "vue",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-vue-js",
+              "--",
+              "--template",
+              "vue"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview"
+            ],
+            "dependencies": {
+              "vue": "^3.5.39"
+            },
+            "devDependencies": {
+              "@vitejs/plugin-vue": "^6.0.7",
+              "vite": "^8.1.1"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "create-vite",
+            "version": "9.1.1",
+            "template": "vue-ts",
+            "argv": [
+              "npm",
+              "create",
+              "--yes",
+              "vite@9.1.1",
+              "fx-web-vue-ts",
+              "--",
+              "--template",
+              "vue-ts"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "dev",
+              "build",
+              "preview"
+            ],
+            "dependencies": {
+              "vue": "^3.5.39"
+            },
+            "devDependencies": {
+              "@types/node": "^24.13.2",
+              "@vitejs/plugin-vue": "^6.0.7",
+              "@vue/tsconfig": "^0.9.1",
+              "typescript": "~6.0.2",
+              "vite": "^8.1.1",
+              "vue-tsc": "^3.3.5"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      }
+    ]
+  }
+}

@@ -5,24 +5,29 @@ import {
   ADDON_CLI_VERSIONS,
   CREATE_CLI_VERSIONS,
   SCAFFOLD_POSTURE_NOTE,
-  pinnedAddonSpecs,
-  pinnedCreateSpec,
-  previewCreateLabel
 } from '../../src/scaffold/create-cli-versions.js';
 import { COMPAT } from '../../src/scaffold/compatibility-matrix.js';
+import { RECIPES, resolveRoute } from '../../src/scaffold/recipeRegistry.js';
 
 // ADR-021 §1: exact versions only — never ranges, tags, or `latest`.
+// ADR-028 §1: the values are projections of recipes.json; this file keeps
+// the pin contract observable from the display side.
 const EXACT_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 // Runtimes whose scaffold path runs npm create-* CLIs (python is offline
 // blueprints per ADR-020 and must never gain a silent npm pin).
-const NPM_RUNTIMES = Object.keys(COMPAT.runtimes).filter((r) => r !== 'python');
+const NPM_RUNTIMES = Object.keys(COMPAT.runtimes).filter((r) => RECIPES.wrappers[r].kind === 'npm');
 
-test('every npm runtime in the compatibility matrix has a pinned create CLI', () => {
+test('every npm runtime in the compatibility matrix routes to a pinned create CLI', () => {
+  assert.deepEqual(NPM_RUNTIMES.sort(), ['electron', 'tauri', 'web']);
   for (const runtime of NPM_RUNTIMES) {
-    const spec = pinnedCreateSpec(runtime);
-    assert.match(spec, /^[a-z][a-z0-9-]*@\d/, `runtime "${runtime}" resolves a spec`);
+    const wrapper = RECIPES.wrappers[runtime];
+    const tool = RECIPES.tools[wrapper.route.tool];
+    assert.ok(tool, `runtime "${runtime}" names a pinned tool`);
+    assert.equal(CREATE_CLI_VERSIONS[tool.invoke], tool.version);
   }
+  // A concrete route resolves to the same version the projection shows.
+  assert.equal(resolveRoute('web', 'react', 'ts').version, CREATE_CLI_VERSIONS.vite);
 });
 
 test('all create-CLI pins are exact versions (no ranges, tags, or latest)', () => {
@@ -35,26 +40,14 @@ test('all addon-CLI pins are exact versions (no ranges, tags, or latest)', () =>
   for (const [name, version] of Object.entries(ADDON_CLI_VERSIONS)) {
     assert.match(version, EXACT_VERSION, `${name} pin "${version}" must be exact`);
   }
+  assert.deepEqual(Object.keys(ADDON_CLI_VERSIONS).sort(), ['shadcn', 'shadcn-svelte', 'shadcn-vue']);
 });
 
-test('pinnedCreateSpec returns name@version drawn from the registry', () => {
-  assert.equal(pinnedCreateSpec('tauri'), `tauri-app@${CREATE_CLI_VERSIONS['tauri-app']}`);
-  assert.equal(pinnedCreateSpec('web'), `vite@${CREATE_CLI_VERSIONS['vite']}`);
-  assert.equal(pinnedCreateSpec('electron'), `electron-app@${CREATE_CLI_VERSIONS['electron-app']}`);
-});
-
-test('pinnedCreateSpec throws for wrappers without an npm create path', () => {
-  assert.throws(() => pinnedCreateSpec('python'), /No pinned create CLI/);
-  assert.throws(() => pinnedCreateSpec('blank'), /No pinned create CLI/);
-  assert.throws(() => pinnedCreateSpec(undefined), /No pinned create CLI/);
-});
-
-test('pinnedAddonSpecs maps every addon CLI to an exact spec', () => {
-  const specs = pinnedAddonSpecs();
-  assert.deepEqual(Object.keys(specs).sort(), Object.keys(ADDON_CLI_VERSIONS).sort());
-  for (const [name, spec] of Object.entries(specs)) {
-    assert.equal(spec, `${name}@${ADDON_CLI_VERSIONS[name]}`);
-  }
+test('python and blank have no npm create path', () => {
+  assert.equal(RECIPES.wrappers.python.route, undefined);
+  assert.equal(RECIPES.wrappers.blank.route, undefined);
+  assert.equal(resolveRoute('python', 'py-lib', 'py'), null);
+  assert.equal(resolveRoute('blank', null, null), null);
 });
 
 test('posture note states the gate honestly (ADR-021 §5)', () => {
@@ -71,11 +64,4 @@ test('posture note states the gate honestly (ADR-021 §5)', () => {
   assert.ok(!note.includes('npm enforces'), 'npm has no native cooldown');
   assert.ok(!note.includes('guarantee'), 'the gate contains, it does not guarantee');
   assert.ok(!note.includes('safe from'), 'no blanket safety claims');
-});
-
-test('previewCreateLabel shows the long package name with the pinned version', () => {
-  assert.equal(previewCreateLabel('web'), `create-vite@${CREATE_CLI_VERSIONS['vite']}`);
-  assert.equal(previewCreateLabel('tauri'), `create-tauri-app@${CREATE_CLI_VERSIONS['tauri-app']}`);
-  assert.equal(previewCreateLabel('electron'), `create-electron-app@${CREATE_CLI_VERSIONS['electron-app']}`);
-  assert.equal(previewCreateLabel('python'), null);
 });

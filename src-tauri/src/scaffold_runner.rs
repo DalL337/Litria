@@ -1,12 +1,14 @@
 //! Scaffold runner — translates a `ScaffoldConfig` into CLI commands and
 //! executes them sequentially, streaming progress events back to the frontend.
 //!
-//! All three wrappers (Tauri, Electron, Web/Vite) are invoked via
-//! `<pm> create <name>@<pinned-version>` (exact specs only — ADR-021 §1; the
-//! pins live in `src/scaffold/create-cli-versions.js` and are validated here
-//! before anything executes), so the only hard requirement is a working
-//! package manager.  npm is always available through the bundled Node.js
-//! runtime; pnpm and yarn must be installed globally by the user.
+//! Every npm-kind wrapper is invoked through the recipe registry
+//! (`src/scaffold/recipes.json`, read by `scaffold_recipes.rs` — ADR-028 §1):
+//! the primary argv is DERIVED here from the same registry the wizard used
+//! for its preview, and a payload whose plan differs is refused before
+//! anything executes (ADR-028 §2; pins are exact per ADR-021 §1). The only
+//! hard requirement is a working package manager: npm is always available
+//! through the bundled Node.js runtime; pnpm and yarn must be installed
+//! globally by the user.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -22,6 +24,10 @@ use tauri::AppHandle;
 
 use crate::bundled_runtime;
 use crate::errors::{CommandError, CommandResult};
+use crate::scaffold_recipes::{
+    addon_cli_spec, coverage_status, current_platform, derive_primary, is_selectable_status,
+    registry, shadcn_cli_for, DerivedPrimary,
+};
 use crate::scaffold_types::*;
 
 // ---------------------------------------------------------------------------
@@ -80,9 +86,6 @@ pub(crate) fn run_scaffold(
     app: &AppHandle,
     channel: &Channel<ScaffoldEvent>,
 ) -> CommandResult<ScaffoldResult> {
-    // ADR-021 §1: refuse to execute anything unpinned before any step exists.
-    validate_pinned_specs(&config)?;
-
     // Security (audit #12): the CLI-spawning creation path must validate the
     // project name to the same folder-segment contract Blank/Python already
     // enforce — it becomes a directory below AND a subprocess argument. Use the
@@ -92,6 +95,14 @@ pub(crate) fn run_scaffold(
     // (#18b, `absolute_pm_path`). Both layers stay — the validator is the
     // chokepoint (security-policy Rule 4) and covers the folder name too.
     let name = crate::blank_project::validate_project_name(&config.project_name)?;
+
+    // ADR-028 §2: re-derive the plan from the registry with the validated name
+    // and refuse the request if the wizard's payload differs in any field —
+    // the frontend previews the plan, it does not choose it. Then ADR-028
+    // §10: refuse combinations without execution evidence for this platform
+    // and manager.
+    let derived = validate_plan(&config, name)?;
+    enforce_coverage(&config)?;
 
     // Shared destination chokepoint — see path_guard::resolve_project_destination.
     let location = crate::path_guard::resolve_project_destination(&config.project_location)
@@ -126,7 +137,7 @@ pub(crate) fn run_scaffold(
     // ADR-021 §2: release-age gate — refuse to run a pinned CLI younger than
     // 24 hours on the registry; unreachable registry metadata fails open with
     // a visible warning (the create itself needs the registry anyway).
-    run_age_gate(&config, app, channel)?;
+    run_age_gate(&config, &derived, app, channel)?;
 
     // Resolve package manager executable.
     let pm = resolve_pm(&config.manager, app)
@@ -136,22 +147,12 @@ pub(crate) fn run_scaffold(
 
     let mut steps: Vec<ScaffoldStep> = Vec::new();
 
-    // Step 1: primary scaffold via `<pm> create <name>@<pinned-version> ...`
-    // (exact spec from the frontend pin registry, validated above — ADR-021 §1)
-    let (create_pkg, scaffold_args) = build_primary_args(&config);
+    // Step 1: the primary route, exactly as derived from the registry (and
+    // exactly as the wizard previewed it — validate_plan proved they match).
+    // The manager's own verbs (`create --yes … --` for npm, `create` for
+    // pnpm/yarn) are part of that derivation.
     let mut primary_args = pm.prefix_args.clone();
-    primary_args.push("create".into());
-    // npm prompts "Ok to proceed?" on first download — auto-confirm.
-    if matches!(config.manager, PackageManager::Npm) {
-        primary_args.push("--yes".into());
-    }
-    primary_args.push(create_pkg);
-    primary_args.push(name.to_string());
-    // npm needs `--` to forward flags to the create-* package.
-    if matches!(config.manager, PackageManager::Npm) {
-        primary_args.push("--".into());
-    }
-    primary_args.extend(scaffold_args);
+    primary_args.extend(derived.argv.iter().cloned());
 
     steps.push(ScaffoldStep {
         label: format!("Creating {} project", wrapper_label(&config.wrapper)),
@@ -508,75 +509,104 @@ fn has_executable_extension(candidate: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Command building — primary scaffold
+// Plan validation (ADR-028 §2) and coverage enforcement (ADR-028 §10)
 // ---------------------------------------------------------------------------
 
-/// Return the `create-*` package name and scaffold-specific CLI flags.
-///
-/// The caller assembles the full command:
-/// `<pm> create [--yes] <package> <name> [--] <flags...>`
-fn build_primary_args(config: &ScaffoldConfig) -> (String, Vec<String>) {
-    // The spec comes from the frontend pin registry and was validated (exact
-    // version, name matches the wrapper) by validate_pinned_specs before any
-    // step was built (ADR-021 §1).
-    let create_pkg = config.create_cli_spec.clone();
-    let args = match config.wrapper {
-        ScaffoldWrapper::Tauri => {
-            let template = build_template_name(&config.framework, &config.language);
-            let pm_str = match config.manager {
-                PackageManager::Npm => "npm",
-                PackageManager::Pnpm => "pnpm",
-                PackageManager::Yarn => "yarn",
-            };
-            vec![
-                // create-tauri-app requires --yes to skip its own interactive
-                // terminal check (separate from npm's --yes which only confirms
-                // the npx download prompt).
-                "--yes".into(),
-                "--template".into(),
-                template,
-                "--manager".into(),
-                pm_str.into(),
-            ]
-        }
-        ScaffoldWrapper::Web => {
-            let template = build_template_name(&config.framework, &config.language);
-            vec!["--template".into(), template]
-        }
-        ScaffoldWrapper::Electron => {
-            let template = build_electron_template(&config.language);
-            vec![format!("--template={template}")]
-        }
+/// Re-derive the primary route from the registry and require the wizard's
+/// payload to match it field for field. A mismatch is a broken
+/// frontend/registry contract (or a tampered payload), never a user error.
+fn validate_plan(config: &ScaffoldConfig, name: &str) -> Result<DerivedPrimary, CommandError> {
+    let derived = derive_primary(
+        config.wrapper.id(),
+        config.framework.id(),
+        config.language.id(),
+        config.manager.id(),
+        name,
+    )
+    .map_err(|reason| {
+        CommandError::conflict(
+            "scaffold.recipe_unsupported",
+            format!("This combination cannot be scaffolded: {reason}"),
+        )
+    })?;
+
+    let plan = &config.plan;
+    let mismatch = |field: &str, sent: String, expected: String| {
+        CommandError::internal(
+            "scaffold.plan_mismatch",
+            format!(
+                "The previewed plan does not match the recipe registry ({field}: sent '{sent}', \
+                 expected '{expected}'). Refusing to run a command that was not shown."
+            ),
+        )
     };
-    (create_pkg, args)
+    let schema_version = registry().schema_version;
+    if plan.schema_version != schema_version {
+        return Err(mismatch(
+            "schemaVersion",
+            plan.schema_version.to_string(),
+            schema_version.to_string(),
+        ));
+    }
+    if plan.route_kind != derived.route_kind {
+        return Err(mismatch("routeKind", plan.route_kind.clone(), derived.route_kind.clone()));
+    }
+    if plan.package != derived.package {
+        return Err(mismatch("package", plan.package.clone(), derived.package.clone()));
+    }
+    if plan.version != derived.version {
+        return Err(mismatch("version", plan.version.clone(), derived.version.clone()));
+    }
+    if plan.template != derived.template {
+        return Err(mismatch("template", plan.template.clone(), derived.template.clone()));
+    }
+    if plan.argv != derived.argv {
+        return Err(mismatch("argv", plan.argv.join(" "), derived.argv.join(" ")));
+    }
+    let platform = current_platform();
+    if plan.platform != platform {
+        return Err(mismatch("platform", plan.platform.clone(), platform.to_string()));
+    }
+    Ok(derived)
 }
 
-// ---------------------------------------------------------------------------
-// Pinned-spec enforcement (ADR-021 §1)
-// ---------------------------------------------------------------------------
-
-/// Create-CLI short name each wrapper runs (`<pm> create <name>`).
-fn expected_create_cli(wrapper: &ScaffoldWrapper) -> &'static str {
-    match wrapper {
-        ScaffoldWrapper::Tauri => "tauri-app",
-        ScaffoldWrapper::Web => "vite",
-        ScaffoldWrapper::Electron => "electron-app",
+/// ADR-028 §10: only combinations with execution evidence for this platform
+/// and manager may run. The wizard disables the same combinations with the
+/// same reason; this is the enforcement the UI cannot bypass.
+fn enforce_coverage(config: &ScaffoldConfig) -> Result<(), CommandError> {
+    let platform = current_platform();
+    let (status, reason) = coverage_status(
+        config.wrapper.id(),
+        config.framework.id(),
+        config.language.id(),
+        config.manager.id(),
+        platform,
+    );
+    if is_selectable_status(&status) {
+        return Ok(());
     }
-}
-
-/// shadcn variant CLI per framework (each has a dedicated init CLI).
-fn shadcn_cli_for(framework: &ScaffoldFramework) -> Option<&'static str> {
-    match framework {
-        ScaffoldFramework::React => Some("shadcn"),
-        ScaffoldFramework::Svelte => Some("shadcn-svelte"),
-        ScaffoldFramework::Vue => Some("shadcn-vue"),
-        _ => None,
-    }
+    let label = format!(
+        "{} + {} ({}) with {} on {}",
+        config.wrapper.id(),
+        config.framework.id(),
+        config.language.id(),
+        config.manager.id(),
+        platform
+    );
+    let detail = match (status.as_str(), reason) {
+        ("failing", Some(r)) => format!("failed verification: {r}"),
+        ("failing", None) => "failed verification".to_string(),
+        _ => "has no execution evidence yet (ADR-028 §10) and is not offered".to_string(),
+    };
+    Err(CommandError::conflict(
+        "scaffold.recipe_unverified",
+        format!("{label} {detail}."),
+    ))
 }
 
 /// Split `name@version`, requiring an exact version (`X.Y.Z`, optional
 /// prerelease). Ranges, tags (`latest`, `next`), wildcards, and bare names
-/// are refused: the pin registry is the only source of versions and this is
+/// are refused: the registry is the only source of versions and this is
 /// the enforced floor beneath it.
 fn parse_exact_spec(spec: &str) -> Result<(&str, &str), String> {
     // Split at the last '@' so scoped names (`@scope/pkg@1.2.3`) stay intact.
@@ -619,50 +649,6 @@ fn is_exact_version(version: &str) -> bool {
     }
 }
 
-/// Validate every third-party CLI spec this config would execute, before any
-/// step is built. A failure here is a broken frontend/registry contract, not
-/// a user error — the wizard always sends registry pins.
-fn validate_pinned_specs(config: &ScaffoldConfig) -> Result<(), CommandError> {
-    let expected = expected_create_cli(&config.wrapper);
-    let (name, _) = parse_exact_spec(&config.create_cli_spec).map_err(|e| {
-        CommandError::internal("scaffold.unpinned_spec", format!("Create CLI spec {e}."))
-    })?;
-    if name != expected {
-        return Err(CommandError::internal(
-            "scaffold.spec_mismatch",
-            format!(
-                "Create CLI spec '{}' does not match the '{expected}' CLI this wrapper runs.",
-                config.create_cli_spec
-            ),
-        ));
-    }
-
-    let wants_shadcn = config
-        .addons
-        .iter()
-        .any(|a| matches!(a, ScaffoldAddon::ShadCN));
-    if wants_shadcn {
-        if let Some(pkg) = shadcn_cli_for(&config.framework) {
-            let spec = config.addon_cli_specs.get(pkg).ok_or_else(|| {
-                CommandError::internal(
-                    "scaffold.unpinned_spec",
-                    format!("No pinned version supplied for the '{pkg}' addon CLI."),
-                )
-            })?;
-            let (name, _) = parse_exact_spec(spec).map_err(|e| {
-                CommandError::internal("scaffold.unpinned_spec", format!("Addon CLI spec {e}."))
-            })?;
-            if name != pkg {
-                return Err(CommandError::internal(
-                    "scaffold.spec_mismatch",
-                    format!("Addon CLI spec '{spec}' does not match the '{pkg}' CLI."),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Release-age gate (ADR-021 §2)
 // ---------------------------------------------------------------------------
@@ -670,19 +656,21 @@ fn validate_pinned_specs(config: &ScaffoldConfig) -> Result<(), CommandError> {
 /// Minimum registry age before a pinned CLI version may execute.
 const AGE_GATE_HOURS: i64 = 24;
 
-/// Every third-party CLI spec this config will execute: the primary create
-/// CLI, plus the shadcn variant when that addon is selected. Specs were
-/// already validated exact by `validate_pinned_specs`.
-fn specs_to_execute(config: &ScaffoldConfig) -> Vec<String> {
-    let mut specs = vec![config.create_cli_spec.clone()];
+/// Every third-party CLI spec this config will execute, with whether it is
+/// an `npm create` initializer (queried under its `create-` name) or a real
+/// package run through exec/dlx (queried verbatim): the primary route, plus
+/// the shadcn variant when that addon is selected. All come from the
+/// registry, which the JS suite holds to exact versions.
+fn specs_to_execute(config: &ScaffoldConfig, derived: &DerivedPrimary) -> Vec<(String, bool)> {
+    let mut specs = vec![(derived.spec(), derived.route_kind == "initializer")];
     let wants_shadcn = config
         .addons
         .iter()
         .any(|a| matches!(a, ScaffoldAddon::ShadCN));
     if wants_shadcn {
-        if let Some(pkg) = shadcn_cli_for(&config.framework) {
-            if let Some(spec) = config.addon_cli_specs.get(pkg) {
-                specs.push(spec.clone());
+        if let Some(pkg) = shadcn_cli_for(config.framework.id()) {
+            if let Some(spec) = addon_cli_spec(&pkg) {
+                specs.push((spec, false));
             }
         }
     }
@@ -811,18 +799,19 @@ fn fetch_view_time_json(app: &AppHandle, name: &str) -> Result<String, AgeGateFe
 /// fail open (with a visible warning) when registry metadata is unreachable.
 fn run_age_gate(
     config: &ScaffoldConfig,
+    derived: &DerivedPrimary,
     app: &AppHandle,
     channel: &Channel<ScaffoldEvent>,
 ) -> Result<(), CommandError> {
-    for spec in specs_to_execute(config) {
-        // Specs were validated exact before this point; skip defensively.
+    for (spec, is_initializer) in specs_to_execute(config, derived) {
+        // Registry specs are exact by construction; skip defensively.
         let Ok((name, version)) = parse_exact_spec(&spec) else {
             continue;
         };
-        // Only the create CLI is an initializer needing the `create-` prefix.
-        // Addon CLIs run through `exec`/`dlx` under their real package names
-        // (shadcn, shadcn-vue, …), so they are queried verbatim.
-        let package = if spec == config.create_cli_spec {
+        // Only an `npm create` initializer needs the `create-` prefix. Exec
+        // routes and addon CLIs run under their real package names
+        // (shadcn, shadcn-vue, @angular/cli, …), so they are queried verbatim.
+        let package = if is_initializer {
             initializer_package(name)
         } else {
             name.to_string()
@@ -851,8 +840,8 @@ fn run_age_gate(
                 return Err(CommandError::not_found(
                     "scaffold.pinned_version_missing",
                     format!(
-                        "{package}@{version} does not exist on the npm registry — the pin \
-                         registry (create-cli-versions.js) needs a corrected version."
+                        "{package}@{version} does not exist on the npm registry — the recipe \
+                         registry (src/scaffold/recipes.json) needs a corrected version."
                     ),
                 ));
             }
@@ -1047,35 +1036,6 @@ fn write_pnpm_release_age(project_dir: &Path) -> Result<Option<String>, String> 
     Ok(Some("Enabled pnpm 24h release-age cooldown".into()))
 }
 
-/// Build template name for Tauri and Vite.
-///
-/// Convention: `{framework}` for JS, `{framework}-ts` for TS.
-/// Angular is always TypeScript — no `-ts` suffix.
-fn build_template_name(framework: &ScaffoldFramework, language: &ScaffoldLanguage) -> String {
-    let base = match framework {
-        ScaffoldFramework::React => "react",
-        ScaffoldFramework::Svelte => "svelte",
-        ScaffoldFramework::Vue => "vue",
-        ScaffoldFramework::Angular => return "angular".into(),
-        ScaffoldFramework::Solid => "solid",
-    };
-    match language {
-        ScaffoldLanguage::TypeScript => format!("{base}-ts"),
-        ScaffoldLanguage::JavaScript => base.into(),
-    }
-}
-
-/// Build template name for Electron Forge.
-///
-/// Electron Forge uses the bundler name, not the framework:
-/// `vite` for JS, `vite-typescript` for TS.
-fn build_electron_template(language: &ScaffoldLanguage) -> String {
-    match language {
-        ScaffoldLanguage::TypeScript => "vite-typescript".into(),
-        ScaffoldLanguage::JavaScript => "vite".into(),
-    }
-}
-
 fn wrapper_label(wrapper: &ScaffoldWrapper) -> &'static str {
     match wrapper {
         ScaffoldWrapper::Tauri => "Tauri",
@@ -1177,12 +1137,12 @@ fn build_addon_step(
             project_dir,
         )),
         ScaffoldAddon::ShadCN => {
-            // Each framework has its own shadcn variant with a dedicated CLI.
-            // The pinned spec was validated by validate_pinned_specs before
-            // any step was built; absence here means that invariant broke,
-            // and skipping the step beats executing an unpinned CLI.
-            let pkg = shadcn_cli_for(framework)?;
-            let init_pkg = config.addon_cli_specs.get(pkg)?.clone();
+            // Each framework has its own shadcn variant with a dedicated CLI,
+            // pinned in the recipe registry. Absence there means the registry
+            // is incomplete, and skipping the step beats executing an
+            // unpinned CLI (ADR-021 §1).
+            let pkg = shadcn_cli_for(framework.id())?;
+            let init_pkg = addon_cli_spec(&pkg)?;
             let label = match framework {
                 ScaffoldFramework::React => "Installing shadcn/ui",
                 ScaffoldFramework::Svelte => "Installing shadcn-svelte",
@@ -1385,109 +1345,171 @@ fn run_step_command(step: &ScaffoldStep, channel: &Channel<ScaffoldEvent>) -> Re
 mod tests {
     use super::*;
 
-    #[test]
-    fn template_name_react_ts() {
-        let name = build_template_name(&ScaffoldFramework::React, &ScaffoldLanguage::TypeScript);
-        assert_eq!(name, "react-ts");
-    }
-
-    #[test]
-    fn template_name_react_js() {
-        let name = build_template_name(&ScaffoldFramework::React, &ScaffoldLanguage::JavaScript);
-        assert_eq!(name, "react");
-    }
-
-    #[test]
-    fn template_name_angular_always_ts() {
-        // Angular is inherently TypeScript — no -ts suffix.
-        let ts = build_template_name(&ScaffoldFramework::Angular, &ScaffoldLanguage::TypeScript);
-        let js = build_template_name(&ScaffoldFramework::Angular, &ScaffoldLanguage::JavaScript);
-        assert_eq!(ts, "angular");
-        assert_eq!(js, "angular");
-    }
-
-    #[test]
-    fn template_name_vue_ts() {
-        let name = build_template_name(&ScaffoldFramework::Vue, &ScaffoldLanguage::TypeScript);
-        assert_eq!(name, "vue-ts");
-    }
-
-    #[test]
-    fn template_name_solid_js() {
-        let name = build_template_name(&ScaffoldFramework::Solid, &ScaffoldLanguage::JavaScript);
-        assert_eq!(name, "solid");
-    }
-
-    #[test]
-    fn template_name_svelte_ts() {
-        let name = build_template_name(&ScaffoldFramework::Svelte, &ScaffoldLanguage::TypeScript);
-        assert_eq!(name, "svelte-ts");
-    }
-
-    #[test]
-    fn electron_template_typescript() {
-        assert_eq!(
-            build_electron_template(&ScaffoldLanguage::TypeScript),
-            "vite-typescript"
-        );
-    }
-
-    #[test]
-    fn electron_template_javascript() {
-        assert_eq!(
-            build_electron_template(&ScaffoldLanguage::JavaScript),
-            "vite"
-        );
-    }
-
-    /// Config builder for pinned-spec tests — mirrors what the wizard sends.
-    fn pinned_config(wrapper: ScaffoldWrapper, spec: &str) -> ScaffoldConfig {
+    /// Config builder mirroring what the wizard sends: the plan block is the
+    /// registry derivation for the selection (ADR-028 §2).
+    fn planned_config(
+        wrapper: ScaffoldWrapper,
+        framework: ScaffoldFramework,
+        language: ScaffoldLanguage,
+        manager: PackageManager,
+    ) -> ScaffoldConfig {
+        let derived = derive_primary(wrapper.id(), framework.id(), language.id(), manager.id(), "test")
+            .expect("test selections have a route");
         ScaffoldConfig {
             project_name: "test".into(),
             project_location: "/tmp".into(),
             wrapper,
-            framework: ScaffoldFramework::React,
-            language: ScaffoldLanguage::TypeScript,
+            framework,
+            language,
             backend: None,
             addons: vec![],
-            manager: PackageManager::Npm,
+            manager,
             theme: "glass".into(),
-            create_cli_spec: spec.into(),
-            addon_cli_specs: Default::default(),
+            plan: ScaffoldPlanPayload {
+                schema_version: registry().schema_version,
+                route_kind: derived.route_kind.clone(),
+                package: derived.package.clone(),
+                version: derived.version.clone(),
+                template: derived.template.clone(),
+                argv: derived.argv.clone(),
+                platform: current_platform().to_string(),
+            },
         }
     }
 
+    fn web_react_ts_npm() -> ScaffoldConfig {
+        planned_config(
+            ScaffoldWrapper::Web,
+            ScaffoldFramework::React,
+            ScaffoldLanguage::TypeScript,
+            PackageManager::Npm,
+        )
+    }
+
+    // ---- Plan validation (ADR-028 §2) ----
+
     #[test]
-    fn primary_args_tauri() {
-        let config = pinned_config(ScaffoldWrapper::Tauri, "tauri-app@4.6.2");
-        let (pkg, args) = build_primary_args(&config);
-        assert_eq!(pkg, "tauri-app@4.6.2");
-        assert!(args.contains(&"--yes".to_string()));
-        assert!(args.contains(&"--template".to_string()));
-        assert!(args.contains(&"react-ts".to_string()));
-        assert!(args.contains(&"--manager".to_string()));
-        assert!(args.contains(&"npm".to_string()));
+    fn validate_plan_accepts_the_registry_derivation() {
+        let config = web_react_ts_npm();
+        let derived = validate_plan(&config, "test").expect("matching plan passes");
+        assert_eq!(derived.argv, config.plan.argv);
+        assert_eq!(
+            derived.argv,
+            vec!["create", "--yes", "vite@9.1.1", "test", "--", "--template", "react-ts"]
+        );
     }
 
     #[test]
-    fn primary_args_vite() {
-        let mut config = pinned_config(ScaffoldWrapper::Web, "vite@9.1.1");
-        config.framework = ScaffoldFramework::Vue;
-        config.language = ScaffoldLanguage::JavaScript;
-        config.manager = PackageManager::Pnpm;
-        let (pkg, args) = build_primary_args(&config);
-        assert_eq!(pkg, "vite@9.1.1");
-        assert!(args.contains(&"--template".to_string()));
-        assert!(args.contains(&"vue".to_string()));
+    fn validate_plan_refuses_a_different_version() {
+        // The webview may describe the plan, never choose it (F34).
+        let mut config = web_react_ts_npm();
+        config.plan.version = "0.0.1".into();
+        let err = validate_plan(&config, "test").unwrap_err();
+        assert_eq!(err.code(), "scaffold.plan_mismatch");
     }
 
     #[test]
-    fn primary_args_electron() {
-        let mut config = pinned_config(ScaffoldWrapper::Electron, "electron-app@7.11.2");
-        config.manager = PackageManager::Yarn;
-        let (pkg, args) = build_primary_args(&config);
-        assert_eq!(pkg, "electron-app@7.11.2");
-        assert!(args.contains(&"--template=vite-typescript".to_string()));
+    fn validate_plan_refuses_a_different_argv() {
+        // A preview that shows one command and sends another is refused (F14).
+        let mut config = web_react_ts_npm();
+        config.plan.argv.push("--manager".into());
+        config.plan.argv.push("npm".into());
+        let err = validate_plan(&config, "test").unwrap_err();
+        assert_eq!(err.code(), "scaffold.plan_mismatch");
+    }
+
+    #[test]
+    fn validate_plan_refuses_a_different_template_or_package() {
+        let mut config = web_react_ts_npm();
+        config.plan.template = "vanilla-ts".into();
+        assert_eq!(validate_plan(&config, "test").unwrap_err().code(), "scaffold.plan_mismatch");
+        let mut config = web_react_ts_npm();
+        config.plan.package = "create-tauri-app".into();
+        assert_eq!(validate_plan(&config, "test").unwrap_err().code(), "scaffold.plan_mismatch");
+    }
+
+    #[test]
+    fn validate_plan_derives_with_the_validated_name() {
+        // The wizard sends the trimmed name in argv; the runner derives with
+        // the validated (trimmed) name and they must agree.
+        let mut config = web_react_ts_npm();
+        config.project_name = "  test  ".into();
+        assert!(validate_plan(&config, "test").is_ok());
+        assert_eq!(validate_plan(&config, "other").unwrap_err().code(), "scaffold.plan_mismatch");
+    }
+
+    #[test]
+    fn validate_plan_refuses_web_angular_with_the_angular_cli_reason() {
+        // F1: create-vite has no Angular template; the registry says so and
+        // the runner never emits `--template angular` for the web wrapper.
+        let mut config = web_react_ts_npm();
+        config.framework = ScaffoldFramework::Angular;
+        let err = validate_plan(&config, "test").unwrap_err();
+        assert_eq!(err.code(), "scaffold.recipe_unsupported");
+        assert!(err.message().contains("Angular CLI"), "{}", err.message());
+    }
+
+    #[test]
+    fn validate_plan_refuses_a_foreign_platform() {
+        let mut config = web_react_ts_npm();
+        config.plan.platform = "plan9".into();
+        assert_eq!(validate_plan(&config, "test").unwrap_err().code(), "scaffold.plan_mismatch");
+    }
+
+    #[test]
+    fn primary_args_come_from_the_registry_per_manager() {
+        let tauri = planned_config(
+            ScaffoldWrapper::Tauri,
+            ScaffoldFramework::React,
+            ScaffoldLanguage::TypeScript,
+            PackageManager::Npm,
+        );
+        assert_eq!(
+            tauri.plan.argv,
+            vec!["create", "--yes", "tauri-app@4.6.2", "test", "--", "--yes", "--template", "react-ts", "--manager", "npm"]
+        );
+        let vite_pnpm = planned_config(
+            ScaffoldWrapper::Web,
+            ScaffoldFramework::Vue,
+            ScaffoldLanguage::JavaScript,
+            PackageManager::Pnpm,
+        );
+        // pnpm forwards flags without `--` and needs no `--yes`.
+        assert_eq!(vite_pnpm.plan.argv, vec!["create", "vite@9.1.1", "test", "--template", "vue"]);
+        assert!(!vite_pnpm.plan.argv.contains(&"--manager".to_string()));
+        let electron_yarn = planned_config(
+            ScaffoldWrapper::Electron,
+            ScaffoldFramework::React,
+            ScaffoldLanguage::TypeScript,
+            PackageManager::Yarn,
+        );
+        assert_eq!(
+            electron_yarn.plan.argv,
+            vec!["create", "electron-app@7.11.2", "test", "--template=vite-typescript"]
+        );
+    }
+
+    // ---- Coverage enforcement (ADR-028 §10) ----
+
+    #[test]
+    fn enforce_coverage_refuses_combinations_without_evidence() {
+        // Yarn has no evidence anywhere yet (no yarn on the evidence machine).
+        let config = planned_config(
+            ScaffoldWrapper::Web,
+            ScaffoldFramework::React,
+            ScaffoldLanguage::TypeScript,
+            PackageManager::Yarn,
+        );
+        let err = enforce_coverage(&config).unwrap_err();
+        assert_eq!(err.code(), "scaffold.recipe_unverified");
+        assert!(err.message().contains("no execution evidence"), "{}", err.message());
+    }
+
+    #[test]
+    fn enforce_coverage_agrees_with_the_registry_for_this_platform() {
+        let config = web_react_ts_npm();
+        let (status, _) = coverage_status("web", "react", "ts", "npm", current_platform());
+        assert_eq!(enforce_coverage(&config).is_ok(), is_selectable_status(&status));
     }
 
     #[test]
@@ -1522,54 +1544,18 @@ mod tests {
     }
 
     #[test]
-    fn validate_pinned_specs_accepts_matching_config() {
-        let config = pinned_config(ScaffoldWrapper::Web, "vite@9.1.1");
-        assert!(validate_pinned_specs(&config).is_ok());
-    }
-
-    #[test]
-    fn validate_pinned_specs_refuses_latest() {
-        let config = pinned_config(ScaffoldWrapper::Web, "vite@latest");
-        let err = validate_pinned_specs(&config).unwrap_err();
-        assert_eq!(err.code(), "scaffold.unpinned_spec");
-    }
-
-    #[test]
-    fn validate_pinned_specs_refuses_wrapper_mismatch() {
-        // Exact version, wrong tool for the wrapper — the floor catches it.
-        let config = pinned_config(ScaffoldWrapper::Web, "tauri-app@4.6.2");
-        let err = validate_pinned_specs(&config).unwrap_err();
-        assert_eq!(err.code(), "scaffold.spec_mismatch");
-    }
-
-    #[test]
-    fn validate_pinned_specs_requires_shadcn_pin_when_selected() {
-        let mut config = pinned_config(ScaffoldWrapper::Web, "vite@9.1.1");
+    fn shadcn_step_uses_the_registry_pin() {
+        let mut config = web_react_ts_npm();
         config.addons = vec![ScaffoldAddon::ShadCN];
-        let err = validate_pinned_specs(&config).unwrap_err();
-        assert_eq!(err.code(), "scaffold.unpinned_spec");
-
-        config
-            .addon_cli_specs
-            .insert("shadcn".into(), "shadcn@4.13.0".into());
-        assert!(validate_pinned_specs(&config).is_ok());
-    }
-
-    #[test]
-    fn shadcn_step_uses_pinned_spec_from_config() {
-        let mut config = pinned_config(ScaffoldWrapper::Web, "vite@9.1.1");
-        config.addons = vec![ScaffoldAddon::ShadCN];
-        config
-            .addon_cli_specs
-            .insert("shadcn".into(), "shadcn@4.13.0".into());
         let pm = ResolvedPM {
             executable: "npm".into(),
             prefix_args: vec![],
         };
         let step =
             build_addon_step(&ScaffoldAddon::ShadCN, &config, &pm, Path::new("/tmp/test"))
-                .expect("shadcn step builds when the pin is present");
-        assert!(step.args.contains(&"shadcn@4.13.0".to_string()));
+                .expect("shadcn step builds from the registry pin");
+        let spec = addon_cli_spec("shadcn").unwrap();
+        assert!(step.args.contains(&spec));
         assert!(!step.args.iter().any(|a| a.contains("@latest")));
         // npm has no dlx — the npm path must use the `exec --yes` form.
         assert_eq!(step.args[..3], ["exec".to_string(), "--yes".to_string(), "--".to_string()]);
@@ -1578,21 +1564,38 @@ mod tests {
 
     #[test]
     fn shadcn_step_keeps_dlx_on_pnpm() {
-        let mut config = pinned_config(ScaffoldWrapper::Web, "vite@9.1.1");
-        config.manager = PackageManager::Pnpm;
+        let mut config = planned_config(
+            ScaffoldWrapper::Web,
+            ScaffoldFramework::React,
+            ScaffoldLanguage::TypeScript,
+            PackageManager::Pnpm,
+        );
         config.addons = vec![ScaffoldAddon::ShadCN];
-        config
-            .addon_cli_specs
-            .insert("shadcn".into(), "shadcn@4.13.0".into());
         let pm = ResolvedPM {
             executable: "pnpm".into(),
             prefix_args: vec![],
         };
         let step =
             build_addon_step(&ScaffoldAddon::ShadCN, &config, &pm, Path::new("/tmp/test"))
-                .expect("shadcn step builds when the pin is present");
+                .expect("shadcn step builds from the registry pin");
         assert_eq!(step.args[0], "dlx");
-        assert!(step.args.contains(&"shadcn@4.13.0".to_string()));
+        assert!(step.args.contains(&addon_cli_spec("shadcn").unwrap()));
+    }
+
+    #[test]
+    fn shadcn_step_is_skipped_for_frameworks_without_a_variant() {
+        let mut config = planned_config(
+            ScaffoldWrapper::Web,
+            ScaffoldFramework::Solid,
+            ScaffoldLanguage::TypeScript,
+            PackageManager::Npm,
+        );
+        config.addons = vec![ScaffoldAddon::ShadCN];
+        let pm = ResolvedPM {
+            executable: "npm".into(),
+            prefix_args: vec![],
+        };
+        assert!(build_addon_step(&ScaffoldAddon::ShadCN, &config, &pm, Path::new("/tmp/test")).is_none());
     }
 
     // ---- Release-age gate (ADR-021 §2) ----
@@ -1682,15 +1685,16 @@ mod tests {
 
     #[test]
     fn specs_to_execute_includes_shadcn_when_selected() {
-        let mut config = pinned_config(ScaffoldWrapper::Web, "vite@9.1.1");
-        assert_eq!(specs_to_execute(&config), vec!["vite@9.1.1".to_string()]);
-        config.addons = vec![ScaffoldAddon::ShadCN];
-        config
-            .addon_cli_specs
-            .insert("shadcn".into(), "shadcn@4.13.0".into());
+        let mut config = web_react_ts_npm();
+        let derived = validate_plan(&config, "test").unwrap();
         assert_eq!(
-            specs_to_execute(&config),
-            vec!["vite@9.1.1".to_string(), "shadcn@4.13.0".to_string()]
+            specs_to_execute(&config, &derived),
+            vec![("vite@9.1.1".to_string(), true)]
+        );
+        config.addons = vec![ScaffoldAddon::ShadCN];
+        assert_eq!(
+            specs_to_execute(&config, &derived),
+            vec![("vite@9.1.1".to_string(), true), (addon_cli_spec("shadcn").unwrap(), false)]
         );
     }
 
