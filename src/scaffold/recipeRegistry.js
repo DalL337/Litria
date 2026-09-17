@@ -146,7 +146,7 @@ export function resolveRoute(wrapperId, frameworkId, languageId) {
 /**
  * The exact argument vector the runner executes after the manager
  * executable, assembled the same way src-tauri/src/scaffold_recipes.rs
- * assembles it. `npm create --yes vite@9.1.1 <name> -- --template react-ts`.
+ * assembles it. `npm create --yes vite@9.2.1 <name> -- --template react-ts`.
  */
 export function assemblePrimaryArgv({ route, managerId, projectName }) {
   const manager = recipes.managers[managerId];
@@ -178,7 +178,36 @@ export function getCoverage({ wrapper, framework, language, manager, platform })
   const entry = recipes.coverage.entries.find((e) =>
     e.wrapper === wrapper && e.framework === framework && e.language === language
     && e.manager === manager && e.platform === platform);
-  return entry ?? { wrapper, framework, language, manager, platform, status: 'unverified' };
+  if (!entry) return { wrapper, framework, language, manager, platform, status: 'unverified' };
+  // Revalidation trigger (ADR-028 §10, dependency policy Rule 5): evidence
+  // recorded against other pins does not carry over to the current ones.
+  const stale = SELECTABLE_STATUSES.has(entry.status) ? pinsOutOfDate(entry.evidence) : null;
+  return stale ? { ...entry, status: 'unverified', reason: stale } : entry;
+}
+
+/** The current registry pin for a tool or generated-project package. */
+function currentPin(name) {
+  return recipes.tools[name]?.version ?? recipes.packages[name]?.version ?? null;
+}
+
+/**
+ * Why a coverage entry's evidence no longer applies, or null. Evidence must
+ * carry the pins it was recorded against (`evidence.pins`); one that
+ * predates pin tracking is stale by definition, and any pin that has moved
+ * since names itself.
+ */
+export function pinsOutOfDate(evidence) {
+  const pins = evidence?.pins;
+  if (!pins || typeof pins !== 'object' || Object.keys(pins).length === 0) {
+    return 'evidence predates pin tracking — re-run scripts/scaffold-recipe-evidence.mjs';
+  }
+  for (const [name, version] of Object.entries(pins)) {
+    const current = currentPin(name);
+    if (current && current !== version) {
+      return `evidence recorded against ${name}@${version}; the registry now pins ${name}@${current} — re-run scripts/scaffold-recipe-evidence.mjs`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -199,7 +228,9 @@ export function availability({ wrapper, framework, language, manager, platform }
   const label = `${framework} (${language}) with ${manager} on ${platform}`;
   const reason = coverage.status === 'failing'
     ? `${label} failed verification${coverage.reason ? `: ${coverage.reason}` : ''}.`
-    : `${label} has not been verified yet (ADR-028 §10) — not offered until it has.`;
+    : coverage.reason
+      ? `${label}: ${coverage.reason}.`
+      : `${label} has not been verified yet (ADR-028 §10) — not offered until it has.`;
   return { selectable: false, status: coverage.status, reason, coverage };
 }
 
@@ -344,7 +375,9 @@ export function describeStep(step, managerId) {
 function addonEntriesFor({ wrapper, framework, language, manager, platform }) {
   return (recipes.addonCoverage?.entries ?? []).filter((e) =>
     e.wrapper === wrapper && e.framework === framework && e.language === language
-    && e.manager === manager && e.platform === platform && SELECTABLE_STATUSES.has(e.status));
+    && e.manager === manager && e.platform === platform && SELECTABLE_STATUSES.has(e.status)
+    // A bumped pin invalidates add-on evidence too (ADR-028 §10).
+    && pinsOutOfDate(e.evidence) === null);
 }
 
 /** May `addon` be offered for this primary combination? Evidence = a verified

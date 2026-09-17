@@ -22,6 +22,8 @@ import {
   resolveRoute,
   assemblePrimaryArgv,
   getCoverage,
+  pinsOutOfDate,
+  SELECTABLE_STATUSES,
   availability,
   selectableLanguages,
 } from '../../src/scaffold/recipeRegistry.js';
@@ -207,6 +209,34 @@ test('coverage entries are well-formed and only selectable statuses are offered'
   // Offline wrappers never depend on manager evidence.
   assert.equal(availability({ wrapper: 'python', framework: 'py-lib', language: 'py', manager: 'npm', platform: 'linux' }).selectable, true);
   assert.equal(availability({ wrapper: 'blank', framework: null, language: null, manager: 'npm', platform: 'linux' }).selectable, true);
+});
+
+test('evidence recorded against other pins is stale, by name (ADR-028 §10, dependency policy Rule 5)', () => {
+  const vite = RECIPES.tools['create-vite'].version;
+  const tailwind = RECIPES.packages.tailwindcss.version;
+  assert.equal(pinsOutOfDate({ pins: { 'create-vite': vite, tailwindcss: tailwind } }), null);
+  const stale = pinsOutOfDate({ pins: { 'create-vite': '0.0.1', tailwindcss: tailwind } });
+  assert.match(stale, /create-vite@0\.0\.1/);
+  assert.match(stale, new RegExp(`create-vite@${vite.replace(/\./g, '\\.')}`));
+  assert.match(pinsOutOfDate(undefined), /predates pin tracking/);
+  assert.match(pinsOutOfDate({ pins: {} }), /predates pin tracking/);
+  assert.equal(pinsOutOfDate({ pins: { 'left-pad': '1.0.0' } }), null, 'a name the registry does not pin is not a trigger');
+});
+
+test('every offered coverage entry was recorded against the current pins', () => {
+  // A pin bump must come with re-run evidence or a downgraded status: the
+  // wizard would otherwise disable the entry at runtime with this reason.
+  for (const e of RECIPES.coverage.entries) {
+    if (SELECTABLE_STATUSES.has(e.status)) {
+      assert.equal(pinsOutOfDate(e.evidence), null, `${e.wrapper}/${e.framework}/${e.language} ${e.manager} ${e.platform}`);
+      assert.equal(getCoverage(e).status, e.status);
+    }
+  }
+  for (const e of RECIPES.addonCoverage.entries) {
+    if (SELECTABLE_STATUSES.has(e.status)) {
+      assert.equal(pinsOutOfDate(e.evidence), null, `${e.wrapper}/${e.framework}/${e.language} ${e.addons?.join('+')}`);
+    }
+  }
 });
 
 test('selectableLanguages narrows to what has evidence', () => {

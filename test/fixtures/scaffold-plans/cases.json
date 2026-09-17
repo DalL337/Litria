@@ -13,12 +13,12 @@
       "expect": {
         "routeKind": "initializer",
         "package": "create-vite",
-        "version": "9.1.1",
+        "version": "9.2.1",
         "template": "react-ts",
         "argv": [
           "create",
           "--yes",
-          "vite@9.1.1",
+          "vite@9.2.1",
           "demo",
           "--",
           "--template",
@@ -38,11 +38,11 @@
       "expect": {
         "routeKind": "initializer",
         "package": "create-vite",
-        "version": "9.1.1",
+        "version": "9.2.1",
         "template": "vue",
         "argv": [
           "create",
-          "vite@9.1.1",
+          "vite@9.2.1",
           "demo",
           "--template",
           "vue"
@@ -61,11 +61,11 @@
       "expect": {
         "routeKind": "initializer",
         "package": "create-vite",
-        "version": "9.1.1",
+        "version": "9.2.1",
         "template": "svelte-ts",
         "argv": [
           "create",
-          "vite@9.1.1",
+          "vite@9.2.1",
           "my-app",
           "--template",
           "svelte-ts"
@@ -84,12 +84,12 @@
       "expect": {
         "routeKind": "initializer",
         "package": "create-vite",
-        "version": "9.1.1",
+        "version": "9.2.1",
         "template": "solid",
         "argv": [
           "create",
           "--yes",
-          "vite@9.1.1",
+          "vite@9.2.1",
           "demo",
           "--",
           "--template",

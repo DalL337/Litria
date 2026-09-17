@@ -388,9 +388,37 @@ scripts stay off, with explicit consent to run them.
   Esc / arrows, keys shown on the buttons), Advanced folds that count their
   non-default choices, review-row edit jumps, and Lucide glyphs in place of
   emoji (no brand logos)
-- Framework coverage: Tauri / Vite / Electron wrappers × React, Svelte,
-  Vue, Angular, Solid (matrix-pruned combinations); Tailwind/shadcn/router
-  addons; Express/Fastify backends
+- Framework coverage (ADR-028): Tauri / Web / Electron wrappers × React,
+  Svelte, Vue, Angular, Solid, driven by one recipe registry
+  (`src/scaffold/recipes.json`) that the wizard previews from and the Rust
+  runner re-derives and refuses to deviate from. Angular on the Web wrapper
+  runs the pinned Angular CLI (`ng new`), not a Vite template. Every offered
+  combination carries execution evidence for the user's platform and
+  package manager; anything without it is shown disabled with the reason.
+  See "Excluded combinations" below.
+- Add-on coverage per framework (each an executed recipe, not a checkbox):
+  React and Vue — Tailwind, shadcn, router; Svelte — Tailwind, shadcn
+  (standalone Svelte has no first-party router; SvelteKit is not offered);
+  Solid — Tailwind, router; Angular — Tailwind (Angular ships its own
+  router; shadcn has no Angular variant). Backends (Web wrapper only):
+  Express and Fastify, each an Express/Fastify `server/` folder plus a
+  `dev:server` script.
+- Excluded combinations and community alternatives (the registry refuses
+  these by construction; the wizard names the reason):
+  - Electron × Angular — Electron Forge ships no Angular template; use the
+    Web wrapper's Angular CLI route or Tauri × Angular.
+  - Backends on Tauri and Electron — desktop wrappers have their own
+    process model; the backend cards exist for the Web wrapper only.
+  - Preact, Lit, Qwik, Vanilla — present in create-vite but not offered;
+    scaffold them from a terminal (`npm create vite@latest`).
+  - pnpm and Yarn — offered only for the combinations with evidence
+    (2026-09-17: web/react/ts on both, web/angular/ts on pnpm). Yarn with
+    shadcn or router, and Yarn with Angular, are recorded *failing*
+    (Yarn 4's one-day release gate quarantines what the inner installs
+    lock) and stay disabled until a passing run replaces the record.
+  - macOS and Linux — every combination is unverified there until evidence
+    exists; the wizard disables them by name rather than assuming a
+    Windows run carries over.
 - Python project creation with `uv` (version floor into `litria.toml
   [environment]`, machine-local interpreter binding kept out of team truth)
 - **Blank Project**: instant, no prerequisites — substrate files, seeded

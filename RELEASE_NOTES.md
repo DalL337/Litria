@@ -1,5 +1,59 @@
 # Release Notes
 
+## Unreleased — Scaffold recipe integrity (ADR-028, PRs #45–#52)
+
+Two independent audits of the New Project wizard on 2026-09-16 found that the
+compatibility matrix made claims nothing tested — most visibly, "Web + Angular"
+silently produced a vanilla TypeScript project — and that the command preview,
+the runner, and the Python path could each disagree with the others. This arc
+replaces the matrix with one recipe registry that both sides read, and bounds
+every offer by evidence.
+
+### Changed
+
+- **One registry, one plan.** Pins, templates, manager verbs, add-on steps and
+  support claims live in `src/scaffold/recipes.json`. The wizard previews the
+  plan derived from it and the Rust runner re-derives the same plan and refuses
+  a payload that differs — what you see is exactly what runs.
+- **Web + Angular is real.** It runs the pinned Angular CLI (`ng new --defaults
+  --skip-git`) instead of a Vite template that never existed. Angular CLI stays
+  on 21.x until the bundled Node passes 24.15.
+- **Offers are bounded by evidence.** Every combination the wizard enables was
+  executed on a disposable fixture with the pinned versions, per platform and
+  package manager; the rest are shown disabled with the reason. pnpm and Yarn
+  are offered only where verified; Yarn with shadcn/router and Yarn with
+  Angular are recorded as failing and stay off.
+- **Add-ons do what their cards say.** Tailwind, shadcn, router, Express and
+  Fastify are executed recipes (installed at exact pins, wired into the app
+  root) with per-framework coverage; the pytest add-on ships a smoke test for
+  every Python archetype.
+- **Package managers are honest.** pnpm and Yarn get their own verbs, floors
+  (Yarn Classic is refused with an upgrade hint), release-age posture, and
+  linker/lockfile setup; the posture note names what each manager actually
+  does.
+- **The wizard keeps its state straight.** One run state drives navigation,
+  Cancel wording and the Create button; a project that was created but failed
+  to open is never lost or re-scaffolded; Python runs end in the same finish as
+  the others (trace pause and log policies apply).
+- **Python creation runs only what it showed.** `uv venv` never downloads an
+  interpreter; the wizard offers only interpreters creation will accept (one
+  shared predicate, free-threaded builds included); `pyproject.toml` is written
+  by a TOML serializer; keyword module names and malformed floors are refused
+  with a reason instead of rewritten or dropped.
+- **Creation never overwrites what it did not create.** Blank and Python
+  projects prove ownership with a marker and manifest before a retry touches a
+  folder; every file is written `create_new` with links refused. Cancel is
+  live during a run, every subprocess has an idle timeout and an absolute
+  deadline, and cleanup after a stop removes only what the run can prove it
+  made — anything else is kept and named.
+
+### Pins (2026-09-17, 24h rule)
+
+create-vite 9.2.1, shadcn 4.21.0, shadcn-svelte 1.6.1, shadcn-vue 2.8.2,
+react/react-dom 19.3.0. Held with a recorded trigger: create-tauri-app 4.6.2
+and @angular/cli 21.2.24 (Angular 22 needs Node ≥ 24.15; the bundled runtime
+is 24.14).
+
 ## v1.0.7 — Honest save state and process teardown
 
 **Date:** 2026-09-16 (PRs #38–#43)

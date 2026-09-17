@@ -64,3 +64,23 @@ The GitHub release object must exist before the release workflow reaches its
 upload step. Create it immediately after pushing the tag. The workflow in
 `.github/workflows/release.yml` only uploads artifacts with
 `gh release upload`; it does not create the release.
+
+## Rule 5 — Refresh recipe evidence before tagging (added 2026-09-17, ADR-028 S8)
+
+The New Project wizard offers only scaffold combinations whose execution
+evidence in `src/scaffold/recipes.json` was recorded against the pins the
+registry currently carries. A pin bump (tool, template manifest, or a
+generated-project package) invalidates the affected coverage on both sides
+until the evidence is re-run — the wizard disables the combination with the
+reason, and `npm run test:domains` fails on a stale-but-selectable entry.
+Before tagging a release:
+
+1. Survey pins under the 24h rule (`npm view <pkg> time --json`); refresh
+   what qualifies, and record a `$comment` with the trigger for any pin
+   deliberately held (bundled-runtime floors are the usual reason).
+2. Re-run `scripts/scaffold-recipe-evidence.mjs` for every affected
+   combination (primary, add-on, backend, per manager) and fold the results
+   with `scripts/scaffold-recipe-evidence-apply.mjs`.
+3. Check the diff to `coverage` / `addonCoverage`: every offered entry names
+   the recipe revision, resolved versions, platform, manager and checks it
+   exercised; every failing entry names its reason.

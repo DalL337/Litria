@@ -85,7 +85,7 @@ test('npm plan: incomplete stack has no preview and is not submittable', () => {
 test('npm plan: preview tokens are exactly the argv the payload carries (F14)', () => {
   const plan = buildScaffoldPlan({ ...base, wrapper: 'web', framework: 'react', lang: 'ts', manager: 'npm', addons: ['tailwind'] }, probe, WIN);
   assert.equal(plan.kind, 'npm');
-  assert.deepEqual(plan.argv, ['create', '--yes', 'vite@9.1.1', 'demo', '--', '--template', 'react-ts']);
+  assert.deepEqual(plan.argv, ['create', '--yes', 'vite@9.2.1', 'demo', '--', '--template', 'react-ts']);
   const shown = plan.preview.filter((p) => p.type !== 'comment').map((p) => p.text.trim());
   assert.deepEqual(shown, ['npm', ...plan.argv]);
   assert.deepEqual(plan.payload.plan.argv, plan.argv);

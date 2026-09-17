@@ -69,7 +69,7 @@
             "exec",
             "--yes",
             "--",
-            "shadcn@4.13.0",
+            "shadcn@4.21.0",
             "init",
             "-y",
             "-d"
@@ -146,8 +146,8 @@
           "op": "install",
           "argv": [
             "add",
-            "react@19.2.8",
-            "react-dom@19.2.8"
+            "react@19.3.0",
+            "react-dom@19.3.0"
           ]
         },
         {
@@ -274,7 +274,7 @@
             "exec",
             "--yes",
             "--",
-            "shadcn-svelte@1.4.1",
+            "shadcn-svelte@1.6.1",
             "init",
             "--preset",
             "bIkeymG",
