@@ -134,6 +134,18 @@ template drives the Angular CLI too. Litria does the same, pinned:
   `style`, `ssr`, `zoneless`, `standalone`).
 - **Pin.** `@angular/cli@22.1.7` (published 2026-09-02) passes the 24h gate;
   22.1.8 was modified 2026-09-16 and would not, today.
+
+> **Erratum (2026-09-16, S2 implementation):** 22.1.7 cannot run through
+> Litria's bundled runtime. Every `@angular/cli` 22.x declares
+> `engines.node: ^22.22.3 || ^24.15.0 || >=26.0.0` and the bundled Node is
+> 24.14.0 (`src-tauri/src/lsp/packs/versions.rs` `NODE_VERSION`); the trial
+> run exited 3 with "requires a minimum Node.js version of v24.15.0". Per
+> dependency-change policy Rule 2 the pin is **`@angular/cli@21.2.24`**
+> (published 2026-09-10, `engines.node: ^20.19.0 || ^22.12.0 || >=24.0.0`),
+> verified on a fixture: `ng new --defaults --skip-git --package-manager npm`
+> then `ng build` both succeed on Node 24.14.0. Bumping the bundled Node to
+> ≥ 24.15 (release policy, `scripts/node-hashes.json`) is what unlocks 22.x;
+> that is a separate, reviewed change with its own revalidation trigger.
 - **Installs.** The CLI's internal install inherits the npm scripts-off
   environment (`npm_config_ignore_scripts=true` is set on every step's env
   for npm). `--skip-install` is not used: a project with no `node_modules`

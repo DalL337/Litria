@@ -1439,14 +1439,32 @@ mod tests {
     }
 
     #[test]
-    fn validate_plan_refuses_web_angular_with_the_angular_cli_reason() {
-        // F1: create-vite has no Angular template; the registry says so and
-        // the runner never emits `--template angular` for the web wrapper.
+    fn validate_plan_accepts_web_angular_as_an_exec_route() {
+        // F1 closed (ADR-028 §3): the runner derives an Angular CLI exec
+        // argv, never `create vite … --template angular`.
+        let config = planned_config(
+            ScaffoldWrapper::Web,
+            ScaffoldFramework::Angular,
+            ScaffoldLanguage::TypeScript,
+            PackageManager::Npm,
+        );
+        let derived = validate_plan(&config, "test").expect("angular exec plan passes");
+        assert_eq!(derived.route_kind, "exec");
+        assert_eq!(derived.argv[..3], ["exec".to_string(), "--yes".to_string(), "--".to_string()]);
+        assert!(derived.argv.contains(&"--defaults".to_string()));
+        assert!(!derived.argv.iter().any(|a| a == "--template"));
+        // The age gate queries an exec package verbatim, not as create-*.
+        let specs = specs_to_execute(&config, &derived);
+        assert_eq!(specs, vec![(derived.spec(), false)]);
+    }
+
+    #[test]
+    fn validate_plan_refuses_electron_angular_with_a_reason() {
         let mut config = web_react_ts_npm();
+        config.wrapper = ScaffoldWrapper::Electron;
         config.framework = ScaffoldFramework::Angular;
         let err = validate_plan(&config, "test").unwrap_err();
         assert_eq!(err.code(), "scaffold.recipe_unsupported");
-        assert!(err.message().contains("Angular CLI"), "{}", err.message());
     }
 
     #[test]

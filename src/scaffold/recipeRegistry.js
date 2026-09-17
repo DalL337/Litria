@@ -103,13 +103,21 @@ export function addonCli(addonId, frameworkId) {
 export function resolveRoute(wrapperId, frameworkId, languageId) {
   const wrapper = recipes.wrappers[wrapperId];
   if (!wrapper || wrapper.kind !== 'npm') return null;
-  const template = wrapper.templates?.[frameworkId]?.[languageId] ?? null;
+  if (!getLanguages(frameworkId).includes(languageId)) {
+    return { unsupported: `${frameworkId} has no ${languageId} variant.` };
+  }
+  // A per-framework route override (ADR-028 §3: web + angular runs the
+  // Angular CLI through an `exec` route) wins over the wrapper's route.
+  const override = wrapper.routes?.[frameworkId] ?? null;
+  const route = override ?? wrapper.route;
+  const template = override
+    ? (override.template ?? frameworkId)
+    : (wrapper.templates?.[frameworkId]?.[languageId] ?? null);
   if (!template) {
     const reason = wrapper.unsupported?.[frameworkId]
       ?? `${frameworkId} (${languageId}) has no template on the ${wrapperId} wrapper.`;
     return { unsupported: reason };
   }
-  const route = wrapper.route;
   const tool = recipes.tools[route.tool];
   return {
     kind: route.kind,

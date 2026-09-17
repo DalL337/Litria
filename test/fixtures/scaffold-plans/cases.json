@@ -3,72 +3,305 @@
   "cases": [
     {
       "name": "web react ts npm",
-      "input": { "wrapper": "web", "framework": "react", "language": "ts", "manager": "npm", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-vite", "version": "9.1.1", "template": "react-ts",
-        "argv": ["create", "--yes", "vite@9.1.1", "demo", "--", "--template", "react-ts"] }
+      "input": {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-vite",
+        "version": "9.1.1",
+        "template": "react-ts",
+        "argv": [
+          "create",
+          "--yes",
+          "vite@9.1.1",
+          "demo",
+          "--",
+          "--template",
+          "react-ts"
+        ]
+      }
     },
     {
       "name": "web vue js pnpm (no separator)",
-      "input": { "wrapper": "web", "framework": "vue", "language": "js", "manager": "pnpm", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-vite", "version": "9.1.1", "template": "vue",
-        "argv": ["create", "vite@9.1.1", "demo", "--template", "vue"] }
+      "input": {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "js",
+        "manager": "pnpm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-vite",
+        "version": "9.1.1",
+        "template": "vue",
+        "argv": [
+          "create",
+          "vite@9.1.1",
+          "demo",
+          "--template",
+          "vue"
+        ]
+      }
     },
     {
       "name": "web svelte ts yarn",
-      "input": { "wrapper": "web", "framework": "svelte", "language": "ts", "manager": "yarn", "projectName": "my-app" },
-      "expect": { "routeKind": "initializer", "package": "create-vite", "version": "9.1.1", "template": "svelte-ts",
-        "argv": ["create", "vite@9.1.1", "my-app", "--template", "svelte-ts"] }
+      "input": {
+        "wrapper": "web",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "yarn",
+        "projectName": "my-app"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-vite",
+        "version": "9.1.1",
+        "template": "svelte-ts",
+        "argv": [
+          "create",
+          "vite@9.1.1",
+          "my-app",
+          "--template",
+          "svelte-ts"
+        ]
+      }
     },
     {
       "name": "web solid js npm",
-      "input": { "wrapper": "web", "framework": "solid", "language": "js", "manager": "npm", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-vite", "version": "9.1.1", "template": "solid",
-        "argv": ["create", "--yes", "vite@9.1.1", "demo", "--", "--template", "solid"] }
+      "input": {
+        "wrapper": "web",
+        "framework": "solid",
+        "language": "js",
+        "manager": "npm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-vite",
+        "version": "9.1.1",
+        "template": "solid",
+        "argv": [
+          "create",
+          "--yes",
+          "vite@9.1.1",
+          "demo",
+          "--",
+          "--template",
+          "solid"
+        ]
+      }
     },
     {
       "name": "tauri react ts npm carries --yes and --manager",
-      "input": { "wrapper": "tauri", "framework": "react", "language": "ts", "manager": "npm", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-tauri-app", "version": "4.6.2", "template": "react-ts",
-        "argv": ["create", "--yes", "tauri-app@4.6.2", "demo", "--", "--yes", "--template", "react-ts", "--manager", "npm"] }
+      "input": {
+        "wrapper": "tauri",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-tauri-app",
+        "version": "4.6.2",
+        "template": "react-ts",
+        "argv": [
+          "create",
+          "--yes",
+          "tauri-app@4.6.2",
+          "demo",
+          "--",
+          "--yes",
+          "--template",
+          "react-ts",
+          "--manager",
+          "npm"
+        ]
+      }
     },
     {
       "name": "tauri angular is always ts",
-      "input": { "wrapper": "tauri", "framework": "angular", "language": "ts", "manager": "pnpm", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-tauri-app", "version": "4.6.2", "template": "angular",
-        "argv": ["create", "tauri-app@4.6.2", "demo", "--yes", "--template", "angular", "--manager", "pnpm"] }
+      "input": {
+        "wrapper": "tauri",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "pnpm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-tauri-app",
+        "version": "4.6.2",
+        "template": "angular",
+        "argv": [
+          "create",
+          "tauri-app@4.6.2",
+          "demo",
+          "--yes",
+          "--template",
+          "angular",
+          "--manager",
+          "pnpm"
+        ]
+      }
     },
     {
       "name": "tauri solid js yarn",
-      "input": { "wrapper": "tauri", "framework": "solid", "language": "js", "manager": "yarn", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-tauri-app", "version": "4.6.2", "template": "solid",
-        "argv": ["create", "tauri-app@4.6.2", "demo", "--yes", "--template", "solid", "--manager", "yarn"] }
+      "input": {
+        "wrapper": "tauri",
+        "framework": "solid",
+        "language": "js",
+        "manager": "yarn",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-tauri-app",
+        "version": "4.6.2",
+        "template": "solid",
+        "argv": [
+          "create",
+          "tauri-app@4.6.2",
+          "demo",
+          "--yes",
+          "--template",
+          "solid",
+          "--manager",
+          "yarn"
+        ]
+      }
     },
     {
       "name": "electron react ts npm uses the bundler template",
-      "input": { "wrapper": "electron", "framework": "react", "language": "ts", "manager": "npm", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-electron-app", "version": "7.11.2", "template": "vite-typescript",
-        "argv": ["create", "--yes", "electron-app@7.11.2", "demo", "--", "--template=vite-typescript"] }
+      "input": {
+        "wrapper": "electron",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-electron-app",
+        "version": "7.11.2",
+        "template": "vite-typescript",
+        "argv": [
+          "create",
+          "--yes",
+          "electron-app@7.11.2",
+          "demo",
+          "--",
+          "--template=vite-typescript"
+        ]
+      }
     },
     {
       "name": "electron vue js yarn",
-      "input": { "wrapper": "electron", "framework": "vue", "language": "js", "manager": "yarn", "projectName": "demo" },
-      "expect": { "routeKind": "initializer", "package": "create-electron-app", "version": "7.11.2", "template": "vite",
-        "argv": ["create", "electron-app@7.11.2", "demo", "--template=vite"] }
+      "input": {
+        "wrapper": "electron",
+        "framework": "vue",
+        "language": "js",
+        "manager": "yarn",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "initializer",
+        "package": "create-electron-app",
+        "version": "7.11.2",
+        "template": "vite",
+        "argv": [
+          "create",
+          "electron-app@7.11.2",
+          "demo",
+          "--template=vite"
+        ]
+      }
     },
     {
-      "name": "web angular is refused until the Angular CLI route lands (F1)",
-      "input": { "wrapper": "web", "framework": "angular", "language": "ts", "manager": "npm", "projectName": "demo" },
-      "expect": { "unsupported": true }
+      "name": "web angular ts npm runs the pinned Angular CLI through exec (ADR-028 §3)",
+      "input": {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "npm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "exec",
+        "package": "@angular/cli",
+        "version": "21.2.24",
+        "template": "ng-new",
+        "argv": [
+          "exec",
+          "--yes",
+          "--",
+          "@angular/cli@21.2.24",
+          "new",
+          "demo",
+          "--defaults",
+          "--skip-git",
+          "--package-manager",
+          "npm"
+        ]
+      }
+    },
+    {
+      "name": "web angular ts pnpm uses dlx",
+      "input": {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "pnpm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "exec",
+        "package": "@angular/cli",
+        "version": "21.2.24",
+        "template": "ng-new",
+        "argv": [
+          "dlx",
+          "@angular/cli@21.2.24",
+          "new",
+          "demo",
+          "--defaults",
+          "--skip-git",
+          "--package-manager",
+          "pnpm"
+        ]
+      }
     },
     {
       "name": "electron angular has no template",
-      "input": { "wrapper": "electron", "framework": "angular", "language": "ts", "manager": "npm", "projectName": "demo" },
-      "expect": { "unsupported": true }
+      "input": {
+        "wrapper": "electron",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "npm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "unsupported": true
+      }
     },
     {
       "name": "angular js is not a language the framework has",
-      "input": { "wrapper": "tauri", "framework": "angular", "language": "js", "manager": "npm", "projectName": "demo" },
-      "expect": { "unsupported": true }
+      "input": {
+        "wrapper": "tauri",
+        "framework": "angular",
+        "language": "js",
+        "manager": "npm",
+        "projectName": "demo"
+      },
+      "expect": {
+        "unsupported": true
+      }
     }
   ]
 }
