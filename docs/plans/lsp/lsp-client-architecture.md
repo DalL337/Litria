@@ -558,8 +558,8 @@ This is the layer unique to the LSP client. When Litria installs a language serv
 **Python pack:**
 
 ```rust
-const PYRIGHT_VERSION: &str = "1.1.411";
-// install command: npm install -g pyright@1.1.411
+const PYRIGHT_VERSION: &str = "1.1.414";
+// install command: npm install -g pyright@1.1.414
 ```
 
 **TypeScript pack:**
@@ -587,7 +587,7 @@ When a user is missing a language server, Litria installs the pinned version —
 
 1. User opens a `.py` file
 2. Litria detects `pyright-langserver` missing, Node present
-3. Litria runs: `npm install -g pyright@1.1.411` — exact version, not `pyright`
+3. Litria runs: `npm install -g pyright@1.1.414` — exact version, not `pyright`
 4. The version Litria installs is the version Litria has been tested against
 
 If a user already has a different version installed globally, Litria detects the version on PATH and warns if it falls outside a tested range. It does not forcibly replace the user's global install.
@@ -597,7 +597,7 @@ If a user already has a different version installed globally, Litria detects the
 The authoritative list of pinned language server versions lives in a single location — `src-tauri/src/lsp/packs/versions.rs` — so there is one place to update and one place to audit:
 
 ```rust
-pub const PYRIGHT_VERSION: &str           = "1.1.411";
+pub const PYRIGHT_VERSION: &str           = "1.1.414";
 pub const TSSERVER_VERSION: &str          = "6.0.0";
 pub const TYPESCRIPT_VERSION: &str        = "6.0.3";
 ```

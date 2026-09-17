@@ -66,7 +66,7 @@ All pinned versions are tracked in `src-tauri/src/lsp/packs/versions.rs`.
 
 | Dependency | Pinned Version | Purpose |
 |---|---|---|
-| Pyright | 1.1.411 | Python language server |
+| Pyright | 1.1.414 | Python language server |
 | TypeScript Language Server | 6.0.0 | JS/TS language server |
 | TypeScript Compiler | 6.0.3 | Required by tsserver (last line that ships it) |
 | Node.js | 24.14.0 (LTS) | Runtime for LSP servers + scaffold runner |

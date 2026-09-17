@@ -21,7 +21,7 @@
 
 // Python LSP server (pyright-langserver, bundled in resources/servers/python/)
 #[allow(dead_code)]
-pub(crate) const PYRIGHT_VERSION: &str = "1.1.411";
+pub(crate) const PYRIGHT_VERSION: &str = "1.1.414";
 
 // TypeScript language server (bundled in resources/servers/typescript/)
 #[allow(dead_code)]
