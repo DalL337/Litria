@@ -80,12 +80,16 @@ test('npm plan: the payload argv uses the real name, the preview the display fal
   assert.equal(plan.payload.plan.argv[3], '');
 });
 
-test('npm plan: web + angular is refused with the Angular CLI reason (F1)', () => {
+test('npm plan: web + angular previews and submits the Angular CLI exec route (F1, ADR-028 §3)', () => {
   const plan = buildScaffoldPlan({ ...base, wrapper: 'web', framework: 'angular', lang: 'ts' }, probe, WIN);
-  assert.equal(plan.availability.selectable, false);
-  assert.match(plan.availability.reason, /Angular CLI/);
-  assert.equal(plan.payload, null);
-  assert.ok(plan.preview.some((p) => p.type === 'comment' && /Angular CLI/.test(p.text)));
+  assert.equal(plan.kind, 'npm');
+  assert.equal(plan.route.kind, 'exec');
+  assert.equal(plan.payload.plan.routeKind, 'exec');
+  assert.equal(plan.payload.plan.package, '@angular/cli');
+  assert.deepEqual(plan.argv.slice(0, 5), ['exec', '--yes', '--', `@angular/cli@${plan.route.version}`, 'new']);
+  const shown = plan.preview.filter((p) => p.type !== 'comment').map((p) => p.text.trim());
+  assert.deepEqual(shown, ['npm', ...plan.argv]);
+  assert.equal(plan.availability.selectable, verifiedOn('web', 'angular', 'ts', 'npm', 'windows'));
 });
 
 test('npm plan: availability follows the coverage table for platform + manager', () => {

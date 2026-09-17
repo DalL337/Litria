@@ -61,6 +61,10 @@ pub(crate) struct Wrapper {
     pub kind: String,
     #[serde(default)]
     pub route: Option<Route>,
+    /// Per-framework route overrides (ADR-028 §3: web + angular runs the
+    /// Angular CLI through an `exec` route instead of create-vite).
+    #[serde(default)]
+    pub routes: HashMap<String, Route>,
     #[serde(default)]
     pub templates: HashMap<String, HashMap<String, String>>,
     #[serde(default)]
@@ -73,6 +77,10 @@ pub(crate) struct Route {
     pub kind: String,
     pub tool: String,
     pub args: Vec<String>,
+    /// Nominal template id for override routes (exec routes have no
+    /// template manifest; the id only names the recipe in the plan).
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,20 +158,23 @@ pub(crate) fn derive_primary(
     if w.kind != "npm" {
         return Err(format!("wrapper '{wrapper}' has no npm route"));
     }
-    let route = w
-        .route
-        .as_ref()
+    let override_route = w.routes.get(framework);
+    let route = override_route
+        .or(w.route.as_ref())
         .ok_or_else(|| format!("wrapper '{wrapper}' has no primary route"))?;
-    let template = w
-        .templates
-        .get(framework)
-        .and_then(|by_lang| by_lang.get(language))
-        .cloned()
-        .ok_or_else(|| {
-            w.unsupported.get(framework).cloned().unwrap_or_else(|| {
-                format!("{framework} ({language}) has no template on the {wrapper} wrapper.")
-            })
-        })?;
+    let template = match override_route {
+        Some(r) => r.template.clone().unwrap_or_else(|| framework.to_string()),
+        None => w
+            .templates
+            .get(framework)
+            .and_then(|by_lang| by_lang.get(language))
+            .cloned()
+            .ok_or_else(|| {
+                w.unsupported.get(framework).cloned().unwrap_or_else(|| {
+                    format!("{framework} ({language}) has no template on the {wrapper} wrapper.")
+                })
+            })?,
+    };
     let tool = reg
         .tools
         .get(&route.tool)
@@ -348,9 +359,18 @@ mod tests {
     }
 
     #[test]
-    fn web_angular_is_refused_with_the_angular_cli_reason() {
-        let err = derive_primary("web", "angular", "ts", "npm", "demo").unwrap_err();
-        assert!(err.contains("Angular CLI"), "{err}");
+    fn web_angular_routes_through_the_pinned_angular_cli() {
+        // F1 closed (ADR-028 §3): no create-vite template lookup, an exec
+        // route with the real package name, queried verbatim by the age gate.
+        let d = derive_primary("web", "angular", "ts", "npm", "demo").unwrap();
+        assert_eq!(d.route_kind, "exec");
+        assert_eq!(d.package, "@angular/cli");
+        assert_eq!(d.invoke, "@angular/cli");
+        assert_eq!(d.argv[..3], ["exec".to_string(), "--yes".to_string(), "--".to_string()]);
+        assert_eq!(d.argv[3], d.spec());
+        assert_eq!(&d.argv[4..], ["new", "demo", "--defaults", "--skip-git", "--package-manager", "npm"]);
+        // Electron still has no Angular route at all.
+        assert!(derive_primary("electron", "angular", "ts", "npm", "demo").is_err());
     }
 
     #[test]
@@ -360,6 +380,7 @@ mod tests {
         let manifests = value["templateManifests"].as_object().unwrap();
         for (id, w) in &registry().wrappers {
             let Some(route) = &w.route else { continue };
+            // Override (exec) routes have no template manifest by design.
             let manifest = manifests[&route.tool].as_array().unwrap();
             for (framework, by_lang) in &w.templates {
                 for (lang, template) in by_lang {

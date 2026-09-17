@@ -21,6 +21,12 @@
       "publishedAt": "2026-05-20",
       "kind": "initializer"
     },
+    "@angular/cli": {
+      "version": "21.2.24",
+      "publishedAt": "2026-09-10",
+      "kind": "exec",
+      "$comment": "ADR-028 §3: Angular on the Web wrapper runs the Angular CLI directly (exec route). 21.2.x is pinned, not 22.x: every @angular/cli 22.x requires Node ^22.22.3 || ^24.15.0 || >=26, and Litria's bundled runtime is 24.14.0 (src-tauri/src/lsp/packs/versions.rs NODE_VERSION); 21.2.x accepts >=24.0.0. Bumping the bundled Node past 24.15 unlocks 22.x (release policy: node-hashes.json)."
+    },
     "shadcn": {
       "version": "4.13.0",
       "publishedAt": "2026-07-03",
@@ -184,6 +190,21 @@
           "{template}"
         ]
       },
+      "routes": {
+        "angular": {
+          "kind": "exec",
+          "tool": "@angular/cli",
+          "template": "ng-new",
+          "args": [
+            "new",
+            "{name}",
+            "--defaults",
+            "--skip-git",
+            "--package-manager",
+            "{manager}"
+          ]
+        }
+      },
       "templates": {
         "react": {
           "ts": "react-ts",
@@ -202,10 +223,7 @@
           "js": "solid"
         }
       },
-      "$comment": "web + angular has NO template entry on purpose (F1): create-vite ships no Angular template and silently falls back to vanilla-ts in non-TTY mode. ADR-028 §3 gives Angular an `exec` route through the Angular CLI in slice S2; until then the registry refuses the combination and the wizard shows it disabled with this reason.",
-      "unsupported": {
-        "angular": "Angular on the Web wrapper arrives with the Angular CLI route (ADR-028 §3, slice S2). create-vite has no Angular template."
-      }
+      "$comment": "web + angular is an `exec` route (ADR-028 §3): create-vite ships no Angular template and silently falls back to vanilla-ts in non-TTY mode (F1), so Angular runs the Angular CLI itself, pinned — the same thing create-vite's own Angular entry and create-tauri-app's angular template do. `routes` overrides the wrapper route per framework; `template` on an exec route is nominal (no template manifest applies)."
     },
     "python": {
       "kind": "blueprint",
@@ -1467,6 +1485,74 @@
               "vite": "^6.0.3",
               "vue-tsc": "^2.1.10",
               "@tauri-apps/cli": "^2"
+            }
+          },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "recipe": {
+            "package": "@angular/cli",
+            "version": "21.2.24",
+            "template": "ng-new",
+            "argv": [
+              "npm",
+              "exec",
+              "--yes",
+              "--",
+              "@angular/cli@21.2.24",
+              "new",
+              "fx-web-angular-ts",
+              "--defaults",
+              "--skip-git",
+              "--package-manager",
+              "npm"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "build"
+          ],
+          "generated": {
+            "scripts": [
+              "ng",
+              "start",
+              "build",
+              "watch",
+              "test"
+            ],
+            "dependencies": {
+              "@angular/common": "^21.2.0",
+              "@angular/compiler": "^21.2.0",
+              "@angular/core": "^21.2.0",
+              "@angular/forms": "^21.2.0",
+              "@angular/platform-browser": "^21.2.0",
+              "@angular/router": "^21.2.0",
+              "rxjs": "~7.8.0",
+              "tslib": "^2.3.0"
+            },
+            "devDependencies": {
+              "@angular/build": "^21.2.24",
+              "@angular/cli": "^21.2.24",
+              "@angular/compiler-cli": "^21.2.0",
+              "jsdom": "^28.0.0",
+              "prettier": "^3.8.1",
+              "typescript": "~5.9.2",
+              "vitest": "^4.0.8"
             }
           },
           "source": "scripts/scaffold-recipe-evidence.mjs"

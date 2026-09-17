@@ -42,6 +42,7 @@ test('every tool pin is an exact version with a recorded publish date', () => {
     assert.ok(isExactVersion(tool.version), `${name} pin "${tool.version}" must be exact`);
     assert.match(tool.publishedAt, /^\d{4}-\d{2}-\d{2}$/, `${name} records its publish date`);
     assert.ok(['initializer', 'addon-cli', 'exec'].includes(tool.kind), `${name} has a known kind`);
+    if (tool.kind === 'exec') assert.ok(!tool.invoke, `${name} exec tools run under their real package name`);
     if (tool.kind === 'initializer') assert.ok(tool.invoke, `${name} names its npm-create short name`);
   }
   assert.equal(pinnedSpec('create-vite'), `create-vite@${RECIPES.tools['create-vite'].version}`);
@@ -68,6 +69,7 @@ test('every route template exists in the pinned tool\'s published template manif
     assert.ok(Array.isArray(manifest) && manifest.length > 0, `${wrapper.route.tool} has a template manifest`);
     for (const [framework, byLang] of Object.entries(wrapper.templates)) {
       assert.ok(wrapper.frameworks.includes(framework), `${id}: template for ${framework} but framework not listed`);
+      assert.ok(!wrapper.routes?.[framework], `${id}/${framework}: a template AND an override route is ambiguous`);
       for (const [lang, template] of Object.entries(byLang)) {
         assert.ok(getLanguages(framework).includes(lang), `${id}/${framework}: language ${lang} unknown`);
         assert.ok(manifest.includes(template), `${id}/${framework}/${lang}: template "${template}" is not shipped by ${wrapper.route.tool}@${RECIPES.tools[wrapper.route.tool].version}`);
@@ -76,22 +78,43 @@ test('every route template exists in the pinned tool\'s published template manif
   }
 });
 
-test('a listed framework without a template is refused with a reason, never silently routed', () => {
-  // web + angular: the F1 case. create-vite has no Angular template.
+test('web + angular is an exec route through the pinned Angular CLI, never a create-vite template (F1, ADR-028 §3)', () => {
   const route = resolveRoute('web', 'angular', 'ts');
-  assert.ok(route.unsupported, 'web + angular resolves to an unsupported route');
-  assert.match(route.unsupported, /Angular CLI/);
-  assert.equal(assemblePrimaryArgv({ route, managerId: 'npm', projectName: 'x' }), null);
-  const avail = availability({ wrapper: 'web', framework: 'angular', language: 'ts', manager: 'npm', platform: 'windows' });
-  assert.equal(avail.selectable, false);
-  assert.match(avail.reason, /Angular CLI/);
-  // Every framework a wrapper lists either has templates or an explicit reason.
+  assert.equal(route.kind, 'exec');
+  assert.equal(route.package, '@angular/cli');
+  assert.equal(route.invoke, '@angular/cli');
+  assert.equal(RECIPES.tools['@angular/cli'].kind, 'exec');
+  const argv = assemblePrimaryArgv({ route, managerId: 'npm', projectName: 'demo' });
+  assert.deepEqual(argv.slice(0, 4), ['exec', '--yes', '--', `@angular/cli@${route.version}`]);
+  assert.ok(argv.includes('--defaults') && argv.includes('--skip-git'), 'non-interactive flags');
+  assert.ok(!argv.includes('--template'), 'no create-vite template is ever named for Angular');
+  // The pin must satisfy the bundled Node (24.14.0): Angular CLI 22.x needs 24.15+.
+  assert.match(route.version, /^21\.2\./);
+});
+
+test('a listed framework without a template or an override is refused with a reason, never silently routed', () => {
+  // Electron lists no Angular at all; a framework/language the registry does
+  // not know resolves to an explicit reason instead of a guessed template.
+  const missing = resolveRoute('electron', 'angular', 'ts');
+  assert.ok(missing.unsupported, 'electron + angular resolves to an unsupported route');
+  assert.equal(assemblePrimaryArgv({ route: missing, managerId: 'npm', projectName: 'x' }), null);
+  const noJs = resolveRoute('web', 'angular', 'js');
+  assert.ok(noJs.unsupported, 'angular has no js variant');
+  // Every framework a wrapper lists either has templates, an override route, or a stated reason.
   for (const [id, wrapper] of Object.entries(RECIPES.wrappers)) {
     if (wrapper.kind !== 'npm') continue;
     for (const framework of wrapper.frameworks) {
       const hasTemplate = Boolean(wrapper.templates[framework]);
+      const hasOverride = Boolean(wrapper.routes?.[framework]);
       const hasReason = Boolean(wrapper.unsupported?.[framework]);
-      assert.ok(hasTemplate || hasReason, `${id}/${framework}: neither a template nor a stated reason`);
+      assert.ok(hasTemplate || hasOverride || hasReason, `${id}/${framework}: neither a template, an override route, nor a stated reason`);
+    }
+  }
+  // Override routes name a pinned exec tool and never a create-* initializer.
+  for (const [id, wrapper] of Object.entries(RECIPES.wrappers)) {
+    for (const [framework, override] of Object.entries(wrapper.routes ?? {})) {
+      assert.equal(override.kind, 'exec', `${id}/${framework} override is an exec route`);
+      assert.equal(RECIPES.tools[override.tool]?.kind, 'exec', `${id}/${framework} override tool is pinned as exec`);
     }
   }
 });
