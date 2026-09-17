@@ -565,9 +565,9 @@ const PYRIGHT_VERSION: &str = "1.1.411";
 **TypeScript pack:**
 
 ```rust
-const TSSERVER_VERSION: &str = "5.3.0";
-const TYPESCRIPT_VERSION: &str = "5.9.3";
-// install command: npm install -g typescript-language-server@5.3.0 typescript@5.9.3
+const TSSERVER_VERSION: &str = "6.0.0";
+const TYPESCRIPT_VERSION: &str = "6.0.3";
+// install command: npm install -g typescript-language-server@6.0.0 typescript@6.0.3
 ```
 
 When a new language server version is released, it is tested against Litria's transport implementation. If it passes, the constant is bumped in a Litria release. Users who already have the server installed are not affected until they explicitly update or reinstall.
@@ -598,8 +598,8 @@ The authoritative list of pinned language server versions lives in a single loca
 
 ```rust
 pub const PYRIGHT_VERSION: &str           = "1.1.411";
-pub const TSSERVER_VERSION: &str          = "5.3.0";
-pub const TYPESCRIPT_VERSION: &str        = "5.9.3";
+pub const TSSERVER_VERSION: &str          = "6.0.0";
+pub const TYPESCRIPT_VERSION: &str        = "6.0.3";
 ```
 
 Each Litria release commit includes the version pins that were tested for that release. The git history is the audit trail.

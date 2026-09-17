@@ -25,13 +25,18 @@ pub(crate) const PYRIGHT_VERSION: &str = "1.1.411";
 
 // TypeScript language server (bundled in resources/servers/typescript/)
 #[allow(dead_code)]
-pub(crate) const TSSERVER_VERSION: &str = "5.3.0";
+pub(crate) const TSSERVER_VERSION: &str = "6.0.0";
 
 // TypeScript compiler itself (bundled alongside typescript-language-server)
-// Pinned to the 5.x line deliberately: the 7.x native-port major is a
-// separate integration decision, not a routine pin refresh.
+// Pinned to the 6.x line deliberately (last JavaScript-based line; ships
+// `tsserver`). The 7.x native port ships NO tsserver — only a native LSP
+// binary per platform — so typescript-language-server cannot drive it
+// (its 6.0.0 changelog: "notification when TypeScript with no tsserver API
+// is found"). Adopting 7.x = new integration (spawn the native LSP, drop
+// the wrapper, per-platform bundle): an ADR, not a pin refresh. Verified
+// 2026-09-16 against npm metadata (`npm view typescript@7.0.2 bin`).
 #[allow(dead_code)]
-pub(crate) const TYPESCRIPT_VERSION: &str = "5.9.3";
+pub(crate) const TYPESCRIPT_VERSION: &str = "6.0.3";
 
 // Node.js runtime (bundled in resources/node/ for LSP servers + scaffold runner)
 // Pin to active LTS line — must match the version CM is developed/tested against.

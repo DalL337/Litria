@@ -19,6 +19,12 @@ the npm post-mortem research) — the existing audits under
 - Periodically: the living audit says "reviewed periodically and after
   significant changes" — a major arc touching any of the above re-triggers it.
 
+Dependency and scaffold-tool work also follows
+[Dependency Change Policy](dependency-change-policy.md) for compatibility
+evidence (added 2026-09-16). Security checks and exact pins do not establish
+that tool arguments, dependency versions, or generated integrations work
+together; compatibility verification does not waive the trust rules below.
+
 ## Rule 2 — Method
 
 - **Classify before designing** (ADR-005 A1 generalized): who executes what,
