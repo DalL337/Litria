@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isDestinationError } from '../../src/scaffold/creationErrors.js';
+import { isDestinationError, isRetainedPartialError } from '../../src/scaffold/creationErrors.js';
 
 // ---------------------------------------------------------------------------
 // Project-creation failure classification (2026-08-31)
@@ -78,4 +78,14 @@ test('substring matches do not count — the suffix must be a whole segment', ()
   // `.root.mkdir` must not match something merely ending in those letters.
   assert.equal(isDestinationError({ code: 'scaffold.reroot.mkdirx' }), false);
   assert.equal(isDestinationError({ code: 'location.invalid' }), false, 'needs a command prefix');
+});
+
+test('a stopped run that kept its partial folder is recognised by code and report (ADR-028 §7)', () => {
+  const retained = { code: 'scaffold.cancelled', message: 'Creating Vite project: cancelled — its process tree was torn down. Partial project retained — C:/p/x kept: .gitignore is subprocess output that was never recorded; nothing was deleted. Remove the folder to try again.' };
+  assert.equal(isRetainedPartialError(retained), true);
+  assert.equal(isRetainedPartialError({ ...retained, code: 'scaffold.step_deadline' }), true);
+  assert.equal(isRetainedPartialError({ code: 'scaffold.cancelled', message: 'cancelled. Partial project removed: C:/p/x' }), false, 'removed folder: Blank may proceed');
+  assert.equal(isRetainedPartialError({ code: 'scaffold.primary_failed', message: 'Partial project retained — x' }), false, 'only abort codes');
+  assert.equal(isRetainedPartialError('scaffold.cancelled'), false);
+  assert.equal(isRetainedPartialError(null), false);
 });

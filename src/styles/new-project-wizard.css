@@ -1033,6 +1033,10 @@ button:disabled .npw-key { display: none; }
 .npw-progress-line {
   padding: 1px 0;
   color: rgba(255, 255, 255, 0.7);
+  /* Long tool output and retention reports wrap instead of scrolling the
+     whole panel sideways (owner live pass 2026-09-17). */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .npw-progress-step {

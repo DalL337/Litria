@@ -221,9 +221,18 @@ export function availability({ wrapper, framework, language, manager, platform }
   const route = resolveRoute(wrapper, framework, language);
   if (!route) return { selectable: false, status: 'unverified', reason: 'No recipe for this selection.' };
   if (route.unsupported) return { selectable: false, status: 'unverified', reason: route.unsupported };
-  const coverage = getCoverage({ wrapper, framework, language, manager, platform });
+  let coverage = getCoverage({ wrapper, framework, language, manager, platform });
   if (SELECTABLE_STATUSES.has(coverage.status)) {
     return { selectable: true, status: coverage.status, reason: null, coverage };
+  }
+  // No primary entry, but a failing add-on run of the same combination
+  // exists: its cause is the honest answer (Yarn + Angular read "not
+  // verified" while the registry knew why — owner live pass 2026-09-17).
+  if (coverage.status === 'unverified' && !coverage.reason) {
+    const failed = (recipes.addonCoverage?.entries ?? []).find((e) =>
+      e.wrapper === wrapper && e.framework === framework && e.language === language
+      && e.manager === manager && e.platform === platform && e.status === 'failing' && e.reason);
+    if (failed) coverage = { ...coverage, status: 'failing', reason: failed.reason };
   }
   const label = `${framework} (${language}) with ${manager} on ${platform}`;
   const reason = coverage.status === 'failing'

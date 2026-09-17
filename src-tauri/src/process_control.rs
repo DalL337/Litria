@@ -79,20 +79,22 @@ pub(crate) enum StepFailure {
 }
 
 impl StepFailure {
-    pub(crate) fn message(&self, program: &str) -> String {
+    /// `what` names the step as the trace shows it ("Creating Angular
+    /// project", "uv"), never an executable path.
+    pub(crate) fn message(&self, what: &str) -> String {
         match self {
-            StepFailure::Spawn(e) => format!("Failed to start `{program}`: {e}"),
-            StepFailure::Wait(e) => format!("Failed to wait for `{program}`: {e}"),
-            StepFailure::Exit(code) => format!("`{program}` exited with {code}"),
+            StepFailure::Spawn(e) => format!("{what}: failed to start: {e}"),
+            StepFailure::Wait(e) => format!("{what}: failed to wait for the process: {e}"),
+            StepFailure::Exit(code) => format!("{what}: exited with {code}"),
             StepFailure::IdleTimeout(d) => format!(
-                "`{program}` produced no output for {}s (idle limit) — stopped and its process tree torn down",
+                "{what}: no output for {}s (idle limit) — stopped; its process tree was torn down",
                 d.as_secs()
             ),
             StepFailure::Deadline(d) => format!(
-                "`{program}` ran past the {}s deadline — stopped and its process tree torn down",
+                "{what}: ran past the {}s deadline — stopped; its process tree was torn down",
                 d.as_secs()
             ),
-            StepFailure::Cancelled => format!("`{program}` cancelled — its process tree torn down"),
+            StepFailure::Cancelled => format!("{what}: cancelled — its process tree was torn down"),
         }
     }
 
@@ -298,6 +300,11 @@ pub(crate) fn run_with_limits(
     mut on_line: impl FnMut(String),
 ) -> Result<(), StepFailure> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // The output is a trace and a build log, never a terminal: ask every
+    // tool for plain text (the Angular CLI coloured the trace with raw
+    // escape codes — owner live pass 2026-09-17). Both conventions, since
+    // libraries differ in which one they honour.
+    command.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -465,6 +472,22 @@ mod tests {
         let result = run_with_limits(cmd, StepLimits::from_seconds(10, 30), &RunControl::default(), |l| lines.push(l));
         assert_eq!(result, Ok(()));
         assert!(lines.contains(&"hi".to_string()) && lines.contains(&"err line".to_string()), "{lines:?}");
+    }
+
+    #[test]
+    fn every_subprocess_is_asked_for_plain_output() {
+        let mut cmd = node();
+        cmd.args(["-e", "console.log(process.env.NO_COLOR + '/' + process.env.FORCE_COLOR)"]);
+        let mut lines = Vec::new();
+        run_with_limits(cmd, StepLimits::from_seconds(10, 30), &RunControl::default(), |l| lines.push(l)).unwrap();
+        assert_eq!(lines, vec!["1/0".to_string()]);
+    }
+
+    #[test]
+    fn failure_messages_name_the_step_not_an_executable() {
+        assert_eq!(StepFailure::Cancelled.message("Creating Angular project"), "Creating Angular project: cancelled — its process tree was torn down");
+        assert_eq!(StepFailure::Exit("2".into()).message("uv"), "uv: exited with 2");
+        assert!(StepFailure::IdleTimeout(Duration::from_secs(300)).message("addon:tailwind: install tailwindcss").starts_with("addon:tailwind: install tailwindcss: no output for 300s"));
     }
 
     #[test]
