@@ -63,6 +63,13 @@ export function isLanguageLocked(frameworkId) {
   return langs.length === 1 ? langs[0] : null;
 }
 
+/** Subprocess limits per step kind (ADR-028 §8) — the plan carries them and
+ *  the runner refuses a payload whose limits differ from the registry. */
+export function getLimits() {
+  const { primary, command, env } = recipes.limits;
+  return { primary: { ...primary }, command: { ...command }, env: { ...env } };
+}
+
 export function listManagers() {
   return Object.keys(recipes.managers);
 }

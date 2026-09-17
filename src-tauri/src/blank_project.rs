@@ -9,7 +9,6 @@
 // afterwards via db_bootstrap_project, which dedup-appends `.litria/` to
 // .gitignore — already present in ours, so it no-ops.
 
-use std::fs;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -185,42 +184,13 @@ pub(crate) fn create_blank_project(
         .map_err(|message| CommandError::invalid_path("blank_project.location.invalid", message))?;
 
     let root: PathBuf = base.join(name);
-    if root.exists() {
-        if !root.is_dir() {
-            return Err(CommandError::conflict(
-                "blank_project.root.not_dir",
-                format!("Path exists but is not a directory: {}", root.display()),
-            ));
-        }
-        // Blank must start clean — refuse foreign content. An empty folder is
-        // fine (users often make the folder first, unlike the CLI scaffolds
-        // which own their target), and so is a folder holding ONLY our own
-        // substrate files: that's a previous attempt whose downstream step
-        // failed, and refusing it would make creation permanently
-        // non-retryable without a manual delete.
-        let entries = fs::read_dir(&root).map_err(|e| {
-            CommandError::from_io("blank_project.root.read", &e, "Unable to inspect target folder")
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|e| {
-                CommandError::from_io("blank_project.root.read", &e, "Unable to inspect target folder")
-            })?;
-            let entry_name = entry.file_name();
-            let is_substrate = SUBSTRATE_FILES
-                .iter()
-                .any(|f| entry_name.eq_ignore_ascii_case(f));
-            if !is_substrate {
-                return Err(CommandError::conflict(
-                    "blank_project.root.not_empty",
-                    format!("Folder already exists and is not empty: {}", root.display()),
-                ));
-            }
-        }
-    } else {
-        fs::create_dir_all(&root).map_err(|e| {
-            CommandError::from_io("blank_project.root.mkdir", &e, "Unable to create project directory")
-        })?;
-    }
+    // ADR-028 §7: claim the root before writing. An empty folder the user
+    // made first is fine; a previous attempt is accepted only when its
+    // marker and manifest prove every entry is our unchanged output; foreign
+    // content refuses, by name. Every file is written under `create_new`
+    // with symlinks refused on every component (creation_ownership.rs).
+    let mut attempt = crate::creation_ownership::Attempt::claim_root(&root, "blank", true)
+        .map_err(|e| CommandError::conflict(&format!("blank_project.{}", e.code), e.message))?;
 
     let readme = readme_contents(name);
     let files: [(&str, &str); 3] = [
@@ -230,9 +200,9 @@ pub(crate) fn create_blank_project(
     ];
 
     for (filename, contents) in files {
-        fs::write(root.join(filename), contents).map_err(|e| {
-            CommandError::from_io("blank_project.file.write", &e, "Unable to write project file")
-        })?;
+        attempt
+            .write_file(filename, contents.as_bytes())
+            .map_err(|message| CommandError::internal("blank_project.file.write", message))?;
     }
 
     Ok(BlankProjectResult {
@@ -247,6 +217,7 @@ pub(crate) fn create_blank_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::Path;
 
     #[test]

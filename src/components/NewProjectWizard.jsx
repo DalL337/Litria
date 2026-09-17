@@ -288,6 +288,12 @@ function capitalize(str) {
 
 // Tauri command rejections are plain {category, code, message} objects, not
 // Error instances \u2014 duck-type the message out of whatever shape arrives.
+// ADR-028 §8: one id per run for `cancel_scaffold` — a UUID where the
+// platform has one (WebView2, Node ≥ 19), otherwise time plus randomness.
+function newRunId() {
+  return globalThis.crypto?.randomUUID?.() ?? `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function toErrorMessage(err, fallback) {
   if (typeof err === 'object' && err !== null && typeof err.message === 'string' && err.message) {
     return err.message;
@@ -399,6 +405,10 @@ function NewProjectWizard({
   // it to the button's measured rect and render it fixed.
   const [traceMenuAnchor, setTraceMenuAnchor] = useState({ top: 0, right: 0 });
   const [traceStatus, setTraceStatus] = useState('');
+  // ADR-028 §8: the handle `cancel_scaffold` uses to reach this run's live
+  // subprocess; a fresh id per run. `cancelling` debounces the request.
+  const runIdRef = useRef(null);
+  const [cancelling, setCancelling] = useState(false);
   // Python interpreter inventory (ADR-020): probed once when the Python card
   // is first selected, re-scannable from the empty state. status:
   // 'idle' | 'loading' | 'ready' | 'error'.
@@ -628,6 +638,8 @@ function NewProjectWizard({
     // route through the same rule (F19).
     if (!canSubmit(state, runState, plan.availability.selectable, createdPayload !== null)) return;
     setRunState('running');
+    runIdRef.current = newRunId();
+    setCancelling(false);
     setProgressLines([]);
     setError('');
     setErrorIsDestination(false);
@@ -684,7 +696,7 @@ function NewProjectWizard({
         // The payload IS the previewed plan: the engine was resolved once,
         // for the preview and for this call (ADR-028 §2).
         const result = await invoke('scaffold_python_project', {
-          config: plan.payload,
+          config: { ...plan.payload, runId: runIdRef.current },
           onEvent: makeProgressChannel(),
         });
         if (state.pyInterpreter) rememberPyInterpreter(state.pyInterpreter);
@@ -714,6 +726,8 @@ function NewProjectWizard({
         // runner re-checks against the registry (ADR-028 §2). Pins live in
         // src/scaffold/recipes.json only — nothing here chooses a version.
         ...plan.payload,
+        // ADR-028 §8: Cancel reaches the live subprocess through this id.
+        runId: runIdRef.current,
         // Workspace style (Step 2). Persisted into the project by Slice 2b so the
         // canvas reflects these defaults; collected here regardless.
         groupColorMode: state.groupColorMode,
@@ -741,6 +755,7 @@ function NewProjectWizard({
         await buildLogActions?.sendCurrentRunToLogs?.();
       }
       setError(message);
+      setCancelling(false);
       setRunState('failed');
     }
   }, [autoSendLogs, buildDonePayloadBase, buildLogActions, buildLogDomain, createdPayload, finishRun, plan, runBlankCreate, runState, runtime, state]);
@@ -787,8 +802,21 @@ function NewProjectWizard({
   const handleCancel = useCallback(() => {
     // Wording and behaviour follow the run state: a created project is
     // closed without opening (nothing on disk is discarded), a run in flight
-    // cannot be cancelled here yet (S7), an untouched wizard just closes.
-    if (cancelKind === 'abort' || cancelKind === null) return;
+    // is stopped through the runner (ADR-028 §8), an untouched wizard just
+    // closes.
+    if (cancelKind === null) return;
+    if (cancelKind === 'abort') {
+      // The runner tears the process tree down, cleans up only what it can
+      // prove it created, and rejects the run — that rejection lands in
+      // handleDone's catch with the preservation report in the trace.
+      if (cancelling || !runIdRef.current) return;
+      setCancelling(true);
+      runtime
+        .core()
+        .then(({ invoke }) => invoke('cancel_scaffold', { runId: runIdRef.current }))
+        .catch((err) => captureError('wizard', err, { source: 'cancel-scaffold' }));
+      return;
+    }
     if (cancelKind === 'close') {
       onCancel();
       return;
@@ -798,7 +826,7 @@ function NewProjectWizard({
       return;
     }
     discardWizard();
-  }, [cancelKind, discardWizard, onCancel, page, state]);
+  }, [cancelKind, cancelling, discardWizard, onCancel, page, runtime, state]);
   const handleKeepEditing = useCallback(() => {
     setConfirmingCancel(false);
     // Runs after the Cancel button is back in the DOM.
@@ -829,7 +857,7 @@ function NewProjectWizard({
       return;
     }
     if (e.key === 'Escape') {
-      if (cancelKind === 'abort' || cancelKind === null) return;
+      if (cancelKind === null) return;
       e.preventDefault();
       if (confirmingCancel) handleKeepEditing();
       else handleCancel();
@@ -1712,11 +1740,11 @@ function NewProjectWizard({
               className="npw-btn-cancel"
               type="button"
               onClick={handleCancel}
-              disabled={cancelKind === 'abort' || cancelKind === null}
+              disabled={cancelKind === null || cancelling}
               aria-keyshortcuts="Escape"
               ref={cancelRef}
             >
-              {cancelKind === 'close' ? 'Close without opening' : 'Cancel'}<kbd className="npw-key">Esc</kbd>
+              {cancelKind === 'close' ? 'Close without opening' : cancelling ? 'Stopping…' : 'Cancel'}<kbd className="npw-key">Esc</kbd>
             </button>
           )}
           <div className="npw-footer-counter" aria-live="polite">

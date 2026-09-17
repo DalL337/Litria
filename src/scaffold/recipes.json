@@ -2,6 +2,12 @@
   "$comment": "ADR-028 §1 — the scaffold recipe registry. The ONLY place a create-CLI version, template identifier, manager verb, or support claim for a generated project lives. Read by src/scaffold/recipeRegistry.js (frontend) and src-tauri/src/scaffold_recipes.rs (include_str!). The wizard's compatibility matrix and preview, and the Rust runner's argv, are all projections of this file. Bumping a pin: verify the version is ≥24h old (`npm view <pkg> time --json`, ADR-021 §2), refresh `templateManifests` below from the published package, re-run scripts/scaffold-recipe-evidence.mjs for the affected recipes, and update `coverage`. Managers: One entry per package manager the wizard offers. `create`/`exec`/`install` are the argv verbs the plan derivation uses (both sides); `forwardSeparator` is npm's `--` for create-* flags; `scriptsOff` names how dependency lifecycle scripts are prevented (env+flag: npm_config_ignore_scripts + --ignore-scripts; native: the manager's default; none); `auditAtCreate` whether `npm audit` runs (ADR-021 §4); `minMajor` the floor the runner enforces from `<pm> --version` before executing anything (ADR-028 §5).",
   "schemaVersion": 1,
   "recordedAt": "2026-09-16",
+  "limits": {
+    "$comment": "ADR-028 §8 — subprocess limits per step kind, read by both sides and carried in the plan (validate_plan refuses a payload that differs). idleSeconds is reset by every output line; deadlineSeconds runs from the spawn and is never extended. primary = the create CLI (its own install included); command = add-on/backend installs and execs; env = the Python environment step.",
+    "primary": { "idleSeconds": 300, "deadlineSeconds": 1800 },
+    "command": { "idleSeconds": 300, "deadlineSeconds": 900 },
+    "env": { "idleSeconds": 120, "deadlineSeconds": 600 }
+  },
   "tools": {
     "create-tauri-app": {
       "invoke": "tauri-app",

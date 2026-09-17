@@ -15,6 +15,8 @@ mod project_tree;
 mod project_types;
 mod python_probe;
 mod python_scaffold;
+mod creation_ownership;
+mod process_control;
 mod quote_pool;
 mod scaffold_recipes;
 mod scaffold_runner;
@@ -80,6 +82,7 @@ pub fn run() {
             // Python toolchain probe + offline scaffold (ADR-020)
             commands::detect_python_interpreters,
             commands::scaffold_python_project,
+            commands::cancel_scaffold,
             // Platform
             platform::get_platform_config,
             // SQLite persistence (db module)

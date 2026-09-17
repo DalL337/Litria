@@ -64,6 +64,17 @@ test('python plan: every runner refusal is a reason up front (F32, F33, F36)', (
   assert.equal(none.availability.reason, 'Pick a project type.');
 });
 
+test('npm plan: the registry limits ride in the plan record (ADR-028 §8)', () => {
+  const plan = buildScaffoldPlan({ ...base, wrapper: 'web', framework: 'react', lang: 'ts', manager: 'npm' }, probe, WIN);
+  const { primary, command, env } = RECIPES.limits;
+  assert.deepEqual(plan.payload.plan.limits, { primary, command, env });
+  for (const pair of [primary, command, env]) {
+    assert.ok(Number.isInteger(pair.idleSeconds) && pair.idleSeconds > 0);
+    assert.ok(Number.isInteger(pair.deadlineSeconds) && pair.deadlineSeconds >= pair.idleSeconds, 'a deadline never shorter than the idle limit');
+  }
+  assert.ok(!('$comment' in plan.payload.plan.limits), 'the comment stays in the registry');
+});
+
 test('npm plan: incomplete stack has no preview and is not submittable', () => {
   const plan = buildScaffoldPlan({ ...base, wrapper: 'web', framework: 'react' }, probe, WIN);
   assert.equal(plan.preview, null);
