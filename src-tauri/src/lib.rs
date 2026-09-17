@@ -16,6 +16,7 @@ mod project_types;
 mod python_probe;
 mod python_scaffold;
 mod quote_pool;
+mod scaffold_recipes;
 mod scaffold_runner;
 mod scaffold_types;
 mod terminal_ipc_bridge;

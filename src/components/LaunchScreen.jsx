@@ -26,7 +26,7 @@ function LaunchScreen({
   buildLogDomain = null,
   buildLogActions = null,
 }) {
-  const { placeholderPath } = usePlatformConfig();
+  const { placeholderPath, os: platformOs } = usePlatformConfig();
   // Computed absolute path — never a literal containing `~`.
   const defaultProjectFolder = useDefaultProjectFolder();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -257,6 +257,9 @@ function LaunchScreen({
           }
           initialEnergyLevel={energyLevel}
           initialTheme={seedPrefs?.[PREF_KEYS.defaultBaseTheme]}
+          // ADR-028 §10: recipe coverage is per platform; the wizard offers
+          // only what has evidence for this one.
+          platform={platformOs}
           buildLogDomain={buildLogDomain}
           buildLogActions={buildLogActions}
           // Read from the same seed snapshot as the other wizard defaults;

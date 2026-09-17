@@ -1,4 +1,4 @@
-import { Fragment, useReducer, useState, useCallback, useEffect, useRef } from 'react';
+import { Fragment, useReducer, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Check,
@@ -17,8 +17,22 @@ import {
   Sprout,
   TriangleAlert,
 } from 'lucide-react';
-import { getFrameworks, getLanguages, getAddons, getAddonDeps, isLanguageLocked } from '../scaffold/compatibility-matrix';
-import { pinnedCreateSpec, pinnedAddonSpecs, previewCreateLabel, SCAFFOLD_POSTURE_NOTE } from '../scaffold/create-cli-versions';
+// ADR-028 §1: every "what can be built" question is answered by the recipe
+// registry; the matrix, the pins and the preview are projections of it.
+import {
+  getFrameworks,
+  getLanguages,
+  getAddons,
+  getAddonDeps,
+  isLanguageLocked,
+  getBackendOptions,
+  wrapperKind,
+  availability,
+  selectableLanguages,
+  listManagers,
+} from '../scaffold/recipeRegistry';
+import { SCAFFOLD_POSTURE_NOTE } from '../scaffold/create-cli-versions';
+import { buildScaffoldPlan, BLANK_FILES, normalizePlatform } from '../scaffold/scaffoldPlan';
 import {
   PY_ARCHETYPES,
   PY_ENV_MODES,
@@ -26,9 +40,6 @@ import {
   PY_ENV_CAPTION,
   isPythonWrapper,
   derivePythonFloor,
-  derivePythonNames,
-  resolvePythonEngine,
-  buildPythonPlanPreview,
   buildPythonReviewRows,
   pickDefaultInterpreter,
 } from '../scaffold/pythonWizardModel';
@@ -45,7 +56,7 @@ import {
   reviewRowTarget,
 } from '../scaffold/wizardNavigation';
 import { THEME_ACCENT_SWATCHES } from '../app/themeDomain';
-import { BUILTIN_THEME_IDS } from '../theme/themeDefaults';
+import { BUILTIN_THEME_IDS, BUILTIN_THEME_PRESETS } from '../theme/themeDefaults';
 import { getLastProjectDir, rememberProjectDir } from '../utils/lastProjectDir';
 import { getLastPyInterpreter, rememberPyInterpreter } from '../utils/lastPyInterpreter';
 import WizardStylePreview from './WizardStylePreview';
@@ -70,10 +81,6 @@ const WRAPPERS = [
   { id: 'blank', name: 'Blank', icon: 'file-plus', desc: 'No scaffold \u2014 just the essentials', badge: 'INSTANT', badgeClass: 'npw-badge-default', tier: 'npw-tier-blank' },
 ];
 
-// Substrate files the Blank template generates (mirrors the Rust command's
-// creation order; shown in the review card and command preview).
-const BLANK_FILES = ['README.md', '.gitignore', '.editorconfig'];
-
 const FRAMEWORKS = [
   { id: 'react', name: 'React', icon: 'atom', ink: '#61dafb', bg: 'rgba(97,218,251,0.1)', desc: 'Component-driven UI' },
   { id: 'svelte', name: 'Svelte', icon: 'flame', ink: '#ff6a3d', bg: 'rgba(255,62,0,0.1)', desc: 'Compiled, minimal runtime' },
@@ -92,11 +99,14 @@ const LANGUAGES = [
   { id: 'py', name: 'Python', icon: 'terminal', ink: '#7cb4e8', bg: 'rgba(53,114,165,0.1)', desc: 'Readable, batteries included' },
 ];
 
-const BACKENDS = [
-  { id: 'none', name: 'None', icon: 'ban', ink: 'rgba(255,255,255,0.6)', bg: 'rgba(255,255,255,0.04)', desc: 'Frontend only', badge: 'DEFAULT', badgeClass: 'npw-badge-default', isDefault: true },
-  { id: 'express', name: 'Express', icon: 'server', ink: '#cfd8dc', bg: 'rgba(255,255,255,0.06)', desc: 'Minimal Node.js server', badge: 'NODE', badgeClass: 'npw-badge-web' },
-  { id: 'fastify', name: 'Fastify', icon: 'zap', ink: '#ffc832', bg: 'rgba(255,200,50,0.08)', desc: 'Fast, low overhead Node', badge: 'NODE', badgeClass: 'npw-badge-web' },
-];
+// Backend card presentation, keyed by registry id. WHICH backends exist for a
+// wrapper is the registry's answer (getBackendOptions) — this map only knows
+// how to draw one (F13: the id list used to live here as well).
+const BACKEND_CARDS = {
+  none: { id: 'none', name: 'None', icon: 'ban', ink: 'rgba(255,255,255,0.6)', bg: 'rgba(255,255,255,0.04)', desc: 'Frontend only', badge: 'DEFAULT', badgeClass: 'npw-badge-default', isDefault: true },
+  express: { id: 'express', name: 'Express', icon: 'server', ink: '#cfd8dc', bg: 'rgba(255,255,255,0.06)', desc: 'Minimal Node.js server', badge: 'NODE', badgeClass: 'npw-badge-web' },
+  fastify: { id: 'fastify', name: 'Fastify', icon: 'zap', ink: '#ffc832', bg: 'rgba(255,200,50,0.08)', desc: 'Fast, low overhead Node', badge: 'NODE', badgeClass: 'npw-badge-web' },
+};
 
 const ADDONS = [
   { id: 'tailwind', name: 'Tailwind', icon: 'waves', ink: '#38bdf8', bg: 'rgba(56,189,248,0.1)', desc: 'Utility-first CSS' },
@@ -108,14 +118,23 @@ const ADDONS = [
   { id: 'ruff', name: 'Ruff', icon: 'brush', ink: '#e8825f', bg: 'rgba(212,93,54,0.1)', desc: 'Linter + formatter config in pyproject' },
 ];
 
-const THEMES = [
-  { id: 'glass', name: 'Glass', tag: 'GLASS \u00B7 DEFAULT', gradient: 'linear-gradient(135deg, rgba(99,102,241,0.2), rgba(20,184,166,0.1))' },
-  { id: 'obsidian', name: 'Obsidian', tag: 'GLASS \u00B7 SMOKED', gradient: 'linear-gradient(135deg, #1b1626, #2a2340)' },
-  { id: 'parchment', name: 'Parchment', tag: 'MATTE \u00B7 WARM LIGHT', gradient: 'linear-gradient(135deg, #f2e4c4, #e0cfa8)' },
-  { id: 'terminal', name: 'Terminal', tag: 'MATTE \u00B7 FLAT GREEN', gradient: 'linear-gradient(135deg, #0d1117, rgba(62,207,90,0.25), #0d1117)' },
-];
+// Theme card presentation, keyed by preset id. The LIST of themes is the
+// built-in preset registry (F22: a hardcoded list here could not show a
+// preset the theme system knows about); a preset without a swatch here
+// still gets a card.
+const THEME_CARD_META = {
+  glass: { tag: 'GLASS \u00B7 DEFAULT', gradient: 'linear-gradient(135deg, rgba(99,102,241,0.2), rgba(20,184,166,0.1))' },
+  obsidian: { tag: 'GLASS \u00B7 SMOKED', gradient: 'linear-gradient(135deg, #1b1626, #2a2340)' },
+  parchment: { tag: 'MATTE \u00B7 WARM LIGHT', gradient: 'linear-gradient(135deg, #f2e4c4, #e0cfa8)' },
+  terminal: { tag: 'MATTE \u00B7 FLAT GREEN', gradient: 'linear-gradient(135deg, #0d1117, rgba(62,207,90,0.25), #0d1117)' },
+};
+const THEMES = BUILTIN_THEME_IDS.map((id) => ({
+  id,
+  name: BUILTIN_THEME_PRESETS[id]?.name ?? capitalize(id),
+  ...(THEME_CARD_META[id] ?? { tag: 'PRESET', gradient: 'linear-gradient(135deg, #2a2a2a, #444)' }),
+}));
 
-const PM_OPTIONS = ['npm', 'pnpm', 'yarn'];
+const PM_OPTIONS = listManagers();
 
 // Workspace-style color modes (prototype page 3 → "Shape the workspace").
 const GROUP_COLOR_MODES = [
@@ -231,70 +250,9 @@ function wizardReducer(state, action) {
 }
 
 // ---------------------------------------------------------------------------
-// Flag preview builder — mirrors prototype's buildFlagPreview()
-// ---------------------------------------------------------------------------
-
-function buildCommandPreview(state) {
-  if (state.wrapper === 'blank') {
-    return [
-      { type: 'key', text: 'blank' },
-      { type: 'val', text: ` ${state.name.trim() || 'my-app'}` },
-      { type: 'comment', text: ` # ${BLANK_FILES.join(' + ')} — no scaffold, no npm` },
-    ];
-  }
-  if (!state.wrapper || !state.framework || !state.lang) return null;
-
-  const name = state.name.trim() || 'my-app';
-  const fw = state.framework;
-  const isTs = state.lang === 'ts';
-
-  let parts = [];
-
-  if (state.wrapper === 'tauri') {
-    const tpl = fw === 'angular' ? 'angular' : isTs ? `${fw}-ts` : fw;
-    parts.push({ type: 'key', text: previewCreateLabel('tauri') });
-    parts.push({ type: 'val', text: ` ${name}` });
-    parts.push({ type: 'key', text: ' --template' });
-    parts.push({ type: 'val', text: ` ${tpl}` });
-    if (state.manager !== 'npm') {
-      parts.push({ type: 'key', text: ' --manager' });
-      parts.push({ type: 'val', text: ` ${state.manager}` });
-    }
-  } else if (state.wrapper === 'electron') {
-    const tpl = isTs ? 'vite-typescript' : 'vite';
-    parts.push({ type: 'key', text: previewCreateLabel('electron') });
-    parts.push({ type: 'val', text: ` ${name}` });
-    parts.push({ type: 'key', text: ` --template=` });
-    parts.push({ type: 'val', text: tpl });
-    parts.push({ type: 'comment', text: ` # +${fw}` });
-    if (state.manager !== 'npm') {
-      parts.push({ type: 'key', text: ' --manager' });
-      parts.push({ type: 'val', text: ` ${state.manager}` });
-    }
-  } else {
-    const tpl = fw === 'angular' ? 'angular' : isTs ? `${fw}-ts` : fw;
-    parts.push({ type: 'key', text: previewCreateLabel('web') });
-    parts.push({ type: 'val', text: ` ${name}` });
-    parts.push({ type: 'key', text: ' --template' });
-    parts.push({ type: 'val', text: ` ${tpl}` });
-    if (state.manager !== 'npm') {
-      parts.push({ type: 'key', text: ' --manager' });
-      parts.push({ type: 'val', text: ` ${state.manager}` });
-    }
-    if (state.backend !== 'none') {
-      parts.push({ type: 'comment', text: ` # +backend: ${state.backend}` });
-    }
-  }
-
-  for (const addon of state.addons) {
-    parts.push({ type: 'comment', text: ` # +${addon}` });
-  }
-
-  return parts;
-}
-
-// ---------------------------------------------------------------------------
-// Review card builder
+// Review card builder. (The command preview is no longer built here: it is
+// `plan.preview` from buildScaffoldPlan — the same derivation the runner
+// re-checks, so what the box shows is what runs. ADR-028 §2, F14.)
 // ---------------------------------------------------------------------------
 
 function capitalize(str) {
@@ -352,6 +310,9 @@ function NewProjectWizard({
   defaultFolder,
   initialEnergyLevel,
   initialTheme,
+  // 'windows' | 'macos' | 'linux' — the platform whose recipe coverage
+  // decides what may be offered (ADR-028 §10). Unknown ⇒ no npm route is.
+  platform = 'unknown',
   // Build-log surface. The domain captures the FULL event stream (the
   // rendered buffer below still truncates, to protect the DOM); the actions
   // copy or persist it. All optional — the wizard works without them.
@@ -418,6 +379,14 @@ function NewProjectWizard({
   const isBlank = state.wrapper === 'blank';
   const isPython = isPythonWrapper(state.wrapper);
   const advanceReady = canAdvance(state, page);
+
+  // -- The plan (ADR-028 §2) --
+  // One derivation from the current state + probe: the preview renders it,
+  // Create is gated on its availability, and its payload is what the runner
+  // receives. Memoized from the same inputs the preview uses, so no handler
+  // can hold a stale probe (F15).
+  const platformId = normalizePlatform(platform);
+  const plan = useMemo(() => buildScaffoldPlan(state, pyProbe, { platform: platformId }), [state, pyProbe, platformId]);
 
   // -- Python interpreter probe --
   const runPythonProbe = useCallback(async () => {
@@ -643,25 +612,11 @@ function NewProjectWizard({
       // Python routes to python_scaffold (ADR-020 Slice 3) — the offline
       // blueprint executor — never to the npm-shaped scaffold_project
       // command, whose wrapper enum would reject it.
-      if (isPythonWrapper(state.wrapper)) {
-        const { distName, moduleName } = derivePythonNames(state.name);
-        const config = {
-          projectName: state.name.trim(),
-          projectLocation: state.folder.trim(),
-          archetype: state.framework,
-          distName,
-          moduleName,
-          addons: state.addons,
-          requiresFloor: state.pyRequiresFloor?.trim() || null,
-          envMode: state.pyEnvMode,
-          // Resolve 'auto' here so the plan preview and the executed command
-          // can never disagree (the preview used the same resolution).
-          envEngine: resolvePythonEngine(state.pyEnvEngine, pyProbe.uvAvailable),
-          interpreterPath: state.pyInterpreter,
-          existingEnv: state.pyEnvMode === 'existing' ? (state.pyExistingEnv.trim() || null) : null,
-        };
+      if (plan.kind === 'python') {
+        // The payload IS the previewed plan: the engine was resolved once,
+        // for the preview and for this call (ADR-028 §2).
         const result = await invoke('scaffold_python_project', {
-          config,
+          config: plan.payload,
           onEvent: makeProgressChannel(),
         });
         if (state.pyInterpreter) rememberPyInterpreter(state.pyInterpreter);
@@ -678,21 +633,17 @@ function NewProjectWizard({
         return;
       }
 
+      // ADR-028 §10: the runner refuses an unverified combination too; this
+      // check keeps the refusal readable instead of a thrown rejection.
+      if (!plan.payload || !plan.availability.selectable) {
+        throw new Error(plan.availability.reason || 'This combination cannot be scaffolded yet.');
+      }
       const config = {
-        projectName: state.name.trim(),
-        projectLocation: state.folder.trim(),
-        wrapper: state.wrapper,
-        framework: state.framework,
-        language: state.lang,
-        backend: state.backend === 'none' ? null : state.backend,
-        addons: state.addons,
-        manager: state.manager,
-        theme: state.theme,
-        // ADR-021 §1: exact pinned specs for every CLI the runner executes.
-        // The runner refuses bare/ranged/latest specs — pins live in
-        // src/scaffold/create-cli-versions.js only.
-        createCliSpec: pinnedCreateSpec(state.wrapper),
-        addonCliSpecs: pinnedAddonSpecs(),
+        // The previewed plan, verbatim: wrapper, framework, language,
+        // backend, addons, manager, theme and the derived `plan` block the
+        // runner re-checks against the registry (ADR-028 §2). Pins live in
+        // src/scaffold/recipes.json only — nothing here chooses a version.
+        ...plan.payload,
         // Workspace style (Step 2). Persisted into the project by Slice 2b so the
         // canvas reflects these defaults; collected here regardless.
         groupColorMode: state.groupColorMode,
@@ -722,7 +673,7 @@ function NewProjectWizard({
       setError(message);
       setIsScaffolding(false);
     }
-  }, [autoSendLogs, buildDonePayloadBase, buildLogActions, buildLogDomain, finishRun, runBlankCreate, state]);
+  }, [autoSendLogs, buildDonePayloadBase, buildLogActions, buildLogDomain, finishRun, plan, runBlankCreate, state]);
 
   // Offered in the page-3 error area after a scaffold failure: same
   // name/location/theme/workspace-style choices, created as Blank instead —
@@ -792,7 +743,7 @@ function NewProjectWizard({
         goNext();
         return;
       }
-      if (!isScaffolding && !pendingDone && !confirmingCancel) handleDone();
+      if (!isScaffolding && !pendingDone && !confirmingCancel && plan.availability.selectable) handleDone();
       return;
     }
     const delta = ROVING_KEYS[e.key];
@@ -817,9 +768,7 @@ function NewProjectWizard({
   };
 
   // -- Render helpers --
-  const commandPreview = isPython
-    ? buildPythonPlanPreview(state, pyProbe)
-    : buildCommandPreview(state);
+  const commandPreview = plan.preview;
   const reviewRows = isPython
     ? buildPythonReviewRows(state, pyProbe)
     : buildReviewRows(state);
@@ -834,7 +783,8 @@ function NewProjectWizard({
   // Blank hides the entire stack cascade — there is no stack.
   const showFramework = state.wrapper !== null && !isBlank;
   const showLang = state.framework !== null && !isBlank;
-  const showBackend = state.wrapper === 'web' && state.lang !== null;
+  const backendOptions = getBackendOptions(state.wrapper);
+  const showBackend = backendOptions.length > 0 && state.lang !== null;
   const showAddons = state.lang !== null && !isBlank;
   // Python replaces the npm manager row with the environment strip.
   const showPackageManager = !isBlank && !isPython;
@@ -851,12 +801,31 @@ function NewProjectWizard({
   const advancedChanges = countAdvancedChanges(state);
   const colorChanges = countColorChanges(state);
 
-  // Matrix-driven filtering: only valid options appear at each cascade step.
-  // 'blank' is not in the compatibility matrix — guard against lookups.
+  // Registry-driven filtering: only valid options appear at each cascade step.
+  // 'blank' has no cascade — guard against lookups.
   const availableFrameworks = state.wrapper && !isBlank ? getFrameworks(state.wrapper) : [];
   const availableLangs = state.framework ? getLanguages(state.framework) : [];
   const availableAddons = state.framework ? getAddons(state.framework) : [];
   const lockedLang = state.framework ? isLanguageLocked(state.framework) : null;
+  // ADR-028 §10: an npm-route option without execution evidence for this
+  // platform + manager is shown disabled WITH its reason (never silently
+  // hidden, never silently offered). Offline wrappers are always offered.
+  const isNpmWrapper = wrapperKind(state.wrapper) === 'npm';
+  const frameworkAvailability = (frameworkId) => {
+    if (!isNpmWrapper) return { selectable: true, reason: null };
+    const langs = selectableLanguages({ wrapper: state.wrapper, framework: frameworkId, manager: state.manager, platform: platformId });
+    if (langs.length > 0) return { selectable: true, reason: null };
+    const first = getLanguages(frameworkId)[0] ?? null;
+    return availability({ wrapper: state.wrapper, framework: frameworkId, language: first, manager: state.manager, platform: platformId });
+  };
+  const languageAvailability = (languageId) => {
+    if (!isNpmWrapper || !state.framework) return { selectable: true, reason: null };
+    return availability({ wrapper: state.wrapper, framework: state.framework, language: languageId, manager: state.manager, platform: platformId });
+  };
+  const managerAvailability = (managerId) => {
+    if (!isNpmWrapper || !state.framework || !state.lang) return { selectable: true, reason: null };
+    return availability({ wrapper: state.wrapper, framework: state.framework, language: state.lang, manager: managerId, platform: platformId });
+  };
 
   return (
     <div className="npw-overlay" role="dialog" aria-modal="true" aria-labelledby="npw-title">
@@ -956,21 +925,27 @@ function NewProjectWizard({
                 <div className="npw-subsection-inner">
                 <div className="npw-section-label">{isPython ? 'Project Type' : 'Framework'}</div>
                 <div className="npw-card-row" role="radiogroup" aria-label={isPython ? 'Project type' : 'Framework'}>
-                  {FRAMEWORKS.filter((fw) => availableFrameworks.includes(fw.id)).map((fw) => (
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={state.framework === fw.id}
-                      key={fw.id}
-                      className={`npw-card${state.framework === fw.id ? ' selected' : ''}`}
-                      onClick={() => dispatch({ type: 'SET_FRAMEWORK', value: fw.id })}
-                    >
-                      <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
-                      <span className="npw-card-icon" style={{ background: fw.bg, color: fw.ink }}><WizardIcon name={fw.icon} /></span>
-                      <span className="npw-card-name">{fw.name}</span>
-                      <span className="npw-card-desc">{fw.desc}</span>
-                    </button>
-                  ))}
+                  {FRAMEWORKS.filter((fw) => availableFrameworks.includes(fw.id)).map((fw) => {
+                    const avail = frameworkAvailability(fw.id);
+                    return (
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={state.framework === fw.id}
+                        disabled={!avail.selectable}
+                        title={avail.reason ?? undefined}
+                        key={fw.id}
+                        className={`npw-card${state.framework === fw.id ? ' selected' : ''}${avail.selectable ? '' : ' dep-locked'}`}
+                        onClick={() => avail.selectable && dispatch({ type: 'SET_FRAMEWORK', value: fw.id })}
+                      >
+                        <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
+                        <span className="npw-card-icon" style={{ background: fw.bg, color: fw.ink }}><WizardIcon name={fw.icon} /></span>
+                        <span className="npw-card-name">{fw.name}</span>
+                        <span className="npw-card-desc">{fw.desc}</span>
+                        {!avail.selectable && <span className="npw-dep-hint">{avail.reason}</span>}
+                      </button>
+                    );
+                  })}
                 </div>
                 </div>
               </div>
@@ -982,20 +957,24 @@ function NewProjectWizard({
                 <div className="npw-card-row" role="radiogroup" aria-label="Language">
                   {LANGUAGES.filter((l) => availableLangs.includes(l.id)).map((l) => {
                     const isLocked = lockedLang === l.id;
+                    const avail = languageAvailability(l.id);
+                    const isDisabled = isLocked || !avail.selectable;
                     return (
                       <button
                         type="button"
                         role="radio"
                         aria-checked={state.lang === l.id}
-                        disabled={isLocked}
+                        disabled={isDisabled}
+                        title={avail.reason ?? undefined}
                         key={l.id}
-                        className={`npw-card${state.lang === l.id ? ' selected' : ''}${isLocked ? ' dep-locked' : ''}`}
-                        onClick={() => !isLocked && dispatch({ type: 'SET_LANG', value: l.id })}
+                        className={`npw-card${state.lang === l.id ? ' selected' : ''}${isDisabled ? ' dep-locked' : ''}`}
+                        onClick={() => !isDisabled && dispatch({ type: 'SET_LANG', value: l.id })}
                       >
                         <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
                         <span className="npw-card-icon" style={{ background: l.bg, color: l.ink }}><WizardIcon name={l.icon} /></span>
                         <span className="npw-card-name">{l.name}</span>
                         <span className="npw-card-desc">{l.desc}</span>
+                        {!avail.selectable && <span className="npw-dep-hint">{avail.reason}</span>}
                       </button>
                     );
                   })}
@@ -1140,17 +1119,25 @@ function NewProjectWizard({
                       <div className="npw-fold-section">
                         <div className="npw-section-label">Package Manager</div>
                         <div className="npw-pm-row" role="radiogroup" aria-label="Package manager">
-                          {PM_OPTIONS.map((pm) => (
-                            <label key={pm} className={`npw-pm-option${state.manager === pm ? ' selected' : ''}`}>
-                              <input
-                                type="radio"
-                                name="npw-pm"
-                                checked={state.manager === pm}
-                                onChange={() => dispatch({ type: 'SET_MANAGER', value: pm })}
-                              />
-                              {pm}
-                            </label>
-                          ))}
+                          {PM_OPTIONS.map((pm) => {
+                            const avail = managerAvailability(pm);
+                            return (
+                              <label
+                                key={pm}
+                                className={`npw-pm-option${state.manager === pm ? ' selected' : ''}${avail.selectable ? '' : ' dep-locked'}`}
+                                title={avail.reason ?? undefined}
+                              >
+                                <input
+                                  type="radio"
+                                  name="npw-pm"
+                                  checked={state.manager === pm}
+                                  disabled={!avail.selectable}
+                                  onChange={() => dispatch({ type: 'SET_MANAGER', value: pm })}
+                                />
+                                {pm}
+                              </label>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -1158,7 +1145,7 @@ function NewProjectWizard({
                       <div className="npw-fold-section">
                         <div className="npw-section-label">Backend</div>
                         <div className="npw-card-row" role="radiogroup" aria-label="Backend">
-                          {BACKENDS.map((b) => (
+                          {backendOptions.map((id) => BACKEND_CARDS[id]).filter(Boolean).map((b) => (
                             <button
                               type="button"
                               role="radio"
@@ -1242,12 +1229,10 @@ function NewProjectWizard({
                         type="button"
                         role="radio"
                         aria-checked={state.theme === t.id}
-                        disabled={Boolean(t.locked)}
                         key={t.id}
-                        className={`npw-theme-card${state.theme === t.id ? ' selected' : ''}${t.locked ? ' locked' : ''}`}
-                        onClick={() => !t.locked && dispatch({ type: 'SET_THEME', value: t.id })}
+                        className={`npw-theme-card${state.theme === t.id ? ' selected' : ''}`}
+                        onClick={() => dispatch({ type: 'SET_THEME', value: t.id })}
                       >
-                        {t.locked && <span className="npw-theme-lock">SOON</span>}
                         <span className="npw-theme-preview" style={{ background: t.gradient }} />
                         <span className="npw-theme-name">{t.name}</span>
                         <span className="npw-theme-tag">{t.tag}</span>
@@ -1614,7 +1599,8 @@ function NewProjectWizard({
                 className="npw-btn-done"
                 type="button"
                 onClick={handleDone}
-                disabled={isScaffolding || pendingDone !== null}
+                disabled={isScaffolding || pendingDone !== null || !plan.availability.selectable}
+                title={plan.availability.selectable ? undefined : (plan.availability.reason ?? undefined)}
                 aria-keyshortcuts="Enter"
               >
                 <Sparkles size={14} aria-hidden="true" />
