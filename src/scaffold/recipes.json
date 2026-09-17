@@ -137,6 +137,27 @@
           "ts": "solid-ts",
           "js": "solid"
         }
+      },
+      "entries": {
+        "react": {
+          "ts": "src/main.tsx",
+          "js": "src/main.jsx"
+        },
+        "vue": {
+          "ts": "src/main.ts",
+          "js": "src/main.js"
+        },
+        "solid": {
+          "ts": "src/index.tsx",
+          "js": "src/index.jsx"
+        },
+        "svelte": {
+          "ts": "src/routes/+layout.svelte",
+          "js": "src/routes/+layout.svelte"
+        },
+        "angular": {
+          "ts": "src/main.ts"
+        }
       }
     },
     "electron": {
@@ -171,7 +192,514 @@
           "ts": "vite-typescript",
           "js": "vite"
         }
-      }
+      },
+      "entries": {
+        "react": {
+          "ts": "src/renderer.tsx",
+          "js": "src/renderer.jsx"
+        },
+        "solid": {
+          "ts": "src/renderer.tsx",
+          "js": "src/renderer.jsx"
+        },
+        "vue": {
+          "ts": "src/renderer.ts",
+          "js": "src/renderer.js"
+        },
+        "svelte": {
+          "ts": "src/renderer.ts",
+          "js": "src/renderer.js"
+        }
+      },
+      "frameworkRecipes": {
+        "react": [
+          {
+            "when": {
+              "language": [
+                "ts"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "react@19.2.8",
+                  "react-dom@19.2.8"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "@vitejs/plugin-react@4.7.0",
+                  "@types/react@19.3.0",
+                  "@types/react-dom@19.3.0"
+                ]
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.ts",
+                "mode": "replace",
+                "content": "import { defineConfig } from \"vite\";\nimport react from \"@vitejs/plugin-react\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [react()],\n});\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.tsx",
+                "mode": "create",
+                "content": "export default function App() {\n  return (\n    <main>\n      <h1>Hello from React</h1>\n      <p>Edit src/App.tsx and save to reload.</p>\n    </main>\n  );\n}\n"
+              },
+              {
+                "op": "delete",
+                "path": "src/renderer.ts"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.tsx",
+                "mode": "create",
+                "content": "import \"./index.css\";\nimport { StrictMode } from \"react\";\nimport { createRoot } from \"react-dom/client\";\nimport App from \"./App\";\n\ncreateRoot(document.getElementById(\"root\")!).render(\n  <StrictMode>\n    <App />\n  </StrictMode>,\n);\n"
+              },
+              {
+                "op": "replace",
+                "path": "index.html",
+                "find": [
+                  "/src/renderer.ts"
+                ],
+                "with": "/src/renderer.tsx"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              },
+              {
+                "op": "mergeJson",
+                "path": "tsconfig.json",
+                "value": {
+                  "compilerOptions": {
+                    "jsx": "react-jsx"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "when": {
+              "language": [
+                "js"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "react@19.2.8",
+                  "react-dom@19.2.8"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "@vitejs/plugin-react@4.7.0"
+                ]
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.mjs",
+                "mode": "replace",
+                "content": "import { defineConfig } from \"vite\";\nimport react from \"@vitejs/plugin-react\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [react()],\n});\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.jsx",
+                "mode": "create",
+                "content": "export default function App() {\n  return (\n    <main>\n      <h1>Hello from React</h1>\n      <p>Edit src/App.jsx and save to reload.</p>\n    </main>\n  );\n}\n"
+              },
+              {
+                "op": "delete",
+                "path": "src/renderer.js"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.jsx",
+                "mode": "create",
+                "content": "import \"./index.css\";\nimport { StrictMode } from \"react\";\nimport { createRoot } from \"react-dom/client\";\nimport App from \"./App\";\n\ncreateRoot(document.getElementById(\"root\")).render(\n  <StrictMode>\n    <App />\n  </StrictMode>,\n);\n"
+              },
+              {
+                "op": "replace",
+                "path": "index.html",
+                "find": [
+                  "/src/renderer.js"
+                ],
+                "with": "/src/renderer.jsx"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              }
+            ]
+          }
+        ],
+        "vue": [
+          {
+            "when": {
+              "language": [
+                "ts"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "vue@3.5.42"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "@vitejs/plugin-vue@5.2.4"
+                ]
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.ts",
+                "mode": "replace",
+                "content": "import { defineConfig } from \"vite\";\nimport vue from \"@vitejs/plugin-vue\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [vue()],\n});\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.vue",
+                "mode": "create",
+                "content": "<script setup lang=\"ts\">\nconst greeting = \"Hello from Vue\";\n</script>\n\n<template>\n  <main>\n    <h1>{{ greeting }}</h1>\n    <p>Edit src/App.vue and save to reload.</p>\n  </main>\n</template>\n"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.ts",
+                "mode": "replace",
+                "content": "import \"./index.css\";\nimport { createApp } from \"vue\";\nimport App from \"./App.vue\";\n\ncreateApp(App).mount(\"#root\");\n"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              },
+              {
+                "op": "write",
+                "path": "src/vue-shim.d.ts",
+                "mode": "create",
+                "content": "declare module \"*.vue\" {\n  import type { DefineComponent } from \"vue\";\n  const component: DefineComponent<{}, {}, unknown>;\n  export default component;\n}\n"
+              }
+            ]
+          },
+          {
+            "when": {
+              "language": [
+                "js"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "vue@3.5.42"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "@vitejs/plugin-vue@5.2.4"
+                ]
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.mjs",
+                "mode": "replace",
+                "content": "import { defineConfig } from \"vite\";\nimport vue from \"@vitejs/plugin-vue\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [vue()],\n});\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.vue",
+                "mode": "create",
+                "content": "<script setup>\nconst greeting = \"Hello from Vue\";\n</script>\n\n<template>\n  <main>\n    <h1>{{ greeting }}</h1>\n    <p>Edit src/App.vue and save to reload.</p>\n  </main>\n</template>\n"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.js",
+                "mode": "replace",
+                "content": "import \"./index.css\";\nimport { createApp } from \"vue\";\nimport App from \"./App.vue\";\n\ncreateApp(App).mount(\"#root\");\n"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              }
+            ]
+          }
+        ],
+        "svelte": [
+          {
+            "when": {
+              "language": [
+                "ts"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "svelte@5.57.0"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "@sveltejs/vite-plugin-svelte@3.1.2"
+                ]
+              },
+              {
+                "op": "delete",
+                "path": "vite.renderer.config.ts"
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.mts",
+                "mode": "create",
+                "content": "import { defineConfig } from \"vite\";\nimport { svelte } from \"@sveltejs/vite-plugin-svelte\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [svelte()],\n});\n"
+              },
+              {
+                "op": "replace",
+                "path": "forge.config.ts",
+                "find": [
+                  "config: 'vite.renderer.config.ts'"
+                ],
+                "with": "config: 'vite.renderer.config.mts'"
+              },
+              {
+                "op": "write",
+                "path": "svelte.config.mjs",
+                "mode": "create",
+                "content": "import { vitePreprocess } from \"@sveltejs/vite-plugin-svelte\";\n\nexport default {\n  preprocess: vitePreprocess(),\n};\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.svelte",
+                "mode": "create",
+                "content": "<script lang=\"ts\">\n  const greeting = \"Hello from Svelte\";\n</script>\n\n<main>\n  <h1>{greeting}</h1>\n  <p>Edit src/App.svelte and save to reload.</p>\n</main>\n"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.ts",
+                "mode": "replace",
+                "content": "import \"./index.css\";\nimport { mount } from \"svelte\";\nimport App from \"./App.svelte\";\n\nmount(App, { target: document.getElementById(\"root\")! });\n"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              },
+              {
+                "op": "write",
+                "path": "src/svelte-shim.d.ts",
+                "mode": "create",
+                "content": "declare module \"*.svelte\" {\n  import type { Component } from \"svelte\";\n  const component: Component;\n  export default component;\n}\n"
+              }
+            ],
+            "$comment": "Forge's TypeScript template is a CommonJS package; @sveltejs/vite-plugin-svelte is ESM-only, so the renderer config must be `.mts` (Forge pointed at it) and the Svelte config `.mjs` — observed: 'This package is ESM only but it was tried to load by require' (2026-09-16)."
+          },
+          {
+            "when": {
+              "language": [
+                "js"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "svelte@5.57.0"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "@sveltejs/vite-plugin-svelte@3.1.2"
+                ]
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.mjs",
+                "mode": "replace",
+                "content": "import { defineConfig } from \"vite\";\nimport { svelte } from \"@sveltejs/vite-plugin-svelte\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [svelte()],\n});\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.svelte",
+                "mode": "create",
+                "content": "<script>\n  const greeting = \"Hello from Svelte\";\n</script>\n\n<main>\n  <h1>{greeting}</h1>\n  <p>Edit src/App.svelte and save to reload.</p>\n</main>\n"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.js",
+                "mode": "replace",
+                "content": "import \"./index.css\";\nimport { mount } from \"svelte\";\nimport App from \"./App.svelte\";\n\nmount(App, { target: document.getElementById(\"root\") });\n"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              }
+            ]
+          }
+        ],
+        "solid": [
+          {
+            "when": {
+              "language": [
+                "ts"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "solid-js@1.9.15"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "vite-plugin-solid@2.11.14"
+                ]
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.ts",
+                "mode": "replace",
+                "content": "import { defineConfig } from \"vite\";\nimport solid from \"vite-plugin-solid\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [solid()],\n});\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.tsx",
+                "mode": "create",
+                "content": "export default function App() {\n  return (\n    <main>\n      <h1>Hello from Solid</h1>\n      <p>Edit src/App.tsx and save to reload.</p>\n    </main>\n  );\n}\n"
+              },
+              {
+                "op": "delete",
+                "path": "src/renderer.ts"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.tsx",
+                "mode": "create",
+                "content": "import \"./index.css\";\nimport { render } from \"solid-js/web\";\nimport App from \"./App\";\n\nrender(() => <App />, document.getElementById(\"root\")!);\n"
+              },
+              {
+                "op": "replace",
+                "path": "index.html",
+                "find": [
+                  "/src/renderer.ts"
+                ],
+                "with": "/src/renderer.tsx"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              },
+              {
+                "op": "mergeJson",
+                "path": "tsconfig.json",
+                "value": {
+                  "compilerOptions": {
+                    "jsx": "preserve",
+                    "jsxImportSource": "solid-js"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "when": {
+              "language": [
+                "js"
+              ]
+            },
+            "steps": [
+              {
+                "op": "install",
+                "dev": false,
+                "packages": [
+                  "solid-js@1.9.15"
+                ]
+              },
+              {
+                "op": "install",
+                "dev": true,
+                "packages": [
+                  "vite-plugin-solid@2.11.14"
+                ]
+              },
+              {
+                "op": "write",
+                "path": "vite.renderer.config.mjs",
+                "mode": "replace",
+                "content": "import { defineConfig } from \"vite\";\nimport solid from \"vite-plugin-solid\";\n\n// https://vitejs.dev/config\nexport default defineConfig({\n  plugins: [solid()],\n});\n"
+              },
+              {
+                "op": "write",
+                "path": "src/App.jsx",
+                "mode": "create",
+                "content": "export default function App() {\n  return (\n    <main>\n      <h1>Hello from Solid</h1>\n      <p>Edit src/App.jsx and save to reload.</p>\n    </main>\n  );\n}\n"
+              },
+              {
+                "op": "delete",
+                "path": "src/renderer.js"
+              },
+              {
+                "op": "write",
+                "path": "src/renderer.jsx",
+                "mode": "create",
+                "content": "import \"./index.css\";\nimport { render } from \"solid-js/web\";\nimport App from \"./App\";\n\nrender(() => <App />, document.getElementById(\"root\"));\n"
+              },
+              {
+                "op": "replace",
+                "path": "index.html",
+                "find": [
+                  "/src/renderer.js"
+                ],
+                "with": "/src/renderer.jsx"
+              },
+              {
+                "op": "insertBefore",
+                "path": "index.html",
+                "marker": "<script type=\"module\"",
+                "text": "<div id=\"root\"></div>\n    "
+              }
+            ]
+          }
+        ]
+      },
+      "$comment": "Forge's vite / vite-typescript templates are bundler-only (F5): `frameworkRecipes` wires the chosen framework into the renderer — pinned plugin + framework packages (majors compatible with the template's Vite 5, F2), the renderer Vite config, an App component, the renderer entry, a #root mount point, and TS jsx settings. Runs before add-ons so Tailwind/Router patch the wired entry. `entries` name the renderer AFTER wiring (react/solid rename it to .tsx/.jsx), which is what add-ons patch."
     },
     "web": {
       "kind": "npm",
@@ -223,7 +751,28 @@
           "js": "solid"
         }
       },
-      "$comment": "web + angular is an `exec` route (ADR-028 §3): create-vite ships no Angular template and silently falls back to vanilla-ts in non-TTY mode (F1), so Angular runs the Angular CLI itself, pinned — the same thing create-vite's own Angular entry and create-tauri-app's angular template do. `routes` overrides the wrapper route per framework; `template` on an exec route is nominal (no template manifest applies)."
+      "$comment": "web + angular is an `exec` route (ADR-028 §3): create-vite ships no Angular template and silently falls back to vanilla-ts in non-TTY mode (F1), so Angular runs the Angular CLI itself, pinned — the same thing create-vite's own Angular entry and create-tauri-app's angular template do. `routes` overrides the wrapper route per framework; `template` on an exec route is nominal (no template manifest applies).",
+      "entries": {
+        "react": {
+          "ts": "src/main.tsx",
+          "js": "src/main.jsx"
+        },
+        "vue": {
+          "ts": "src/main.ts",
+          "js": "src/main.js"
+        },
+        "svelte": {
+          "ts": "src/main.ts",
+          "js": "src/main.js"
+        },
+        "solid": {
+          "ts": "src/index.tsx",
+          "js": "src/index.jsx"
+        },
+        "angular": {
+          "ts": "src/main.ts"
+        }
+      }
     },
     "python": {
       "kind": "blueprint",
@@ -328,7 +877,149 @@
   },
   "addons": {
     "tailwind": {
-      "requires": []
+      "requires": [],
+      "label": "Tailwind CSS v4 (PostCSS plugin, global stylesheet import)",
+      "recipes": [
+        {
+          "when": {},
+          "steps": [
+            {
+              "op": "install",
+              "dev": true,
+              "packages": [
+                "tailwindcss@4.3.3",
+                "@tailwindcss/postcss@4.3.3",
+                "postcss@8.5.28"
+              ]
+            },
+            {
+              "op": "write",
+              "path": ".postcssrc.json",
+              "mode": "create",
+              "content": "{\n  \"plugins\": {\n    \"@tailwindcss/postcss\": {}\n  }\n}\n"
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "tauri",
+              "electron"
+            ],
+            "framework": [
+              "react",
+              "vue",
+              "solid"
+            ]
+          },
+          "steps": [
+            {
+              "op": "write",
+              "path": "src/tailwind.css",
+              "mode": "create",
+              "content": "@import \"tailwindcss\";\n"
+            },
+            {
+              "op": "prepend",
+              "path": "{entry}",
+              "text": "import \"./tailwind.css\";\n"
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "electron"
+            ],
+            "framework": [
+              "svelte"
+            ]
+          },
+          "steps": [
+            {
+              "op": "write",
+              "path": "src/tailwind.css",
+              "mode": "create",
+              "content": "@import \"tailwindcss\";\n"
+            },
+            {
+              "op": "prepend",
+              "path": "{entry}",
+              "text": "import \"./tailwind.css\";\n"
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "tauri"
+            ],
+            "framework": [
+              "svelte"
+            ],
+            "language": [
+              "ts"
+            ]
+          },
+          "steps": [
+            {
+              "op": "write",
+              "path": "src/app.css",
+              "mode": "create",
+              "content": "@import \"tailwindcss\";\n"
+            },
+            {
+              "op": "write",
+              "path": "src/routes/+layout.svelte",
+              "mode": "create",
+              "content": "<script lang=\"ts\">\n  import \"../app.css\";\n  let { children } = $props();\n</script>\n\n{@render children()}\n"
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "tauri"
+            ],
+            "framework": [
+              "svelte"
+            ],
+            "language": [
+              "js"
+            ]
+          },
+          "steps": [
+            {
+              "op": "write",
+              "path": "src/app.css",
+              "mode": "create",
+              "content": "@import \"tailwindcss\";\n"
+            },
+            {
+              "op": "write",
+              "path": "src/routes/+layout.svelte",
+              "mode": "create",
+              "content": "<script>\n  import \"../app.css\";\n  let { children } = $props();\n</script>\n\n{@render children()}\n"
+            }
+          ]
+        },
+        {
+          "when": {
+            "framework": [
+              "angular"
+            ]
+          },
+          "steps": [
+            {
+              "op": "append",
+              "path": "src/styles.css",
+              "text": "@import \"tailwindcss\";\n"
+            }
+          ]
+        }
+      ]
     },
     "shadcn": {
       "requires": [
@@ -338,18 +1029,704 @@
         "react": "shadcn",
         "svelte": "shadcn-svelte",
         "vue": "shadcn-vue"
-      }
+      },
+      "label": "shadcn init, non-interactive, with the import alias and Tailwind it requires already in place (shadcn: -y -d; shadcn-vue: base/style/icons/font/base-color pinned to its defaults; shadcn-svelte: preset vega, neutral, $lib aliases in the root tsconfig)",
+      "recipes": [
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "tauri"
+            ],
+            "framework": [
+              "react"
+            ],
+            "language": [
+              "ts"
+            ]
+          },
+          "steps": [
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.json",
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "@/*": [
+                      "./src/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.app.json",
+              "optional": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "@/*": [
+                      "./src/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "prepend",
+              "path": "vite.config.ts",
+              "text": "import path from \"node:path\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "vite.config.ts",
+              "find": [
+                "plugins: [react()],"
+              ],
+              "with": "plugins: [react()],\n  resolve: { alias: { \"@\": path.resolve(__dirname, \"./src\") } },"
+            },
+            {
+              "op": "exec",
+              "cli": "shadcn",
+              "args": [
+                "init",
+                "-y",
+                "-d"
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "tauri"
+            ],
+            "framework": [
+              "react"
+            ],
+            "language": [
+              "js"
+            ]
+          },
+          "steps": [
+            {
+              "op": "mergeJson",
+              "path": "jsconfig.json",
+              "create": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "@/*": [
+                      "./src/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "prepend",
+              "path": "vite.config.js",
+              "text": "import path from \"node:path\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "vite.config.js",
+              "find": [
+                "plugins: [react()],"
+              ],
+              "with": "plugins: [react()],\n  resolve: { alias: { \"@\": path.resolve(__dirname, \"./src\") } },"
+            },
+            {
+              "op": "exec",
+              "cli": "shadcn",
+              "args": [
+                "init",
+                "-y",
+                "-d"
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "tauri"
+            ],
+            "framework": [
+              "vue"
+            ],
+            "language": [
+              "ts"
+            ]
+          },
+          "steps": [
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.json",
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "@/*": [
+                      "./src/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.app.json",
+              "optional": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "@/*": [
+                      "./src/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "prepend",
+              "path": "vite.config.ts",
+              "text": "import path from \"node:path\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "vite.config.ts",
+              "find": [
+                "plugins: [vue()],"
+              ],
+              "with": "plugins: [vue()],\n  resolve: { alias: { \"@\": path.resolve(__dirname, \"./src\") } },"
+            },
+            {
+              "op": "exec",
+              "cli": "shadcn-vue",
+              "args": [
+                "init",
+                "-y",
+                "-f",
+                "--base",
+                "reka",
+                "--style",
+                "vega",
+                "--icon-library",
+                "lucide",
+                "--font",
+                "inter",
+                "--base-color",
+                "neutral",
+                "--css-variables"
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "tauri"
+            ],
+            "framework": [
+              "vue"
+            ],
+            "language": [
+              "js"
+            ]
+          },
+          "steps": [
+            {
+              "op": "mergeJson",
+              "path": "jsconfig.json",
+              "create": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "@/*": [
+                      "./src/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "prepend",
+              "path": "vite.config.js",
+              "text": "import path from \"node:path\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "vite.config.js",
+              "find": [
+                "plugins: [vue()],"
+              ],
+              "with": "plugins: [vue()],\n  resolve: { alias: { \"@\": path.resolve(__dirname, \"./src\") } },"
+            },
+            {
+              "op": "exec",
+              "cli": "shadcn-vue",
+              "args": [
+                "init",
+                "-y",
+                "-f",
+                "--base",
+                "reka",
+                "--style",
+                "vega",
+                "--icon-library",
+                "lucide",
+                "--font",
+                "inter",
+                "--base-color",
+                "neutral",
+                "--css-variables"
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web"
+            ],
+            "framework": [
+              "svelte"
+            ],
+            "language": [
+              "ts"
+            ]
+          },
+          "steps": [
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.app.json",
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "$lib": [
+                      "./src/lib"
+                    ],
+                    "$lib/*": [
+                      "./src/lib/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "prepend",
+              "path": "vite.config.ts",
+              "text": "import path from \"node:path\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "vite.config.ts",
+              "find": [
+                "plugins: [svelte()],"
+              ],
+              "with": "plugins: [svelte()],\n  resolve: { alias: { \"$lib\": path.resolve(__dirname, \"./src/lib\") } },"
+            },
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.json",
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "$lib": [
+                      "./src/lib"
+                    ],
+                    "$lib/*": [
+                      "./src/lib/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "exec",
+              "cli": "shadcn-svelte",
+              "args": [
+                "init",
+                "--preset",
+                "bIkeymG",
+                "--css",
+                "src/tailwind.css",
+                "--base-color",
+                "neutral",
+                "--components-alias",
+                "$lib/components",
+                "--ui-alias",
+                "$lib/components/ui",
+                "--hooks-alias",
+                "$lib/hooks",
+                "--lib-alias",
+                "$lib",
+                "--utils-alias",
+                "$lib/utils",
+                "--reinstall"
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web"
+            ],
+            "framework": [
+              "svelte"
+            ],
+            "language": [
+              "js"
+            ]
+          },
+          "steps": [
+            {
+              "op": "mergeJson",
+              "path": "jsconfig.json",
+              "create": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "$lib": [
+                      "./src/lib"
+                    ],
+                    "$lib/*": [
+                      "./src/lib/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "prepend",
+              "path": "vite.config.js",
+              "text": "import path from \"node:path\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "vite.config.js",
+              "find": [
+                "plugins: [svelte()],"
+              ],
+              "with": "plugins: [svelte()],\n  resolve: { alias: { \"$lib\": path.resolve(__dirname, \"./src/lib\") } },"
+            },
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.json",
+              "optional": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "$lib": [
+                      "./src/lib"
+                    ],
+                    "$lib/*": [
+                      "./src/lib/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "exec",
+              "cli": "shadcn-svelte",
+              "args": [
+                "init",
+                "--preset",
+                "bIkeymG",
+                "--css",
+                "src/tailwind.css",
+                "--base-color",
+                "neutral",
+                "--components-alias",
+                "$lib/components",
+                "--ui-alias",
+                "$lib/components/ui",
+                "--hooks-alias",
+                "$lib/hooks",
+                "--lib-alias",
+                "$lib",
+                "--utils-alias",
+                "$lib/utils",
+                "--reinstall"
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "tauri"
+            ],
+            "framework": [
+              "svelte"
+            ]
+          },
+          "steps": [
+            {
+              "op": "mergeJson",
+              "path": "jsconfig.json",
+              "optional": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "$lib": [
+                      "./src/lib"
+                    ],
+                    "$lib/*": [
+                      "./src/lib/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "mergeJson",
+              "path": "tsconfig.json",
+              "optional": true,
+              "value": {
+                "compilerOptions": {
+                  "paths": {
+                    "$lib": [
+                      "./src/lib"
+                    ],
+                    "$lib/*": [
+                      "./src/lib/*"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "exec",
+              "cli": "shadcn-svelte",
+              "args": [
+                "init",
+                "--preset",
+                "bIkeymG",
+                "--css",
+                "src/app.css",
+                "--base-color",
+                "neutral",
+                "--components-alias",
+                "$lib/components",
+                "--ui-alias",
+                "$lib/components/ui",
+                "--hooks-alias",
+                "$lib/hooks",
+                "--lib-alias",
+                "$lib",
+                "--utils-alias",
+                "$lib/utils",
+                "--reinstall"
+              ]
+            }
+          ]
+        }
+      ],
+      "$comment": "shadcn-svelte's --preset takes a base62 preset CODE, not a style name: `bIkeymG` is the Vega preset (style vega, base colour neutral, Lucide, Inter, default radius/menu) produced by the package's own encodePreset() and round-tripped with decodePreset() on 2026-09-16 (shadcn-svelte@1.4.1). Re-encode if the pin changes."
     },
     "router": {
-      "requires": []
+      "requires": [],
+      "label": "Router installed and registered on the app root; routes are yours to add",
+      "recipes": [
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "tauri"
+            ],
+            "framework": [
+              "react"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "react-router-dom@7.18.4"
+              ]
+            },
+            {
+              "op": "prepend",
+              "path": "{entry}",
+              "text": "import { BrowserRouter } from \"react-router-dom\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "{entry}",
+              "find": [
+                "<App />"
+              ],
+              "with": "<BrowserRouter><App /></BrowserRouter>"
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "electron"
+            ],
+            "framework": [
+              "react"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "react-router-dom@7.18.4"
+              ]
+            },
+            {
+              "op": "prepend",
+              "path": "src/renderer.{jsx}",
+              "text": "import { HashRouter } from \"react-router-dom\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "src/renderer.{jsx}",
+              "find": [
+                "<App />"
+              ],
+              "with": "<HashRouter><App /></HashRouter>"
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "web",
+              "tauri"
+            ],
+            "framework": [
+              "vue"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "vue-router@4.6.4"
+              ]
+            },
+            {
+              "op": "write",
+              "path": "src/router.{ext}",
+              "mode": "create",
+              "content": "import { createRouter, createWebHistory } from \"vue-router\";\n\n// Add your routes here; the router is registered on the app in the entry file.\nexport const router = createRouter({\n  history: createWebHistory(),\n  routes: [],\n});\n"
+            },
+            {
+              "op": "prepend",
+              "path": "{entry}",
+              "text": "import { router } from \"./router\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "{entry}",
+              "find": [
+                "createApp(App).mount(",
+                "createApp(App)\n  .mount("
+              ],
+              "with": "createApp(App).use(router).mount("
+            }
+          ]
+        },
+        {
+          "when": {
+            "wrapper": [
+              "electron"
+            ],
+            "framework": [
+              "vue"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "vue-router@4.6.4"
+              ]
+            },
+            {
+              "op": "write",
+              "path": "src/router.{ext}",
+              "mode": "create",
+              "content": "import { createRouter, createWebHashHistory } from \"vue-router\";\n\n// Add your routes here; the router is registered on the app in the entry file.\nexport const router = createRouter({\n  history: createWebHashHistory(),\n  routes: [],\n});\n"
+            },
+            {
+              "op": "prepend",
+              "path": "{entry}",
+              "text": "import { router } from \"./router\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "{entry}",
+              "find": [
+                "createApp(App).mount("
+              ],
+              "with": "createApp(App).use(router).mount("
+            }
+          ]
+        },
+        {
+          "when": {
+            "framework": [
+              "solid"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "@solidjs/router@1.0.0"
+              ]
+            },
+            {
+              "op": "prepend",
+              "path": "{entry}",
+              "text": "import { Router } from \"@solidjs/router\";\n"
+            },
+            {
+              "op": "replace",
+              "path": "{entry}",
+              "find": [
+                "render(() => <App />"
+              ],
+              "with": "render(() => <Router root={App} />"
+            }
+          ]
+        }
+      ]
     },
     "pytest": {
-      "requires": []
+      "requires": [],
+      "label": "Smoke test file + pytest declared as a dev dependency (declared, not installed)",
+      "recipes": []
     },
     "ruff": {
-      "requires": []
+      "requires": [],
+      "label": "Ruff lint/format config in pyproject",
+      "recipes": []
     }
   },
+  "addonOrder": [
+    "tailwind",
+    "shadcn",
+    "router",
+    "pytest",
+    "ruff"
+  ],
   "backends": {
     "wrappers": [
       "web"
@@ -358,7 +1735,145 @@
       "none",
       "express",
       "fastify"
-    ]
+    ],
+    "$comment": "R2 (owner): backends write server/index.<ext> with one route and a dev:server script (Node 24 strips TypeScript types natively, so the .ts server runs with plain `node`). Packages are pinned in `packages`.",
+    "recipes": {
+      "express": [
+        {
+          "when": {
+            "language": [
+              "ts"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "express@5.2.1"
+              ]
+            },
+            {
+              "op": "install",
+              "dev": true,
+              "packages": [
+                "@types/express@5.0.6"
+              ]
+            },
+            {
+              "op": "write",
+              "path": "server/index.ts",
+              "mode": "create",
+              "content": "import express from \"express\";\n\nconst app = express();\nconst port = Number(process.env.PORT ?? 3000);\n\napp.get(\"/api/hello\", (_req, res) => {\n  res.json({ message: \"Hello from Express\" });\n});\n\napp.listen(port, () => {\n  console.log(`API listening on http://localhost:${port}`);\n});\n"
+            },
+            {
+              "op": "mergeJson",
+              "path": "package.json",
+              "value": {
+                "scripts": {
+                  "dev:server": "node server/index.ts"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "when": {
+            "language": [
+              "js"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "express@5.2.1"
+              ]
+            },
+            {
+              "op": "write",
+              "path": "server/index.js",
+              "mode": "create",
+              "content": "import express from \"express\";\n\nconst app = express();\nconst port = Number(process.env.PORT ?? 3000);\n\napp.get(\"/api/hello\", (_req, res) => {\n  res.json({ message: \"Hello from Express\" });\n});\n\napp.listen(port, () => {\n  console.log(`API listening on http://localhost:${port}`);\n});\n"
+            },
+            {
+              "op": "mergeJson",
+              "path": "package.json",
+              "value": {
+                "scripts": {
+                  "dev:server": "node server/index.js"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "fastify": [
+        {
+          "when": {
+            "language": [
+              "ts"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "fastify@5.12.4"
+              ]
+            },
+            {
+              "op": "write",
+              "path": "server/index.ts",
+              "mode": "create",
+              "content": "import Fastify from \"fastify\";\n\nconst app = Fastify({ logger: true });\nconst port = Number(process.env.PORT ?? 3000);\n\napp.get(\"/api/hello\", async () => ({ message: \"Hello from Fastify\" }));\n\napp.listen({ port }).catch((err) => {\n  app.log.error(err);\n  process.exit(1);\n});\n"
+            },
+            {
+              "op": "mergeJson",
+              "path": "package.json",
+              "value": {
+                "scripts": {
+                  "dev:server": "node server/index.ts"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "when": {
+            "language": [
+              "js"
+            ]
+          },
+          "steps": [
+            {
+              "op": "install",
+              "dev": false,
+              "packages": [
+                "fastify@5.12.4"
+              ]
+            },
+            {
+              "op": "write",
+              "path": "server/index.js",
+              "mode": "create",
+              "content": "import Fastify from \"fastify\";\n\nconst app = Fastify({ logger: true });\nconst port = Number(process.env.PORT ?? 3000);\n\napp.get(\"/api/hello\", async () => ({ message: \"Hello from Fastify\" }));\n\napp.listen({ port }).catch((err) => {\n  app.log.error(err);\n  process.exit(1);\n});\n"
+            },
+            {
+              "op": "mergeJson",
+              "path": "package.json",
+              "value": {
+                "scripts": {
+                  "dev:server": "node server/index.js"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
   },
   "templateManifests": {
     "$comment": "Template identifiers each pinned initializer actually ships, taken from the published package (tarball `template-*` directories for create-vite; the pinned README for create-tauri-app; the @electron-forge/template-* packages for Forge). test/domains/scaffoldRecipes.test.mjs refuses any route whose template is not listed here — the check that would have caught web + angular (F1).",
@@ -1984,6 +3499,1289 @@
               "vue-tsc": "^3.3.5"
             }
           },
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      }
+    ]
+  },
+  "packages": {
+    "$comment": "Exact pins for every package an add-on, backend or Electron framework recipe installs (F2, F5). Recorded 2026-09-16 with publish dates from `npm view <pkg> time`; each is ≥24h old (ADR-021 §2 discipline applied to generated-project deps). Peer ranges verified: @vitejs/plugin-react 4.7.0 (vite ^4.2||^5||^6||^7), @sveltejs/vite-plugin-svelte 3.1.2 (vite ^5, svelte ^4||^5.0.0-next), @vitejs/plugin-vue 5.2.4 (vite ^5||^6), vite-plugin-solid 2.11.14 (vite ^3..^9) — all inside Forge 7.11.2's `vite ^5.0.12` template.",
+    "tailwindcss": {
+      "version": "4.3.3",
+      "publishedAt": "2026-09-08"
+    },
+    "@tailwindcss/postcss": {
+      "version": "4.3.3",
+      "publishedAt": "2026-09-08"
+    },
+    "postcss": {
+      "version": "8.5.28",
+      "publishedAt": "2026-09-03"
+    },
+    "react-router-dom": {
+      "version": "7.18.4",
+      "publishedAt": "2026-09-15"
+    },
+    "vue-router": {
+      "version": "4.6.4",
+      "publishedAt": "2025-12-11",
+      "$comment": "Vue Router 4.x (peers only on vue ^3.5) is the line every template accepts: 5.x peers on vite ^7.3||^8 and fails the create-tauri-app (vite ^6) and Forge (vite ^5) templates with ERESOLVE (observed 2026-09-16)."
+    },
+    "@solidjs/router": {
+      "version": "1.0.0",
+      "publishedAt": "2026-07-28"
+    },
+    "express": {
+      "version": "5.2.1",
+      "publishedAt": "2026-09-14"
+    },
+    "@types/express": {
+      "version": "5.0.6",
+      "publishedAt": "2025-12-01"
+    },
+    "fastify": {
+      "version": "5.12.4",
+      "publishedAt": "2026-09-11"
+    },
+    "react": {
+      "version": "19.2.8",
+      "publishedAt": "2026-07-21"
+    },
+    "react-dom": {
+      "version": "19.2.8",
+      "publishedAt": "2026-07-21"
+    },
+    "@types/react": {
+      "version": "19.3.0",
+      "publishedAt": "2026-09-09"
+    },
+    "@types/react-dom": {
+      "version": "19.3.0",
+      "publishedAt": "2026-09-09"
+    },
+    "@vitejs/plugin-react": {
+      "version": "4.7.0",
+      "publishedAt": "2025-07-07"
+    },
+    "svelte": {
+      "version": "5.57.0",
+      "publishedAt": "2026-08-28"
+    },
+    "@sveltejs/vite-plugin-svelte": {
+      "version": "3.1.2",
+      "publishedAt": "2024-09-24"
+    },
+    "vue": {
+      "version": "3.5.42",
+      "publishedAt": "2026-09-11"
+    },
+    "@vitejs/plugin-vue": {
+      "version": "5.2.4",
+      "publishedAt": "2025-04-27"
+    },
+    "solid-js": {
+      "version": "1.9.15",
+      "publishedAt": "2026-09-11"
+    },
+    "vite-plugin-solid": {
+      "version": "2.11.14",
+      "publishedAt": "2026-08-12"
+    }
+  },
+  "addonCoverage": {
+    "$comment": "ADR-028 §10 for add-ons, backends and Electron framework wiring: one entry per exercised (wrapper, framework, language, manager, platform, addons[], backend). An add-on or backend is offered for a primary combination only when a verified entry for that combination lists it (the run exercised its recipe steps end to end: install → write/patch → build). Produced by scripts/scaffold-recipe-evidence.mjs --addons/--backend and applied by scaffold-recipe-evidence-apply.mjs.",
+    "entries": [
+      {
+        "wrapper": "electron",
+        "framework": "react",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:react: npm install react@19.2.8 react-dom@19.2.8",
+            "framework:react: npm install -D @vitejs/plugin-react@4.7.0",
+            "framework:react: write vite.renderer.config.mjs (replace)",
+            "framework:react: write src/App.jsx",
+            "framework:react: remove src/renderer.js",
+            "framework:react: write src/renderer.jsx",
+            "framework:react: patch index.html",
+            "framework:react: patch index.html",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.jsx",
+            "addon:router: npm install react-router-dom@7.18.4",
+            "addon:router: prepend to src/renderer.jsx",
+            "addon:router: patch src/renderer.jsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:react: npm install react@19.2.8 react-dom@19.2.8",
+            "framework:react: npm install -D @vitejs/plugin-react@4.7.0 @types/react@19.3.0 @types/react-dom@19.3.0",
+            "framework:react: write vite.renderer.config.ts (replace)",
+            "framework:react: write src/App.tsx",
+            "framework:react: remove src/renderer.ts",
+            "framework:react: write src/renderer.tsx",
+            "framework:react: patch index.html",
+            "framework:react: patch index.html",
+            "framework:react: merge into tsconfig.json",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.tsx",
+            "addon:router: npm install react-router-dom@7.18.4",
+            "addon:router: prepend to src/renderer.tsx",
+            "addon:router: patch src/renderer.tsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "solid",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:solid: npm install solid-js@1.9.15",
+            "framework:solid: npm install -D vite-plugin-solid@2.11.14",
+            "framework:solid: write vite.renderer.config.mjs (replace)",
+            "framework:solid: write src/App.jsx",
+            "framework:solid: remove src/renderer.js",
+            "framework:solid: write src/renderer.jsx",
+            "framework:solid: patch index.html",
+            "framework:solid: patch index.html",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.jsx",
+            "addon:router: npm install @solidjs/router@1.0.0",
+            "addon:router: prepend to src/renderer.jsx",
+            "addon:router: patch src/renderer.jsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "solid",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:solid: npm install solid-js@1.9.15",
+            "framework:solid: npm install -D vite-plugin-solid@2.11.14",
+            "framework:solid: write vite.renderer.config.ts (replace)",
+            "framework:solid: write src/App.tsx",
+            "framework:solid: remove src/renderer.ts",
+            "framework:solid: write src/renderer.tsx",
+            "framework:solid: patch index.html",
+            "framework:solid: patch index.html",
+            "framework:solid: merge into tsconfig.json",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.tsx",
+            "addon:router: npm install @solidjs/router@1.0.0",
+            "addon:router: prepend to src/renderer.tsx",
+            "addon:router: patch src/renderer.tsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "svelte",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:svelte: npm install svelte@5.57.0",
+            "framework:svelte: npm install -D @sveltejs/vite-plugin-svelte@3.1.2",
+            "framework:svelte: write vite.renderer.config.mjs (replace)",
+            "framework:svelte: write src/App.svelte",
+            "framework:svelte: write src/renderer.js (replace)",
+            "framework:svelte: patch index.html",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.js"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:svelte: npm install svelte@5.57.0",
+            "framework:svelte: npm install -D @sveltejs/vite-plugin-svelte@3.1.2",
+            "framework:svelte: remove vite.renderer.config.ts",
+            "framework:svelte: write vite.renderer.config.mts",
+            "framework:svelte: patch forge.config.ts",
+            "framework:svelte: write svelte.config.mjs",
+            "framework:svelte: write src/App.svelte",
+            "framework:svelte: write src/renderer.ts (replace)",
+            "framework:svelte: patch index.html",
+            "framework:svelte: write src/svelte-shim.d.ts",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.ts"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "vue",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:vue: npm install vue@3.5.42",
+            "framework:vue: npm install -D @vitejs/plugin-vue@5.2.4",
+            "framework:vue: write vite.renderer.config.mjs (replace)",
+            "framework:vue: write src/App.vue",
+            "framework:vue: write src/renderer.js (replace)",
+            "framework:vue: patch index.html",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.js",
+            "addon:router: npm install vue-router@4.6.4",
+            "addon:router: write src/router.js",
+            "addon:router: prepend to src/renderer.js",
+            "addon:router: patch src/renderer.js"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "electron",
+        "framework": "vue",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "framework:vue: npm install vue@3.5.42",
+            "framework:vue: npm install -D @vitejs/plugin-vue@5.2.4",
+            "framework:vue: write vite.renderer.config.ts (replace)",
+            "framework:vue: write src/App.vue",
+            "framework:vue: write src/renderer.ts (replace)",
+            "framework:vue: patch index.html",
+            "framework:vue: write src/vue-shim.d.ts",
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/renderer.ts",
+            "addon:router: npm install vue-router@4.6.4",
+            "addon:router: write src/router.ts",
+            "addon:router: prepend to src/renderer.ts",
+            "addon:router: patch src/renderer.ts"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "renderer build (vite)"
+          ],
+          "notExercised": [
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: append to src/styles.css"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "react",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.jsx",
+            "addon:shadcn: write jsconfig.json",
+            "addon:shadcn: prepend to vite.config.js",
+            "addon:shadcn: patch vite.config.js",
+            "addon:shadcn: npm exec --yes -- shadcn@4.13.0 init -y -d",
+            "addon:router: npm install react-router-dom@7.18.4",
+            "addon:router: prepend to src/main.jsx",
+            "addon:router: patch src/main.jsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.tsx",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: merge into tsconfig.app.json",
+            "addon:shadcn: prepend to vite.config.ts",
+            "addon:shadcn: patch vite.config.ts",
+            "addon:shadcn: npm exec --yes -- shadcn@4.13.0 init -y -d",
+            "addon:router: npm install react-router-dom@7.18.4",
+            "addon:router: prepend to src/main.tsx",
+            "addon:router: patch src/main.tsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "solid",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/index.jsx",
+            "addon:router: npm install @solidjs/router@1.0.0",
+            "addon:router: prepend to src/index.jsx",
+            "addon:router: patch src/index.jsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "solid",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/index.tsx",
+            "addon:router: npm install @solidjs/router@1.0.0",
+            "addon:router: prepend to src/index.tsx",
+            "addon:router: patch src/index.tsx"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "svelte",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/app.css",
+            "addon:tailwind: write src/routes/+layout.svelte",
+            "addon:shadcn: merge into jsconfig.json",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.4.1 init --preset bIkeymG --css src/app.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/app.css",
+            "addon:tailwind: write src/routes/+layout.svelte",
+            "addon:shadcn: merge into jsconfig.json",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.4.1 init --preset bIkeymG --css src/app.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "vue",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.js",
+            "addon:shadcn: merge into jsconfig.json",
+            "addon:shadcn: prepend to vite.config.js",
+            "addon:shadcn: patch vite.config.js",
+            "addon:shadcn: npm exec --yes -- shadcn-vue@2.7.4 init -y -f --base reka --style vega --icon-library lucide --font inter --base-color neutral --css-variables",
+            "addon:router: npm install vue-router@4.6.4",
+            "addon:router: write src/router.js",
+            "addon:router: prepend to src/main.js",
+            "addon:router: patch src/main.js"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "tauri",
+        "framework": "vue",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": null,
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.ts",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: merge into tsconfig.app.json",
+            "addon:shadcn: prepend to vite.config.ts",
+            "addon:shadcn: patch vite.config.ts",
+            "addon:shadcn: npm exec --yes -- shadcn-vue@2.7.4 init -y -f --base reka --style vega --icon-library lucide --font inter --base-color neutral --css-variables",
+            "addon:router: npm install vue-router@4.6.4",
+            "addon:router: write src/router.ts",
+            "addon:router: prepend to src/main.ts",
+            "addon:router: patch src/main.ts"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: append to src/styles.css",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: npm install -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.jsx",
+            "addon:shadcn: write jsconfig.json",
+            "addon:shadcn: prepend to vite.config.js",
+            "addon:shadcn: patch vite.config.js",
+            "addon:shadcn: npm exec --yes -- shadcn@4.13.0 init -y -d",
+            "addon:router: npm install react-router-dom@7.18.4",
+            "addon:router: prepend to src/main.jsx",
+            "addon:router: patch src/main.jsx",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: write server/index.js",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "react",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.tsx",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: merge into tsconfig.app.json",
+            "addon:shadcn: prepend to vite.config.ts",
+            "addon:shadcn: patch vite.config.ts",
+            "addon:shadcn: npm exec --yes -- shadcn@4.13.0 init -y -d",
+            "addon:router: npm install react-router-dom@7.18.4",
+            "addon:router: prepend to src/main.tsx",
+            "addon:router: patch src/main.tsx",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: npm install -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "solid",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "router"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/index.jsx",
+            "addon:router: npm install @solidjs/router@1.0.0",
+            "addon:router: prepend to src/index.jsx",
+            "addon:router: patch src/index.jsx",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: write server/index.js",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "solid",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "router"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/index.tsx",
+            "addon:router: npm install @solidjs/router@1.0.0",
+            "addon:router: prepend to src/index.tsx",
+            "addon:router: patch src/index.tsx",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: npm install -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "svelte",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.js",
+            "addon:shadcn: merge into jsconfig.json",
+            "addon:shadcn: prepend to vite.config.js",
+            "addon:shadcn: patch vite.config.js",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.4.1 init --preset bIkeymG --css src/tailwind.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: write server/index.js",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "svelte",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.ts",
+            "addon:shadcn: merge into tsconfig.app.json",
+            "addon:shadcn: prepend to vite.config.ts",
+            "addon:shadcn: patch vite.config.ts",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.4.1 init --preset bIkeymG --css src/tailwind.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: npm install -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [],
+        "backend": "fastify",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: write server/index.js",
+            "backend:fastify: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "js",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.js",
+            "addon:shadcn: write jsconfig.json",
+            "addon:shadcn: prepend to vite.config.js",
+            "addon:shadcn: patch vite.config.js",
+            "addon:shadcn: npm exec --yes -- shadcn-vue@2.7.4 init -y -f --base reka --style vega --icon-library lucide --font inter --base-color neutral --css-variables",
+            "addon:router: npm install vue-router@5.3.1",
+            "addon:router: write src/router.js",
+            "addon:router: prepend to src/main.js",
+            "addon:router: patch src/main.js",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: write server/index.js",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [],
+        "backend": "fastify",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: write server/index.ts",
+            "backend:fastify: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
+          "source": "scripts/scaffold-recipe-evidence.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
+        "framework": "vue",
+        "language": "ts",
+        "manager": "npm",
+        "platform": "windows",
+        "addons": [
+          "tailwind",
+          "shadcn",
+          "router"
+        ],
+        "backend": "express",
+        "status": "verified",
+        "evidence": {
+          "date": "2026-09-17",
+          "steps": [
+            "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
+            "addon:tailwind: write .postcssrc.json",
+            "addon:tailwind: write src/tailwind.css",
+            "addon:tailwind: prepend to src/main.ts",
+            "addon:shadcn: merge into tsconfig.json",
+            "addon:shadcn: merge into tsconfig.app.json",
+            "addon:shadcn: prepend to vite.config.ts",
+            "addon:shadcn: patch vite.config.ts",
+            "addon:shadcn: npm exec --yes -- shadcn-vue@2.7.4 init -y -f --base reka --style vega --icon-library lucide --font inter --base-color neutral --css-variables",
+            "addon:router: npm install vue-router@4.6.4",
+            "addon:router: write src/router.ts",
+            "addon:router: prepend to src/main.ts",
+            "addon:router: patch src/main.ts",
+            "backend:express: npm install express@5.2.1",
+            "backend:express: npm install -D @types/express@5.0.6",
+            "backend:express: write server/index.ts",
+            "backend:express: merge into package.json"
+          ],
+          "versions": {
+            "node": "v24.14.0",
+            "npm": "11.9.0"
+          },
+          "checks": [
+            "create",
+            "files",
+            "install (scripts off)",
+            "steps",
+            "build",
+            "server syntax (node --check)"
+          ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
       }

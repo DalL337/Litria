@@ -64,7 +64,7 @@ test('npm plan: preview tokens are exactly the argv the payload carries (F14)', 
   assert.equal(plan.payload.plan.package, 'create-vite');
   assert.equal(plan.payload.plan.template, 'react-ts');
   assert.equal(plan.payload.plan.platform, 'windows');
-  assert.ok(plan.preview.some((p) => p.type === 'comment' && p.text.includes('+tailwind')));
+  assert.ok(plan.preview.some((p) => p.type === 'comment' && p.text.includes('addon:tailwind')), 'the preview lists the tailwind steps');
   // No --manager for the web wrapper: the runner never sends one.
   assert.ok(!plan.argv.includes('--manager'));
 });

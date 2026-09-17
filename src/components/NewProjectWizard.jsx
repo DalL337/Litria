@@ -29,6 +29,8 @@ import {
   wrapperKind,
   availability,
   selectableLanguages,
+  addonAvailability,
+  backendAvailability,
   listManagers,
 } from '../scaffold/recipeRegistry';
 import { SCAFFOLD_POSTURE_NOTE } from '../scaffold/create-cli-versions';
@@ -104,14 +106,15 @@ const LANGUAGES = [
 // how to draw one (F13: the id list used to live here as well).
 const BACKEND_CARDS = {
   none: { id: 'none', name: 'None', icon: 'ban', ink: 'rgba(255,255,255,0.6)', bg: 'rgba(255,255,255,0.04)', desc: 'Frontend only', badge: 'DEFAULT', badgeClass: 'npw-badge-default', isDefault: true },
-  express: { id: 'express', name: 'Express', icon: 'server', ink: '#cfd8dc', bg: 'rgba(255,255,255,0.06)', desc: 'Minimal Node.js server', badge: 'NODE', badgeClass: 'npw-badge-web' },
-  fastify: { id: 'fastify', name: 'Fastify', icon: 'zap', ink: '#ffc832', bg: 'rgba(255,200,50,0.08)', desc: 'Fast, low overhead Node', badge: 'NODE', badgeClass: 'npw-badge-web' },
+  express: { id: 'express', name: 'Express', icon: 'server', ink: '#cfd8dc', bg: 'rgba(255,255,255,0.06)', desc: 'server/index + dev:server script', badge: 'NODE', badgeClass: 'npw-badge-web' },
+  fastify: { id: 'fastify', name: 'Fastify', icon: 'zap', ink: '#ffc832', bg: 'rgba(255,200,50,0.08)', desc: 'server/index + dev:server script', badge: 'NODE', badgeClass: 'npw-badge-web' },
 };
 
 const ADDONS = [
-  { id: 'tailwind', name: 'Tailwind', icon: 'waves', ink: '#38bdf8', bg: 'rgba(56,189,248,0.1)', desc: 'Utility-first CSS' },
-  { id: 'shadcn', name: 'ShadCN', icon: 'component', ink: '#e5e7eb', bg: 'rgba(255,255,255,0.05)', desc: 'Accessible UI components' },
-  { id: 'router', name: 'Router', icon: 'route', ink: '#818cf8', bg: 'rgba(99,102,241,0.1)', desc: 'Client-side navigation' },
+  // Card copy states what the recipe actually wires (ADR-028 §4, F5).
+  { id: 'tailwind', name: 'Tailwind', icon: 'waves', ink: '#38bdf8', bg: 'rgba(56,189,248,0.1)', desc: 'Utility-first CSS, plugin + stylesheet wired' },
+  { id: 'shadcn', name: 'ShadCN', icon: 'component', ink: '#e5e7eb', bg: 'rgba(255,255,255,0.05)', desc: 'Accessible UI components, init run for you' },
+  { id: 'router', name: 'Router', icon: 'route', ink: '#818cf8', bg: 'rgba(99,102,241,0.1)', desc: 'Client-side navigation, registered on the root' },
   // Python add-ons are declaration-only: files + pyproject entries at
   // creation; nothing installs (ADR-020 — deps go via the visible terminal).
   { id: 'pytest', name: 'pytest', icon: 'flask-conical', ink: '#34d399', bg: 'rgba(5,150,105,0.1)', desc: 'Test scaffold + dev dependency (declared)' },
@@ -826,6 +829,15 @@ function NewProjectWizard({
     if (!isNpmWrapper || !state.framework || !state.lang) return { selectable: true, reason: null };
     return availability({ wrapper: state.wrapper, framework: state.framework, language: state.lang, manager: managerId, platform: platformId });
   };
+  // Add-ons and backends need evidence of their own recipe steps for this
+  // combination (ADR-028 §4/§10): a card without it is disabled with the reason.
+  const comboKey = { wrapper: state.wrapper, framework: state.framework, language: state.lang, manager: state.manager, platform: platformId };
+  const addonCardAvailability = (addonId) => (isNpmWrapper && state.framework && state.lang
+    ? addonAvailability({ ...comboKey, addon: addonId })
+    : { selectable: true, reason: null });
+  const backendCardAvailability = (backendId) => (isNpmWrapper && state.framework && state.lang
+    ? backendAvailability({ ...comboKey, backend: backendId })
+    : { selectable: true, reason: null });
 
   return (
     <div className="npw-overlay" role="dialog" aria-modal="true" aria-labelledby="npw-title">
@@ -997,19 +1009,24 @@ function NewProjectWizard({
                     const isSelected = state.addons.includes(a.id);
                     const depParent = state.addons.find((sel) => getAddonDeps(sel).includes(a.id));
                     const isDepLocked = !!depParent;
+                    const avail = addonCardAvailability(a.id);
+                    const isUnverified = !avail.selectable && !isSelected;
                     return (
                       <button
                         type="button"
                         aria-pressed={isSelected}
                         key={a.id}
-                        className={`npw-card${isSelected ? ' selected' : ''}${isDepLocked ? ' dep-locked' : ''}`}
-                        onClick={() => dispatch({ type: 'TOGGLE_ADDON', value: a.id })}
+                        disabled={isUnverified}
+                        title={avail.reason ?? undefined}
+                        className={`npw-card${isSelected ? ' selected' : ''}${isDepLocked || isUnverified ? ' dep-locked' : ''}`}
+                        onClick={() => !isUnverified && dispatch({ type: 'TOGGLE_ADDON', value: a.id })}
                       >
                         <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
                         <span className="npw-card-icon" style={{ background: a.bg, color: a.ink }}><WizardIcon name={a.icon} /></span>
                         <span className="npw-card-name">{a.name}</span>
                         <span className="npw-card-desc">{a.desc}</span>
                         {isDepLocked && <span className="npw-dep-hint">required by {ADDONS.find((x) => x.id === depParent)?.name}</span>}
+                        {isUnverified && <span className="npw-dep-hint">{avail.reason}</span>}
                       </button>
                     );
                   })}
@@ -1145,22 +1162,28 @@ function NewProjectWizard({
                       <div className="npw-fold-section">
                         <div className="npw-section-label">Backend</div>
                         <div className="npw-card-row" role="radiogroup" aria-label="Backend">
-                          {backendOptions.map((id) => BACKEND_CARDS[id]).filter(Boolean).map((b) => (
+                          {backendOptions.map((id) => BACKEND_CARDS[id]).filter(Boolean).map((b) => {
+                            const avail = backendCardAvailability(b.id);
+                            return (
                             <button
                               type="button"
                               role="radio"
                               aria-checked={state.backend === b.id}
                               key={b.id}
-                              className={`npw-card${state.backend === b.id ? ' selected' : ''}`}
-                              onClick={() => dispatch({ type: 'SET_BACKEND', value: b.id })}
+                              disabled={!avail.selectable}
+                              title={avail.reason ?? undefined}
+                              className={`npw-card${state.backend === b.id ? ' selected' : ''}${avail.selectable ? '' : ' dep-locked'}`}
+                              onClick={() => avail.selectable && dispatch({ type: 'SET_BACKEND', value: b.id })}
                             >
                               <span className="npw-card-check"><Check size={13} strokeWidth={2.5} aria-hidden="true" /></span>
                               <span className="npw-card-icon" style={{ background: b.bg, color: b.ink }}><WizardIcon name={b.icon} /></span>
                               <span className="npw-card-name">{b.name}</span>
                               <span className="npw-card-desc">{b.desc}</span>
                               {b.badge && <span className={`npw-badge ${b.badgeClass}`}>{b.badge}</span>}
+                              {!avail.selectable && <span className="npw-dep-hint">{avail.reason}</span>}
                             </button>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}

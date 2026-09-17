@@ -1,22 +1,24 @@
 //! Scaffold recipe registry (ADR-028 §1) — the Rust read side of
 //! `src/scaffold/recipes.json`, compiled in with `include_str!` so the runner
-//! and the wizard can never disagree about a pin, a template, a manager verb
-//! or a support claim: both derive from the same bytes.
+//! and the wizard can never disagree about a pin, a template, a manager verb,
+//! an add-on step or a support claim: both derive from the same bytes.
 //!
-//! ADR-028 §2: the wizard sends the plan it previewed; `derive_primary` here
-//! rebuilds the primary argv from the registry and the runner refuses a
-//! payload that differs (`scaffold.plan_mismatch`). The frontend therefore
-//! cannot choose which version executes (F34) or show a command that will
-//! not run (F14).
+//! ADR-028 §2: the wizard sends the plan it previewed; `derive_primary` and
+//! `derive_steps` here rebuild the primary argv and every post-scaffold step
+//! from the registry and the runner refuses a payload that differs
+//! (`scaffold.plan_mismatch`). The frontend therefore cannot choose which
+//! version executes (F34), show a command that will not run (F14), or run an
+//! add-on step it did not preview.
 //!
-//! ADR-028 §10: `coverage_status` answers whether a combination has the
-//! execution evidence that makes it selectable on this platform with this
-//! manager; the runner refuses the rest (`scaffold.recipe_unverified`).
+//! ADR-028 §10: `coverage_status` / `addon_coverage_ok` answer whether a
+//! combination has the execution evidence that makes it selectable on this
+//! platform with this manager; the runner refuses the rest.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
+use serde_json::{json, Map, Value};
 
 const REGISTRY_JSON: &str = include_str!("../../src/scaffold/recipes.json");
 
@@ -28,12 +30,14 @@ pub(crate) struct Registry {
     pub managers: HashMap<String, Manager>,
     pub wrappers: HashMap<String, Wrapper>,
     pub addons: HashMap<String, Addon>,
+    /// Explicit add-on order shared with the JS side (no ordered map here).
+    pub addon_order: Vec<String>,
+    pub backends: Backends,
     pub coverage: Coverage,
+    pub addon_coverage: AddonCoverage,
 }
-// Registry fields the runner does not read yet (`recordedAt`, `frameworks`,
-// `backends`, `templateManifests`, per-manager install verbs) are simply not
-// declared here: serde ignores them, and each arrives with its consumer
-// (S3 add-on ordering, S4 manager recipes) instead of as dead code.
+// Registry fields the runner does not read (`recordedAt`, `frameworks`,
+// `packages`, `templateManifests`) are not declared: serde ignores them.
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +57,8 @@ pub(crate) struct Manager {
     #[serde(default)]
     pub forward_separator: Option<String>,
     pub exec: Vec<String>,
+    pub install: Vec<String>,
+    pub dev_flag: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +75,12 @@ pub(crate) struct Wrapper {
     pub templates: HashMap<String, HashMap<String, String>>,
     #[serde(default)]
     pub unsupported: HashMap<String, String>,
+    /// App entry file per framework/language — what add-ons patch.
+    #[serde(default)]
+    pub entries: HashMap<String, HashMap<String, String>>,
+    /// Electron: framework wiring into the bundler-only Forge template.
+    #[serde(default)]
+    pub framework_recipes: HashMap<String, Vec<Recipe>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,7 +99,30 @@ pub(crate) struct Route {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Addon {
     #[serde(default)]
-    pub cli: HashMap<String, String>,
+    pub requires: Vec<String>,
+    // `cli` (shadcn variant per framework) is consumed on the JS side when
+    // recipes are authored; the runner only sees the resolved exec steps.
+    #[serde(default)]
+    pub recipes: Vec<Recipe>,
+}
+
+/// One recipe entry: applies when every selector in `when` matches, in
+/// registry order. Steps stay raw JSON and are materialized per selection.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Recipe {
+    #[serde(default)]
+    pub when: HashMap<String, Vec<String>>,
+    pub steps: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Backends {
+    pub wrappers: Vec<String>,
+    // `options` (the card list) is a wizard concern; the runner keys on `recipes`.
+    #[serde(default)]
+    pub recipes: HashMap<String, Vec<Recipe>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,6 +144,27 @@ pub(crate) struct CoverageEntry {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AddonCoverage {
+    pub entries: Vec<AddonCoverageEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AddonCoverageEntry {
+    pub wrapper: String,
+    pub framework: String,
+    pub language: String,
+    pub manager: String,
+    pub platform: String,
+    pub status: String,
+    #[serde(default)]
+    pub addons: Vec<String>,
+    #[serde(default)]
+    pub backend: Option<String>,
+}
+
 /// The registry, parsed once. A malformed file is a build defect caught by
 /// `registry_parses` below and by the JS suite, never a runtime state.
 pub(crate) fn registry() -> &'static Registry {
@@ -117,6 +173,10 @@ pub(crate) fn registry() -> &'static Registry {
         serde_json::from_str(REGISTRY_JSON).expect("src/scaffold/recipes.json must parse (guarded by tests)")
     })
 }
+
+// ---------------------------------------------------------------------------
+// Primary route
+// ---------------------------------------------------------------------------
 
 /// The primary route derived for one selection — what the runner executes
 /// after the manager executable (and its bundled-npm prefix args).
@@ -232,14 +292,219 @@ pub(crate) fn addon_cli_spec(cli: &str) -> Option<String> {
         .map(|t| format!("{cli}@{}", t.version))
 }
 
-/// The shadcn variant CLI for a framework, from the registry's addon table.
-pub(crate) fn shadcn_cli_for(framework: &str) -> Option<String> {
-    registry()
-        .addons
-        .get("shadcn")
-        .and_then(|a| a.cli.get(framework))
-        .cloned()
+// ---------------------------------------------------------------------------
+// Post-scaffold steps (ADR-028 §4) — mirror of deriveScaffoldSteps in JS
+// ---------------------------------------------------------------------------
+
+struct StepContext<'a> {
+    wrapper: &'a str,
+    framework: &'a str,
+    language: &'a str,
+    manager: &'a str,
+    entry: Option<String>,
+    ext: &'a str,
+    jsx: &'a str,
+    name: &'a str,
 }
+
+impl StepContext<'_> {
+    fn fill(&self, s: &str) -> String {
+        s.replace("{entry}", self.entry.as_deref().unwrap_or("{entry}"))
+            .replace("{ext}", self.ext)
+            .replace("{jsx}", self.jsx)
+            .replace("{name}", self.name)
+    }
+
+    fn fill_value(&self, v: &Value) -> Value {
+        match v {
+            Value::String(s) => Value::String(self.fill(s)),
+            Value::Array(items) => Value::Array(items.iter().map(|i| self.fill_value(i)).collect()),
+            other => other.clone(),
+        }
+    }
+
+    fn matches(&self, when: &HashMap<String, Vec<String>>) -> bool {
+        when.iter().all(|(key, allowed)| {
+            let value = match key.as_str() {
+                "wrapper" => self.wrapper,
+                "framework" => self.framework,
+                "language" => self.language,
+                "manager" => self.manager,
+                _ => return false,
+            };
+            allowed.iter().any(|a| a == value)
+        })
+    }
+}
+
+/// Selected add-ons in execution order: every prerequisite before its
+/// dependent, prerequisites pulled in even when not selected, sequence by
+/// the registry's explicit `addonOrder` (F6).
+pub(crate) fn order_addons(selected: &[String]) -> Vec<String> {
+    let reg = registry();
+    let mut wanted: Vec<String> = Vec::new();
+    fn visit(id: &str, reg: &Registry, wanted: &mut Vec<String>) {
+        let Some(addon) = reg.addons.get(id) else { return };
+        if wanted.iter().any(|w| w == id) {
+            return;
+        }
+        for dep in &addon.requires {
+            visit(dep, reg, wanted);
+        }
+        wanted.push(id.to_string());
+    }
+    for id in selected {
+        visit(id, reg, &mut wanted);
+    }
+    reg.addon_order
+        .iter()
+        .filter(|id| wanted.iter().any(|w| w == *id))
+        .cloned()
+        .collect()
+}
+
+fn str_field<'a>(step: &'a Map<String, Value>, key: &str) -> Result<&'a str, String> {
+    step.get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("recipes.json: step is missing '{key}'"))
+}
+
+/// One step, materialized with the same keys `materialize` produces in JS.
+fn materialize(step: &Value, ctx: &StepContext, source: &str, manager: &Manager) -> Result<Value, String> {
+    let obj = step
+        .as_object()
+        .ok_or_else(|| "recipes.json: step is not an object".to_string())?;
+    let op = str_field(obj, "op")?;
+    let mut out = Map::new();
+    out.insert("source".into(), json!(source));
+    out.insert("op".into(), json!(op));
+    match op {
+        "install" => {
+            let dev = obj.get("dev").and_then(|v| v.as_bool()).unwrap_or(false);
+            let packages: Vec<String> = obj
+                .get("packages")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|p| p.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let mut argv = manager.install.clone();
+            if dev {
+                argv.push(manager.dev_flag.clone());
+            }
+            argv.extend(packages.iter().cloned());
+            out.insert("dev".into(), json!(dev));
+            out.insert("packages".into(), json!(packages));
+            out.insert("argv".into(), json!(argv));
+        }
+        "exec" => {
+            let cli = str_field(obj, "cli")?;
+            let spec = addon_cli_spec(cli);
+            let args = ctx.fill_value(obj.get("args").unwrap_or(&Value::Array(vec![])));
+            let argv = spec.as_ref().map(|s| {
+                let mut argv = manager.exec.clone();
+                argv.push(s.clone());
+                argv.extend(args.as_array().unwrap().iter().filter_map(|a| a.as_str().map(String::from)));
+                json!(argv)
+            });
+            out.insert("cli".into(), json!(cli));
+            out.insert("spec".into(), spec.map(Value::String).unwrap_or(Value::Null));
+            out.insert("args".into(), args);
+            out.insert("argv".into(), argv.unwrap_or(Value::Null));
+        }
+        "write" => {
+            out.insert("path".into(), json!(ctx.fill(str_field(obj, "path")?)));
+            out.insert("mode".into(), json!(obj.get("mode").and_then(|v| v.as_str()).unwrap_or("create")));
+            out.insert("content".into(), json!(ctx.fill(str_field(obj, "content")?)));
+        }
+        "prepend" | "append" => {
+            out.insert("path".into(), json!(ctx.fill(str_field(obj, "path")?)));
+            out.insert("text".into(), json!(ctx.fill(str_field(obj, "text")?)));
+        }
+        "replace" => {
+            out.insert("path".into(), json!(ctx.fill(str_field(obj, "path")?)));
+            out.insert("find".into(), ctx.fill_value(obj.get("find").ok_or("recipes.json: replace without 'find'")?));
+            out.insert("with".into(), json!(ctx.fill(str_field(obj, "with")?)));
+        }
+        "insertBefore" => {
+            out.insert("path".into(), json!(ctx.fill(str_field(obj, "path")?)));
+            out.insert("marker".into(), json!(ctx.fill(str_field(obj, "marker")?)));
+            out.insert("text".into(), json!(ctx.fill(str_field(obj, "text")?)));
+        }
+        "mergeJson" => {
+            out.insert("path".into(), json!(ctx.fill(str_field(obj, "path")?)));
+            out.insert("value".into(), obj.get("value").cloned().unwrap_or(json!({})));
+            out.insert("optional".into(), json!(obj.get("optional").and_then(|v| v.as_bool()).unwrap_or(false)));
+            out.insert("create".into(), json!(obj.get("create").and_then(|v| v.as_bool()).unwrap_or(false)));
+        }
+        "delete" => {
+            out.insert("path".into(), json!(ctx.fill(str_field(obj, "path")?)));
+        }
+        other => return Err(format!("recipes.json: unknown step op '{other}'")),
+    }
+    Ok(Value::Object(out))
+}
+
+/// Every post-scaffold step for a selection, in execution order: Electron
+/// framework wiring → add-ons (prerequisites first) → backend. Identical to
+/// `deriveScaffoldSteps` in src/scaffold/recipeRegistry.js; the shared
+/// step-cases fixture holds both to it.
+pub(crate) fn derive_steps(
+    wrapper: &str,
+    framework: &str,
+    language: &str,
+    manager: &str,
+    addons: &[String],
+    backend: Option<&str>,
+    project_name: &str,
+) -> Result<Vec<Value>, String> {
+    let reg = registry();
+    let Some(w) = reg.wrappers.get(wrapper) else { return Ok(vec![]) };
+    if w.kind != "npm" {
+        return Ok(vec![]);
+    }
+    let Some(m) = reg.managers.get(manager) else { return Ok(vec![]) };
+    let ctx = StepContext {
+        wrapper,
+        framework,
+        language,
+        manager,
+        entry: w.entries.get(framework).and_then(|by| by.get(language)).cloned(),
+        ext: language,
+        jsx: if language == "ts" { "tsx" } else { "jsx" },
+        name: project_name,
+    };
+    let mut out = Vec::new();
+    let mut apply = |recipes: &[Recipe], source: &str| -> Result<(), String> {
+        for recipe in recipes {
+            if !ctx.matches(&recipe.when) {
+                continue;
+            }
+            for step in &recipe.steps {
+                out.push(materialize(step, &ctx, source, m)?);
+            }
+        }
+        Ok(())
+    };
+    if let Some(fw) = w.framework_recipes.get(framework) {
+        apply(fw, &format!("framework:{framework}"))?;
+    }
+    for addon in order_addons(addons) {
+        if let Some(a) = reg.addons.get(&addon) {
+            apply(&a.recipes, &format!("addon:{addon}"))?;
+        }
+    }
+    if let Some(b) = backend.filter(|b| *b != "none") {
+        if reg.backends.wrappers.iter().any(|w| w == wrapper) {
+            if let Some(r) = reg.backends.recipes.get(b) {
+                apply(r, &format!("backend:{b}"))?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Coverage (ADR-028 §10)
+// ---------------------------------------------------------------------------
 
 /// Coverage status for one full combination on one platform; a missing entry
 /// is `unverified` (brief §6: naming a gap is not permission to offer it).
@@ -269,6 +534,44 @@ pub(crate) fn is_selectable_status(status: &str) -> bool {
     matches!(status, "verified" | "covered-by-equivalence")
 }
 
+/// Add-on / backend evidence: a verified run of the same primary combination
+/// whose recipe steps included the add-on (or backend). Returns the first
+/// add-on or backend without evidence, if any.
+pub(crate) fn unverified_addon(
+    wrapper: &str,
+    framework: &str,
+    language: &str,
+    manager: &str,
+    platform: &str,
+    addons: &[String],
+    backend: Option<&str>,
+) -> Option<String> {
+    let entries: Vec<&AddonCoverageEntry> = registry()
+        .addon_coverage
+        .entries
+        .iter()
+        .filter(|e| {
+            e.wrapper == wrapper
+                && e.framework == framework
+                && e.language == language
+                && e.manager == manager
+                && e.platform == platform
+                && is_selectable_status(&e.status)
+        })
+        .collect();
+    for addon in addons {
+        if !entries.iter().any(|e| e.addons.iter().any(|a| a == addon)) {
+            return Some(addon.clone());
+        }
+    }
+    if let Some(b) = backend.filter(|b| *b != "none") {
+        if !entries.iter().any(|e| e.backend.as_deref() == Some(b)) {
+            return Some(format!("backend {b}"));
+        }
+    }
+    None
+}
+
 /// The platform id the coverage table uses for this build.
 pub(crate) fn current_platform() -> &'static str {
     match std::env::consts::OS {
@@ -284,6 +587,7 @@ mod tests {
     use super::*;
 
     const CASES_JSON: &str = include_str!("../../test/fixtures/scaffold-plans/cases.json");
+    const STEP_CASES_JSON: &str = include_str!("../../test/fixtures/scaffold-plans/step-cases.json");
 
     #[derive(Deserialize)]
     struct CaseFile {
@@ -324,6 +628,32 @@ mod tests {
         argv: Vec<String>,
     }
 
+    #[derive(Deserialize)]
+    struct StepCaseFile {
+        cases: Vec<StepCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct StepCase {
+        name: String,
+        input: StepInput,
+        expect: Vec<Value>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StepInput {
+        wrapper: String,
+        framework: String,
+        language: String,
+        manager: String,
+        #[serde(default)]
+        addons: Vec<String>,
+        #[serde(default)]
+        backend: Option<String>,
+        project_name: String,
+    }
+
     #[test]
     fn registry_parses() {
         let reg = registry();
@@ -331,6 +661,10 @@ mod tests {
         assert!(reg.tools.contains_key("create-vite"));
         assert!(reg.managers.contains_key("npm"));
         assert_eq!(reg.wrappers["python"].kind, "blueprint");
+        assert_eq!(reg.addon_order.len(), reg.addons.len());
+        for id in &reg.addon_order {
+            assert!(reg.addons.contains_key(id), "addonOrder names unknown addon {id}");
+        }
     }
 
     #[test]
@@ -358,6 +692,46 @@ mod tests {
         }
     }
 
+    /// The projection the JS test uses: source, op, path, argv.
+    fn project(step: &Value) -> Value {
+        let mut out = Map::new();
+        for key in ["source", "op", "path", "argv"] {
+            if let Some(v) = step.get(key) {
+                if !v.is_null() {
+                    out.insert(key.into(), v.clone());
+                }
+            }
+        }
+        Value::Object(out)
+    }
+
+    #[test]
+    fn shared_step_cases_derive_exactly_like_the_js_side() {
+        let file: StepCaseFile = serde_json::from_str(STEP_CASES_JSON).expect("step-cases.json parses");
+        assert!(file.cases.len() >= 5);
+        for case in file.cases {
+            let steps = derive_steps(
+                &case.input.wrapper,
+                &case.input.framework,
+                &case.input.language,
+                &case.input.manager,
+                &case.input.addons,
+                case.input.backend.as_deref(),
+                &case.input.project_name,
+            )
+            .unwrap_or_else(|e| panic!("{}: {e}", case.name));
+            let projected: Vec<Value> = steps.iter().map(project).collect();
+            assert_eq!(projected, case.expect, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn addons_are_ordered_by_prerequisite_then_registry_order() {
+        assert_eq!(order_addons(&["shadcn".into(), "tailwind".into()]), vec!["tailwind", "shadcn"]);
+        assert_eq!(order_addons(&["router".into(), "shadcn".into()]), vec!["tailwind", "shadcn", "router"]);
+        assert!(order_addons(&["nope".into()]).is_empty());
+    }
+
     #[test]
     fn web_angular_routes_through_the_pinned_angular_cli() {
         // F1 closed (ADR-028 §3): no create-vite template lookup, an exec
@@ -376,7 +750,7 @@ mod tests {
     #[test]
     fn every_route_template_is_in_the_pinned_tool_manifest() {
         // Mirror of the JS F1 regression test, on the Rust read side.
-        let value: serde_json::Value = serde_json::from_str(REGISTRY_JSON).unwrap();
+        let value: Value = serde_json::from_str(REGISTRY_JSON).unwrap();
         let manifests = value["templateManifests"].as_object().unwrap();
         for (id, w) in &registry().wrappers {
             let Some(route) = &w.route else { continue };
@@ -402,12 +776,20 @@ mod tests {
         assert!(is_selectable_status("verified"));
         assert!(is_selectable_status("covered-by-equivalence"));
         assert!(!is_selectable_status("failing"));
+        // Add-ons need their own evidence.
+        assert_eq!(
+            unverified_addon("web", "react", "ts", "yarn", "linux", &["tailwind".into()], None).as_deref(),
+            Some("tailwind")
+        );
+        assert_eq!(
+            unverified_addon("web", "react", "ts", "yarn", "linux", &[], Some("express")).as_deref(),
+            Some("backend express")
+        );
+        assert_eq!(unverified_addon("web", "react", "ts", "yarn", "linux", &[], Some("none")), None);
     }
 
     #[test]
     fn addon_cli_specs_come_from_the_registry() {
-        assert_eq!(shadcn_cli_for("vue").as_deref(), Some("shadcn-vue"));
-        assert_eq!(shadcn_cli_for("angular"), None);
         let spec = addon_cli_spec("shadcn-vue").unwrap();
         assert!(spec.starts_with("shadcn-vue@"));
         assert_eq!(addon_cli_spec("create-vite"), None, "initializers are not addon CLIs");

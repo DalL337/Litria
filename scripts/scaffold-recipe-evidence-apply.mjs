@@ -27,7 +27,10 @@ if (files.length === 0) {
 
 const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
 const key = (e) => [e.wrapper, e.framework, e.language, e.manager, e.platform].join('|');
+const addonKey = (e) => [key(e), [...(e.addons ?? [])].sort().join('+'), e.backend ?? ''].join('|');
 const byKey = new Map(registry.coverage.entries.map((e) => [key(e), e]));
+registry.addonCoverage ??= { entries: [] };
+const addonByKey = new Map(registry.addonCoverage.entries.map((e) => [addonKey(e), e]));
 
 let applied = 0;
 for (const file of files) {
@@ -36,6 +39,21 @@ for (const file of files) {
     if (r.status === 'unsupported') continue;
     const checks = r.checks.filter((c) => c.ok === true).map((c) => c.check);
     const skipped = r.checks.filter((c) => c.ok === null).map((c) => `${c.check}: ${c.detail}`);
+    const isAddonRun = Array.isArray(r.addons) && (r.addons.length > 0 || r.backend);
+    if (isAddonRun) {
+      // An add-on run is evidence for the add-ons/backend it exercised — not
+      // a primary-combination entry (the primary was verified on its own).
+      const entry = {
+        wrapper: r.wrapper, framework: r.framework, language: r.language, manager: r.manager, platform: r.platform,
+        addons: r.addons, backend: r.backend ?? null,
+        status: r.status,
+        evidence: { date: r.date, steps: r.steps, versions: r.versions, checks, ...(skipped.length ? { notExercised: skipped } : {}), source: 'scripts/scaffold-recipe-evidence.mjs' },
+        ...(r.status === 'failing' ? { reason: r.reason } : {}),
+      };
+      addonByKey.set(addonKey(entry), entry);
+      applied += 1;
+      continue;
+    }
     const entry = {
       wrapper: r.wrapper,
       framework: r.framework,
@@ -60,5 +78,6 @@ for (const file of files) {
 }
 
 registry.coverage.entries = [...byKey.values()].sort((a, b) => key(a).localeCompare(key(b)));
+registry.addonCoverage.entries = [...addonByKey.values()].sort((a, b) => addonKey(a).localeCompare(addonKey(b)));
 writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
-console.log(`applied ${applied} result(s); coverage now has ${registry.coverage.entries.length} entr${registry.coverage.entries.length === 1 ? 'y' : 'ies'}`);
+console.log(`applied ${applied} result(s); coverage now has ${registry.coverage.entries.length} primary and ${registry.addonCoverage.entries.length} add-on entr${registry.addonCoverage.entries.length === 1 ? 'y' : 'ies'}`);

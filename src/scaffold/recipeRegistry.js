@@ -195,3 +195,157 @@ export function selectableLanguages({ wrapper, framework, manager, platform }) {
   return getLanguages(framework).filter((language) =>
     availability({ wrapper, framework, language, manager, platform }).selectable);
 }
+
+// ---- add-on / backend / framework steps (ADR-028 §4) ----------------------
+
+/** Order selected add-ons so every prerequisite precedes its dependent (F6),
+ *  pulling in prerequisites that were not selected. Stable: registry order. */
+export function orderAddons(selected) {
+  const wanted = new Set();
+  const visit = (id) => {
+    if (!recipes.addons[id] || wanted.has(id)) return;
+    for (const dep of getAddonDeps(id)) visit(dep);
+    wanted.add(id);
+  };
+  for (const id of selected) visit(id);
+  // Explicit registry order (`addonOrder`), never object-key order: the Rust
+  // side has no ordered map and must produce the identical sequence.
+  return recipes.addonOrder.filter((id) => wanted.has(id));
+}
+
+function selectorMatches(when, ctx) {
+  for (const [key, allowed] of Object.entries(when ?? {})) {
+    if (!Array.isArray(allowed) || !allowed.includes(ctx[key])) return false;
+  }
+  return true;
+}
+
+function fill(value, ctx) {
+  if (typeof value === 'string') {
+    return value
+      .replaceAll('{entry}', ctx.entry ?? '{entry}')
+      .replaceAll('{ext}', ctx.ext)
+      .replaceAll('{jsx}', ctx.jsx)
+      .replaceAll('{name}', ctx.name);
+  }
+  if (Array.isArray(value)) return value.map((v) => fill(v, ctx));
+  return value;
+}
+
+/**
+ * One executable step, with placeholders filled and — for steps that run a
+ * process — the exact argv after the manager executable, so the preview
+ * shows what runs and the runner can compare (ADR-028 §2).
+ */
+function materialize(step, ctx, source) {
+  const manager = recipes.managers[ctx.manager];
+  const out = { source, op: step.op };
+  switch (step.op) {
+    case 'install': {
+      out.dev = Boolean(step.dev);
+      out.packages = [...step.packages];
+      out.argv = [...manager.install, ...(step.dev ? [manager.devFlag] : []), ...step.packages];
+      break;
+    }
+    case 'exec': {
+      const spec = pinnedSpec(step.cli);
+      out.cli = step.cli;
+      out.spec = spec;
+      out.args = fill(step.args, ctx);
+      out.argv = spec ? [...manager.exec, spec, ...out.args] : null;
+      break;
+    }
+    case 'write':
+      out.path = fill(step.path, ctx); out.mode = step.mode ?? 'create'; out.content = fill(step.content, ctx);
+      break;
+    case 'prepend':
+    case 'append':
+      out.path = fill(step.path, ctx); out.text = fill(step.text, ctx);
+      break;
+    case 'replace':
+      out.path = fill(step.path, ctx); out.find = fill(step.find, ctx); out.with = fill(step.with, ctx);
+      break;
+    case 'insertBefore':
+      out.path = fill(step.path, ctx); out.marker = fill(step.marker, ctx); out.text = fill(step.text, ctx);
+      break;
+    case 'mergeJson':
+      out.path = fill(step.path, ctx); out.value = step.value; out.optional = Boolean(step.optional); out.create = Boolean(step.create);
+      break;
+    case 'delete':
+      out.path = fill(step.path, ctx);
+      break;
+    default:
+      throw new Error(`recipes.json: unknown step op "${step.op}"`);
+  }
+  return out;
+}
+
+/**
+ * Every post-scaffold step for a selection, in execution order: Electron
+ * framework wiring → add-ons (prerequisites first) → backend. Pure data;
+ * src-tauri/src/scaffold_recipes.rs derives the same list and the runner
+ * refuses a payload whose steps differ.
+ */
+export function deriveScaffoldSteps({ wrapper, framework, language, manager, addons = [], backend = null, projectName = 'my-app' }) {
+  if (wrapperKind(wrapper) !== 'npm' || !recipes.managers[manager]) return [];
+  const entry = recipes.wrappers[wrapper]?.entries?.[framework]?.[language] ?? null;
+  const ctx = { wrapper, framework, language, manager, entry, ext: language, jsx: language === 'ts' ? 'tsx' : 'jsx', name: projectName };
+  const out = [];
+  const apply = (entries, source) => {
+    for (const recipe of entries ?? []) {
+      if (!selectorMatches(recipe.when, ctx)) continue;
+      for (const step of recipe.steps) out.push(materialize(step, ctx, source));
+    }
+  };
+  apply(recipes.wrappers[wrapper]?.frameworkRecipes?.[framework], `framework:${framework}`);
+  for (const addon of orderAddons(addons)) apply(recipes.addons[addon]?.recipes, `addon:${addon}`);
+  if (backend && backend !== 'none' && getBackendOptions(wrapper).includes(backend)) {
+    apply(recipes.backends.recipes?.[backend], `backend:${backend}`);
+  }
+  return out;
+}
+
+/** Human line for one step, for the wizard's plan preview. */
+export function describeStep(step, managerId) {
+  const who = step.source;
+  switch (step.op) {
+    case 'install': return `${who}: ${managerId} ${step.argv.join(' ')}`;
+    case 'exec': return `${who}: ${managerId} ${(step.argv ?? [step.cli, ...step.args]).join(' ')}`;
+    case 'write': return `${who}: write ${step.path}${step.mode === 'replace' ? ' (replace)' : ''}`;
+    case 'prepend': return `${who}: prepend to ${step.path}`;
+    case 'append': return `${who}: append to ${step.path}`;
+    case 'replace': return `${who}: patch ${step.path}`;
+    case 'insertBefore': return `${who}: patch ${step.path}`;
+    case 'mergeJson': return `${who}: merge into ${step.path}`;
+    case 'delete': return `${who}: remove ${step.path}`;
+    default: return `${who}: ${step.op}`;
+  }
+}
+
+// ---- add-on / backend coverage (ADR-028 §10) --------------------------------
+
+function addonEntriesFor({ wrapper, framework, language, manager, platform }) {
+  return (recipes.addonCoverage?.entries ?? []).filter((e) =>
+    e.wrapper === wrapper && e.framework === framework && e.language === language
+    && e.manager === manager && e.platform === platform && SELECTABLE_STATUSES.has(e.status));
+}
+
+/** May `addon` be offered for this primary combination? Evidence = a verified
+ *  run of the same combination whose recipe steps included the add-on. */
+export function addonAvailability({ wrapper, framework, language, manager, platform, addon }) {
+  if (wrapperKind(wrapper) !== 'npm') return { selectable: true, reason: null };
+  const ok = addonEntriesFor({ wrapper, framework, language, manager, platform })
+    .some((e) => (e.addons ?? []).includes(addon));
+  return ok
+    ? { selectable: true, reason: null }
+    : { selectable: false, reason: `${addon} on ${framework} (${language}) with ${manager} on ${platform} has no execution evidence yet (ADR-028 §10) — not offered until it has.` };
+}
+
+export function backendAvailability({ wrapper, framework, language, manager, platform, backend }) {
+  if (!backend || backend === 'none') return { selectable: true, reason: null };
+  const ok = addonEntriesFor({ wrapper, framework, language, manager, platform })
+    .some((e) => e.backend === backend);
+  return ok
+    ? { selectable: true, reason: null }
+    : { selectable: false, reason: `${backend} with ${framework} (${language}) with ${manager} on ${platform} has no execution evidence yet (ADR-028 §10) — not offered until it has.` };
+}

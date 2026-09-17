@@ -128,6 +128,31 @@ pub(crate) struct ScaffoldPlanPayload {
     pub argv: Vec<String>,
     /// The platform the wizard evaluated coverage for.
     pub platform: String,
+    /// Post-scaffold steps as previewed (ADR-028 §4): Electron framework
+    /// wiring, add-ons in prerequisite order, backend. Raw JSON; the runner
+    /// re-derives the same list from the registry and refuses a mismatch.
+    #[serde(default)]
+    pub steps: Vec<serde_json::Value>,
+}
+
+impl ScaffoldBackend {
+    pub(crate) fn id(&self) -> &'static str {
+        match self {
+            ScaffoldBackend::Express => "express",
+            ScaffoldBackend::Fastify => "fastify",
+            ScaffoldBackend::Axum => "axum",
+        }
+    }
+}
+
+impl ScaffoldAddon {
+    pub(crate) fn id(&self) -> &'static str {
+        match self {
+            ScaffoldAddon::Tailwind => "tailwind",
+            ScaffoldAddon::ShadCN => "shadcn",
+            ScaffoldAddon::Router => "router",
+        }
+    }
 }
 
 /// Full scaffold configuration from the New Project wizard.
