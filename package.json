@@ -59,6 +59,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.27",
     "c8": "^11.0.0",
+    "happy-dom": "20.14.5",
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.1",
     "vite": "^7.0.4"

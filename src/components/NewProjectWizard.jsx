@@ -56,7 +56,13 @@ import {
   countAdvancedChanges,
   countColorChanges,
   reviewRowTarget,
+  canNavigate,
+  cancelMode,
+  canSubmit,
+  resolveJump,
+  submitLabel,
 } from '../scaffold/wizardNavigation';
+import { captureError } from '../crash/errorCapture';
 import { THEME_ACCENT_SWATCHES } from '../app/themeDomain';
 import { BUILTIN_THEME_IDS, BUILTIN_THEME_PRESETS } from '../theme/themeDefaults';
 import { getLastProjectDir, rememberProjectDir } from '../utils/lastProjectDir';
@@ -152,6 +158,17 @@ const NODE_COLOR_MODES = [
 
 const PAGE_COUNT = WIZARD_STEPS.length;
 
+// Tauri / LSP entry points, imported lazily so the module graph stays free of
+// them outside Tauri. Tests inject fakes through the `runtime` prop; the app
+// never passes it.
+export const defaultRuntime = Object.freeze({
+  core: () => import('@tauri-apps/api/core'),
+  dialog: () => import('@tauri-apps/plugin-dialog'),
+  lsp: () => import('../lsp/lspClient'),
+});
+
+const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 // ---------------------------------------------------------------------------
 // State reducer — cascade resets on parent tier changes
 // ---------------------------------------------------------------------------
@@ -190,13 +207,18 @@ function wizardReducer(state, action) {
       return { ...state, name: action.value };
     case 'SET_FOLDER':
       return { ...state, folder: action.value };
+    // Re-selecting the current value is a no-op: a second click (or an arrow
+    // key landing on the selected card) must not wipe the choices below (F21).
     case 'SET_WRAPPER':
+      if (state.wrapper === action.value) return state;
       return { ...state, wrapper: action.value, framework: null, lang: null, backend: 'none', addons: [] };
     case 'SET_FRAMEWORK': {
+      if (state.framework === action.value) return state;
       const locked = isLanguageLocked(action.value);
       return { ...state, framework: action.value, lang: locked ?? null, backend: 'none', addons: [] };
     }
     case 'SET_LANG':
+      if (state.lang === action.value) return state;
       return { ...state, lang: action.value, backend: 'none', addons: [] };
     case 'SET_BACKEND':
       return { ...state, backend: action.value };
@@ -326,6 +348,8 @@ function NewProjectWizard({
   // scaffolding stopped, taking the only explanation of a failure with it.
   tracePause = 'always',
   autoSendLogs = false,
+  // Lazy Tauri/LSP imports; tests pass fakes (see defaultRuntime).
+  runtime = defaultRuntime,
 }) {
   const [state, dispatch] = useReducer(wizardReducer, {
     ...INITIAL_STATE,
@@ -353,15 +377,21 @@ function NewProjectWizard({
   const nameInputRef = useRef(null);
   const keepEditingRef = useRef(null);
   const cancelRef = useRef(null);
-  const [isScaffolding, setIsScaffolding] = useState(false);
+  // -- Run lifecycle (ADR-028 §6) --
+  // One state — 'idle' | 'running' | 'held' | 'opening' | 'failed' — replaces
+  // the scaffolding / held / error flags. Navigation, cancel and submit
+  // permissions are pure selectors of it (scaffold/wizardNavigation).
+  const [runState, setRunState] = useState('idle');
+  // The created project's handoff payload: set once creation succeeded and
+  // kept until the workspace open resolves, so a failed open can be retried
+  // without re-scaffolding into the folder that now exists (F17).
+  const [createdPayload, setCreatedPayload] = useState(null);
   const [progressLines, setProgressLines] = useState([]);
   const [error, setError] = useState('');
   // Phase of the last failure. A destination failure must not offer
   // "Create as Blank" — Blank writes to the same place and fails identically.
   const [errorIsDestination, setErrorIsDestination] = useState(false);
-  // Held completion: the run succeeded but the trace stays up until the user
-  // acts (see `tracePause`). Carries the onDone payload until they continue.
-  const [pendingDone, setPendingDone] = useState(null);
+  const modalRef = useRef(null);
   const [traceMenuOpen, setTraceMenuOpen] = useState(false);
   // Same clipping problem the pill menu has: .npw-modal is overflow:hidden and
   // .npw-body scrolls, so an absolutely-positioned menu gets cut off. Anchor
@@ -391,11 +421,16 @@ function NewProjectWizard({
   const platformId = normalizePlatform(platform);
   const plan = useMemo(() => buildScaffoldPlan(state, pyProbe, { platform: platformId }), [state, pyProbe, platformId]);
 
+  const isHeld = runState === 'held';
+  const navigable = canNavigate(runState, createdPayload !== null);
+  const submitAllowed = canSubmit(state, runState, plan.availability.selectable, createdPayload !== null);
+  const cancelKind = cancelMode(runState, createdPayload !== null);
+
   // -- Python interpreter probe --
   const runPythonProbe = useCallback(async () => {
     setPyProbe((prev) => ({ ...prev, status: 'loading' }));
     try {
-      const { detectPythonInterpreters } = await import('../lsp/lspClient');
+      const { detectPythonInterpreters } = await runtime.lsp();
       const report = await detectPythonInterpreters();
       const interpreters = Array.isArray(report?.interpreters) ? report.interpreters : [];
       setPyProbe({
@@ -414,10 +449,12 @@ function NewProjectWizard({
         const chosen = interpreters.find((i) => i.path === defaultPath);
         dispatch({ type: 'SET_PY_INTERPRETER', path: defaultPath, version: chosen?.version ?? null });
       }
-    } catch {
+    } catch (err) {
+      // Never silent (F23): the scan failing is a fact worth a crash-log crumb.
+      captureError('wizard', err, { source: 'python-probe' });
       setPyProbe({ status: 'error', interpreters: [], excluded: [], uvAvailable: false });
     }
-  }, [state.pyInterpreter]);
+  }, [runtime, state.pyInterpreter]);
 
   useEffect(() => {
     if (isPython && pyProbe.status === 'idle') runPythonProbe();
@@ -426,7 +463,11 @@ function NewProjectWizard({
   // -- Navigation --
   // One mover for Next, Back and the stepper. Moving never resets state, so
   // jumping back to fix one choice keeps everything else.
-  const goToPage = useCallback((target, { fold = null } = {}) => {
+  const goToPage = useCallback((rawTarget, { fold = null } = {}) => {
+    // Running / held / opening freezes navigation (F18, F20); a jump never
+    // lands past an earlier page whose prerequisites are no longer met (F19).
+    if (!canNavigate(runState, createdPayload !== null)) return;
+    const target = resolveJump(state, rawTarget);
     setDirection(target > page ? 'forward' : 'backward');
     setPage(target);
     setMaxReached((reached) => Math.max(reached, target));
@@ -437,7 +478,7 @@ function NewProjectWizard({
     // not behind a second click.
     if (fold === 'advanced') setAdvancedOpen(true);
     if (fold === 'colors') setColorsOpen(true);
-  }, [page]);
+  }, [createdPayload, page, runState, state]);
   const goNext = () => { if (page < PAGE_COUNT - 1 && advanceReady) goToPage(page + 1); };
   const goBack = () => { if (page > 0) goToPage(page - 1); };
 
@@ -459,7 +500,7 @@ function NewProjectWizard({
   // -- Folder picker --
   const handlePickFolder = useCallback(async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
+      const { open } = await runtime.dialog();
       const selected = await open({
         directory: true,
         multiple: false,
@@ -473,10 +514,11 @@ function NewProjectWizard({
         rememberProjectDir(path, { isContainer: true });
         setError('');
       }
-    } catch {
+    } catch (err) {
+      captureError('wizard', err, { source: 'folder-picker' });
       setError('Folder picker unavailable.');
     }
-  }, []);
+  }, [runtime]);
 
   // Shared by both creation paths: everything the launch flow needs besides
   // the creation result itself. One builder so the blank and scaffold
@@ -497,6 +539,23 @@ function NewProjectWizard({
   // Hand off to the workspace, or hold the trace on screen until the user
   // acts. Holding is the default (`tracePause: 'always'`): a run that emitted
   // warnings used to navigate away before they could be read.
+  // Open the created project. The payload stays until the open resolves: a
+  // rejection lands in 'failed' with the payload kept, and the only offer is
+  // to open again — never to scaffold into the folder that now exists (F17).
+  const openWorkspace = useCallback(async (payload) => {
+    setCreatedPayload(payload);
+    setRunState('opening');
+    setError('');
+    setErrorIsDestination(false);
+    try {
+      await onDone(payload);
+    } catch (err) {
+      setError(toErrorMessage(err, 'Opening the workspace failed.'));
+      setErrorIsDestination(false);
+      setRunState('failed');
+    }
+  }, [onDone]);
+
   const finishRun = useCallback(async (payload) => {
     if (autoSendLogs) {
       await buildLogActions?.sendCurrentRunToLogs?.();
@@ -505,25 +564,19 @@ function NewProjectWizard({
       tracePause === 'always' ||
       (tracePause === 'warnings' && (buildLogDomain?.selectors.hasIssues?.() ?? false));
     if (!hold) {
-      await onDone(payload);
+      await openWorkspace(payload);
       return;
     }
-    setIsScaffolding(false);
-    setPendingDone(payload);
-  }, [autoSendLogs, buildLogActions, buildLogDomain, onDone, tracePause]);
+    setCreatedPayload(payload);
+    setRunState('held');
+  }, [autoSendLogs, buildLogActions, buildLogDomain, openWorkspace, tracePause]);
 
-  // "Open Workspace" — the explicit continue after a held run.
+  // "Open Workspace" — the explicit continue after a held run, and "Open
+  // workspace again" after a failed open.
   const handleContinue = useCallback(async () => {
-    if (!pendingDone) return;
-    const payload = pendingDone;
-    setPendingDone(null);
-    try {
-      await onDone(payload);
-    } catch (err) {
-      setError(toErrorMessage(err, 'Opening the workspace failed.'));
-      setErrorIsDestination(false);
-    }
-  }, [onDone, pendingDone]);
+    if (!createdPayload) return;
+    await openWorkspace(createdPayload);
+  }, [createdPayload, openWorkspace]);
 
   const handleCopyTrace = useCallback(async () => {
     setTraceMenuOpen(false);
@@ -545,7 +598,7 @@ function NewProjectWizard({
   // lands in the caller's catch — otherwise the wizard soft-locks on a
   // success-looking screen with every control disabled.
   const runBlankCreate = useCallback(async () => {
-    const { invoke } = await import('@tauri-apps/api/core');
+    const { invoke } = await runtime.core();
     setProgressLines([{ type: 'step', text: 'Writing project essentials...' }]);
     const result = await invoke('create_blank_project', {
       projectName: state.name.trim(),
@@ -558,14 +611,17 @@ function NewProjectWizard({
       // Substrate files → seeded onto the canvas as the first pieces.
       blankFiles: result.createdFiles,
     });
-  }, [buildDonePayloadBase, buildLogDomain, finishRun, state.folder, state.name]);
+  }, [buildDonePayloadBase, buildLogDomain, finishRun, runtime, state.folder, state.name]);
 
   // -- Scaffold execution --
   const handleDone = useCallback(async () => {
-    setIsScaffolding(true);
+    // Guarded here as well as at the button: Enter and the fallback paths
+    // route through the same rule (F19).
+    if (!canSubmit(state, runState, plan.availability.selectable, createdPayload !== null)) return;
+    setRunState('running');
     setProgressLines([]);
     setError('');
-    setPendingDone(null);
+    setErrorIsDestination(false);
     setTraceStatus('');
     buildLogDomain?.commands.startRun({
       projectName: state.name.trim(),
@@ -574,7 +630,7 @@ function NewProjectWizard({
     });
 
     try {
-      const { invoke, Channel } = await import('@tauri-apps/api/core');
+      const { invoke, Channel } = await runtime.core();
 
       if (state.wrapper === 'blank') {
         await runBlankCreate();
@@ -623,7 +679,9 @@ function NewProjectWizard({
           onEvent: makeProgressChannel(),
         });
         if (state.pyInterpreter) rememberPyInterpreter(state.pyInterpreter);
-        await onDone({
+        // Same finish as Blank and npm (F16): the trace-pause and auto-send
+        // policies apply, and a non-fatal environment failure stays readable.
+        await finishRun({
           ...buildDonePayloadBase(result.projectPath),
           // Blueprint files → seeded onto the canvas, same channel as Blank.
           blankFiles: result.createdFiles,
@@ -674,9 +732,9 @@ function NewProjectWizard({
         await buildLogActions?.sendCurrentRunToLogs?.();
       }
       setError(message);
-      setIsScaffolding(false);
+      setRunState('failed');
     }
-  }, [autoSendLogs, buildDonePayloadBase, buildLogActions, buildLogDomain, finishRun, plan, runBlankCreate, state]);
+  }, [autoSendLogs, buildDonePayloadBase, buildLogActions, buildLogDomain, createdPayload, finishRun, plan, runBlankCreate, runState, runtime, state]);
 
   // Offered in the page-3 error area after a scaffold failure: same
   // name/location/theme/workspace-style choices, created as Blank instead —
@@ -685,8 +743,10 @@ function NewProjectWizard({
   // ("not empty") and that message replaces the error; the offer stays so
   // the user can clean up or rename and try again.
   const handleBlankFallback = useCallback(async () => {
-    setIsScaffolding(true);
+    if (runState !== 'failed' || createdPayload !== null) return;
+    setRunState('running');
     setError('');
+    setErrorIsDestination(false);
     // Fresh run: the fallback is a second attempt, so it gets its own log
     // rather than appending to the failed scaffold's trace.
     buildLogDomain?.commands.startRun({
@@ -700,10 +760,13 @@ function NewProjectWizard({
       const message = toErrorMessage(err, 'Blank creation failed.');
       setErrorIsDestination(isDestinationError(err));
       buildLogDomain?.commands.failRun(message);
+      if (autoSendLogs) {
+        await buildLogActions?.sendCurrentRunToLogs?.();
+      }
       setError(message);
-      setIsScaffolding(false);
+      setRunState('failed');
     }
-  }, [buildLogDomain, runBlankCreate, state.framework, state.name]);
+  }, [autoSendLogs, buildLogActions, buildLogDomain, createdPayload, runBlankCreate, runState, state.framework, state.name]);
 
   // -- Cancel --
   // A dirty wizard confirms inline in the footer; an untouched one closes at
@@ -713,13 +776,20 @@ function NewProjectWizard({
     onCancel();
   }, [onCancel]);
   const handleCancel = useCallback(() => {
-    if (isScaffolding) return;
+    // Wording and behaviour follow the run state: a created project is
+    // closed without opening (nothing on disk is discarded), a run in flight
+    // cannot be cancelled here yet (S7), an untouched wizard just closes.
+    if (cancelKind === 'abort' || cancelKind === null) return;
+    if (cancelKind === 'close') {
+      onCancel();
+      return;
+    }
     if (isWizardDirty(state, page)) {
       setConfirmingCancel(true);
       return;
     }
     discardWizard();
-  }, [discardWizard, isScaffolding, page, state]);
+  }, [cancelKind, discardWizard, onCancel, page, state]);
   const handleKeepEditing = useCallback(() => {
     setConfirmingCancel(false);
     // Runs after the Cancel button is back in the DOM.
@@ -732,8 +802,25 @@ function NewProjectWizard({
   // step; plain arrows move selection inside a card group like a native
   // radio group. Cards are real buttons, so Tab / Space / Enter work for free.
   const handleKeyDown = (e) => {
+    if (e.key === 'Tab') {
+      // Focus trap (F26): the dialog is modal, so Tab cycles inside it.
+      const modal = modalRef.current;
+      if (!modal) return;
+      const focusables = Array.from(modal.querySelectorAll(FOCUSABLE));
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+      return;
+    }
     if (e.key === 'Escape') {
-      if (isScaffolding) return;
+      if (cancelKind === 'abort' || cancelKind === null) return;
       e.preventDefault();
       if (confirmingCancel) handleKeepEditing();
       else handleCancel();
@@ -746,13 +833,14 @@ function NewProjectWizard({
         goNext();
         return;
       }
-      if (!isScaffolding && !pendingDone && !confirmingCancel && plan.availability.selectable) handleDone();
+      if (submitAllowed && !confirmingCancel) handleDone();
       return;
     }
     const delta = ROVING_KEYS[e.key];
     if (delta === undefined) return;
     if (e.altKey) {
       e.preventDefault();
+      // goToPage refuses while running / held / opening (F20).
       if (delta > 0) goNext();
       else goBack();
       return;
@@ -841,7 +929,7 @@ function NewProjectWizard({
 
   return (
     <div className="npw-overlay" role="dialog" aria-modal="true" aria-labelledby="npw-title">
-      <div className="npw-modal" onKeyDown={handleKeyDown}>
+      <div className="npw-modal" onKeyDown={handleKeyDown} ref={modalRef}>
         {/* ---- Header: labelled stepper + pinned title ----
             Reached steps are buttons (jump back, state kept); the current
             one carries aria-current; future ones are disabled. */}
@@ -849,7 +937,7 @@ function NewProjectWizard({
           <div className="npw-stepper" role="group" aria-label="Wizard steps">
             {WIZARD_STEPS.map((step, i) => {
               const status = stepState(i, page, maxReached);
-              const jumpable = status === 'done' && !isScaffolding;
+              const jumpable = status === 'done' && navigable;
               return (
                 <Fragment key={step.key}>
                   {i > 0 && <span className={`npw-step-sep${i <= page ? ' done' : ''}`} aria-hidden="true" />}
@@ -1083,6 +1171,17 @@ function NewProjectWizard({
                         ))}
                       </select>
                     </div>
+                    {state.pyEnvMode === 'existing' && (
+                      // Beside the select that offers it (F25): choosing
+                      // "Existing environment…" shows where to type the path.
+                      <input
+                        className="npw-input npw-env-existing"
+                        placeholder="Path to an existing environment (e.g. C:\\envs\\shared)"
+                        aria-label="Existing environment path"
+                        value={state.pyExistingEnv}
+                        onChange={(e) => dispatch({ type: 'SET_PY_EXISTING_ENV', value: e.target.value })}
+                      />
+                    )}
                     <div className="npw-env-caption">{PY_ENV_CAPTION}</div>
                   </>
                 )}
@@ -1207,15 +1306,6 @@ function NewProjectWizard({
                             </label>
                           ))}
                         </div>
-                        {state.pyEnvMode === 'existing' && (
-                          <input
-                            className="npw-input npw-env-existing"
-                            placeholder="Path to an existing environment (e.g. C:\\envs\\shared)"
-                            aria-label="Existing environment path"
-                            value={state.pyExistingEnv}
-                            onChange={(e) => dispatch({ type: 'SET_PY_EXISTING_ENV', value: e.target.value })}
-                          />
-                        )}
                       </div>
                     )}
                   </div>
@@ -1408,7 +1498,7 @@ function NewProjectWizard({
                           className="npw-review-edit"
                           aria-label={`Edit ${key}`}
                           title={`Edit ${key}`}
-                          disabled={isScaffolding || pendingDone !== null}
+                          disabled={!navigable}
                           onClick={() => goToPage(target.step, { fold: target.fold })}
                         >
                           <Pencil size={12} aria-hidden="true" />
@@ -1427,7 +1517,7 @@ function NewProjectWizard({
                             value={state.pyRequiresFloor ?? ''}
                             placeholder="3.13"
                             aria-label="Minimum Python version"
-                            disabled={isScaffolding}
+                            disabled={!navigable}
                             onChange={(e) => dispatch({ type: 'SET_PY_REQUIRES_FLOOR', value: e.target.value })}
                           />
                         </span>
@@ -1512,7 +1602,7 @@ function NewProjectWizard({
                       {traceStatus && <div className="npw-progress-status">{traceStatus}</div>}
                     </div>
                   )}
-                  {pendingDone && (
+                  {isHeld && (
                     <div className="npw-continue">
                       <div className="npw-continue-hint">
                         Project created. Review the trace above — it is discarded
@@ -1527,8 +1617,27 @@ function NewProjectWizard({
                       </button>
                     </div>
                   )}
+                  {runState === 'opening' && (
+                    <div className="npw-continue-hint" aria-live="polite">Opening the workspace…</div>
+                  )}
                   {error && <div className="npw-error">{error}</div>}
-                  {error && errorIsDestination && (
+                  {runState === 'failed' && createdPayload && (
+                    // The project exists on disk; only the open failed (F17).
+                    <div className="npw-continue">
+                      <div className="npw-continue-hint">
+                        The project was created at {createdPayload.rootPath}. Opening it
+                        failed — try again, or close and open it from the launcher.
+                      </div>
+                      <button
+                        className="npw-btn-done npw-continue-btn"
+                        type="button"
+                        onClick={handleContinue}
+                      >
+                        Open workspace again
+                      </button>
+                    </div>
+                  )}
+                  {error && errorIsDestination && !createdPayload && (
                     <div className="npw-fallback">
                       <div className="npw-fallback-hint">
                         This is about where the project would go, not how it is built —
@@ -1545,7 +1654,7 @@ function NewProjectWizard({
                       </button>
                     </div>
                   )}
-                  {error && !errorIsDestination && !isScaffolding && !isBlank && (
+                  {error && !errorIsDestination && runState === 'failed' && !createdPayload && !isBlank && (
                     <div className="npw-fallback">
                       <div className="npw-fallback-hint">
                         You can still start this project as Blank — README, .gitignore,
@@ -1586,11 +1695,11 @@ function NewProjectWizard({
               className="npw-btn-cancel"
               type="button"
               onClick={handleCancel}
-              disabled={isScaffolding}
+              disabled={cancelKind === 'abort' || cancelKind === null}
               aria-keyshortcuts="Escape"
               ref={cancelRef}
             >
-              Cancel<kbd className="npw-key">Esc</kbd>
+              {cancelKind === 'close' ? 'Close without opening' : 'Cancel'}<kbd className="npw-key">Esc</kbd>
             </button>
           )}
           <div className="npw-footer-counter" aria-live="polite">
@@ -1601,7 +1710,7 @@ function NewProjectWizard({
               className="npw-btn-nav"
               type="button"
               onClick={goBack}
-              disabled={page === 0 || isScaffolding}
+              disabled={page === 0 || !navigable}
             >
               <ChevronLeft size={15} aria-hidden="true" />
               Back
@@ -1623,15 +1732,13 @@ function NewProjectWizard({
                 className="npw-btn-done"
                 type="button"
                 onClick={handleDone}
-                disabled={isScaffolding || pendingDone !== null || !plan.availability.selectable}
+                disabled={!submitAllowed}
                 title={plan.availability.selectable ? undefined : (plan.availability.reason ?? undefined)}
                 aria-keyshortcuts="Enter"
               >
                 <Sparkles size={14} aria-hidden="true" />
-                {isScaffolding
-                  ? (isBlank || isPython ? 'Creating...' : 'Scaffolding...')
-                  : 'Create Project'}
-                {!isScaffolding && !pendingDone && <kbd className="npw-key">{'\u21B5'}</kbd>}
+                {submitLabel(runState, { isBlank, isPython })}
+                {submitAllowed && <kbd className="npw-key">{'\u21B5'}</kbd>}
               </button>
             )}
           </div>

@@ -100,3 +100,70 @@ export function reviewRowTarget(key) {
   if (key === 'Workspace') return { step: 2, fold: null };
   return { step: 1, fold: ADVANCED_ROW_KEYS.has(key) ? 'advanced' : null };
 }
+
+// ---------------------------------------------------------------------------
+// Run lifecycle (ADR-028 §6). One state replaces the scaffolding / held /
+// error flags; every permission below is a pure function of it, so the
+// stepper, Back, Alt+arrows, review-row edits, Cancel and Create cannot
+// disagree about what a running or created project allows.
+// ---------------------------------------------------------------------------
+
+export const RUN_STATES = Object.freeze(['idle', 'running', 'held', 'opening', 'failed']);
+
+/** Moving between steps or editing choices: only while nothing has been
+ *  created and nothing is executing. A held (created) project must not have
+ *  its review rows drift from what exists on disk (F18, F20). */
+export function canNavigate(runState, hasCreatedProject = false) {
+  if (runState === 'idle') return true;
+  // A failed OPEN leaves the project on disk: the review must keep matching it.
+  return runState === 'failed' && !hasCreatedProject;
+}
+
+/**
+ * What the Cancel control does:
+ *  - 'discard'  — nothing created; a dirty wizard confirms first, a clean one closes.
+ *  - 'close'    — a project exists on disk (held, or open failed): close the
+ *                 wizard without opening it; never worded as "discard".
+ *  - 'abort'    — a run is executing (cancel IPC lands in S7; until then the
+ *                 control is disabled).
+ *  - null       — the workspace is opening; nothing to cancel.
+ */
+export function cancelMode(runState, hasCreatedProject) {
+  if (runState === 'running') return 'abort';
+  if (runState === 'opening') return null;
+  if (runState === 'held' || (runState === 'failed' && hasCreatedProject)) return 'close';
+  return 'discard';
+}
+
+/** The first page whose prerequisites are not met, or null when every
+ *  page before Create is complete (F19). */
+export function firstInvalidPage(state) {
+  for (let page = 0; page < WIZARD_STEP_COUNT - 1; page += 1) {
+    if (!canAdvance(state, page)) return page;
+  }
+  return null;
+}
+
+/** Where a jump to `target` actually lands: never past an earlier page that
+ *  is no longer valid (changing the runtime after reaching Create resets the
+ *  framework; Create must not stay reachable). */
+export function resolveJump(state, target) {
+  const invalid = firstInvalidPage(state);
+  return invalid === null ? target : Math.min(target, invalid);
+}
+
+/** Create is allowed only when nothing is running or created, every earlier
+ *  page is complete, and the plan is selectable for this platform/manager. */
+export function canSubmit(state, runState, planSelectable, hasCreatedProject = false) {
+  if (!canNavigate(runState, hasCreatedProject)) return false;
+  if (firstInvalidPage(state) !== null) return false;
+  return Boolean(planSelectable);
+}
+
+/** The Create button's caption per state. */
+export function submitLabel(runState, { isBlank = false, isPython = false } = {}) {
+  if (runState === 'running') return isBlank || isPython ? 'Creating...' : 'Scaffolding...';
+  if (runState === 'opening') return 'Opening...';
+  if (runState === 'held') return 'Created';
+  return 'Create Project';
+}

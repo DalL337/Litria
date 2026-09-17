@@ -19,6 +19,11 @@ export function createBuildLogDomain() {
   let trace = [];
   let runMeta = null;
   let truncated = false;
+  // Issue counters live outside the capped trace (F24): a warning followed
+  // by 5000 output lines must still count as an issue for "pause on
+  // warnings" even after the record itself has been dropped.
+  let issueCount = 0;
+  let failedSteps = 0;
   let entries = [];
   let crashEntries = [];
   let listeners = [];
@@ -41,6 +46,8 @@ export function createBuildLogDomain() {
     startRun({ projectName = '', wrapper = '', framework = '' } = {}) {
       trace = [];
       truncated = false;
+      issueCount = 0;
+      failedSteps = 0;
       runMeta = {
         projectName,
         wrapper,
@@ -58,6 +65,8 @@ export function createBuildLogDomain() {
      */
     appendEvent(event) {
       if (!event || typeof event !== 'object') return;
+      if (ISSUE_KINDS.has(event.kind)) issueCount += 1;
+      if (event.kind === 'stepFailed') failedSteps += 1;
       if (trace.length >= MAX_TRACE_RECORDS) {
         // Drop the oldest rather than the newest: the tail carries the
         // failure. Flagged so exports can say so honestly.
@@ -76,6 +85,8 @@ export function createBuildLogDomain() {
     failRun(message) {
       if (message) {
         trace = [...trace, { ts: Date.now(), kind: 'stepFailed', label: 'scaffold', error: String(message) }];
+        issueCount += 1;
+        failedSteps += 1;
       }
       if (runMeta) {
         runMeta = { ...runMeta, endedAt: Date.now(), success: false };
@@ -87,6 +98,8 @@ export function createBuildLogDomain() {
       trace = [];
       runMeta = null;
       truncated = false;
+      issueCount = 0;
+      failedSteps = 0;
       notify();
     },
 
@@ -117,9 +130,16 @@ export function createBuildLogDomain() {
     isTruncated() {
       return truncated;
     },
-    /** True when the run produced a warning or a failed step. */
+    /** True when the run produced a warning or a failed step — counted as
+     *  events arrive, not read back from the capped trace (F24). */
     hasIssues() {
-      return trace.some((record) => ISSUE_KINDS.has(record.kind));
+      return issueCount > 0;
+    },
+    getIssueCount() {
+      return issueCount;
+    },
+    getFailedStepCount() {
+      return failedSteps;
     },
     /** JSONL body as stored on disk — one event per line. */
     getTraceJsonl() {
