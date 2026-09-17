@@ -66,9 +66,9 @@ All pinned versions are tracked in `src-tauri/src/lsp/packs/versions.rs`.
 
 | Dependency | Pinned Version | Purpose |
 |---|---|---|
-| Pyright | 1.1.411 | Python language server |
-| TypeScript Language Server | 5.3.0 | JS/TS language server |
-| TypeScript Compiler | 5.9.3 | Required by tsserver |
+| Pyright | 1.1.414 | Python language server |
+| TypeScript Language Server | 6.0.0 | JS/TS language server |
+| TypeScript Compiler | 6.0.3 | Required by tsserver (last line that ships it) |
 | Node.js | 24.14.0 (LTS) | Runtime for LSP servers + scaffold runner |
 | npm | (ships with Node) | Package management for scaffold CLI tools |
 
@@ -79,6 +79,24 @@ All pinned versions are tracked in `src-tauri/src/lsp/packs/versions.rs`.
 > Verified Windows-side: re-staged via `npm run bundle:servers`, all three
 > staged entry points run and report the new versions under the bundled
 > Node runtime. macOS/Linux parity pass rides the existing platform hold.
+
+> **Pin refresh (2026-09-16):** Pyright 1.1.411 → 1.1.414,
+> typescript-language-server 5.3.0 → 6.0.0, TypeScript 5.9.3 → 6.0.3.
+> **TypeScript stays on the 6.x line deliberately** — it is the last
+> JavaScript-based line and the last that ships `tsserver`. TypeScript 7.x is
+> the Go native port: `npm view typescript@7.0.2 bin` lists `tsc` only, the
+> package depends on per-platform native binaries, and its language service is
+> an LSP server inside that binary. typescript-language-server (5.x and 6.0.0)
+> requires tsserver and cannot drive it; adopting 7.x means spawning the native
+> LSP directly, dropping the wrapper, and bundling per platform — a separate
+> ADR, not a pin refresh (owner ruling, option 2 of the 2026-09-16 decision).
+> Compatibility evidence: tls 6.0.0 requires Node ≥22.22.2 (bundled Node is
+> 24.14.0); TS 6.0 defaults (`strict`, `module: esnext`, `types: []`) apply to
+> tsconfig-less folders — projects with a tsconfig are unaffected. Verified
+> Windows-side: `npm run bundle:servers` + `bundle:check` green; staged
+> `tsc -v` = 6.0.3, `bin/tsserver` present, `typescript-language-server
+> --version` = 6.0.0, pyright package 1.1.414 under the bundled Node.
+> Live LSP pass owed before merge (owner).
 
 ## Scope Notes
 - This ADR covers Python (Pyright), JS/TS (TypeScript Language Server), and Node.js runtime.

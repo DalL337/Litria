@@ -42,3 +42,17 @@ pathspec and silently drops the rest of the staged index (the #135/#136
 split); a commit made on the wrong branch lands on it silently (the slice-5
 local-main incident). Both are caught in seconds by reading the commit
 summary line and `git status` — do it every time.
+
+## Rule 4 — Dependency and Recipe Compatibility (added 2026-09-16)
+
+When a change affects dependencies, external tool invocation, generated-project
+recipes, or supported combinations, apply
+[Dependency Change Policy](dependency-change-policy.md) in addition to the
+standard checks. Its Rules 4–6 own execution coverage, upstream revalidation,
+and evidence requirements.
+
+A passing Litria build or domain test suite does not prove that a generated
+project installs, builds, or provides its advertised integration. The
+verification record must identify affected recipes, their actual outcomes,
+and unverified paths. Source-text assertions and command-builder unit tests
+do not substitute for the required recipe execution evidence.

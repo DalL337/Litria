@@ -36,14 +36,15 @@ execution error.
 | Creating or updating repo documents (ADRs, plans, briefs, notes) | `docs/documentation-policy.md` |
 | Release work: version bumps, bundling, release builds | `docs/release-policy.md` |
 | Security-relevant work: new execution/network surface, dependency changes, supply-chain features, audit passes | `docs/security-policy.md` |
+| Adding/updating dependencies; changing external tools, CLI arguments, generated-project recipes, or supported combinations; releasing recipes with moving dependencies | `docs/dependency-change-policy.md` — compatibility evidence in addition to security review |
 
 Reserved scopes — files exist but are empty; rules accumulate as lessons are
 learned. An empty policy means no rules exist yet for that scope: proceed on
 general judgment and AGENTS.md, and when a lesson emerges, codify it there
 (with provenance) rather than growing this file:
 
-`planning` · `review` · `test-authoring` · `dependency-change` · `migration`
-· `handoff` · `failure-and-recovery`
+`planning` · `review` · `test-authoring` · `migration` · `handoff`
+· `failure-and-recovery`
 
 A task matching multiple rows loads multiple policies (e.g. a code slice that
 ends in a PR loads implementation + verification; an investigation that

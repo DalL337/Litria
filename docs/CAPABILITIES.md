@@ -169,8 +169,8 @@ are adopted when present.
 - Definitions come from their actual providers: local Python intelligence,
   and Monaco's TypeScript worker for open TypeScript/JavaScript models. The
   generic LSP `textDocument/definition` bridge is deferred
-- Bundled runtimes in the installer: Node.js 24.14.0, pyright 1.1.411,
-  typescript-language-server 5.3.0, TypeScript 5.9.3
+- Bundled runtimes in the installer: Node.js 24.14.0, pyright 1.1.414,
+  typescript-language-server 6.0.0, TypeScript 6.0.3
 - **Managed server directory** (ADR-005): rust-analyzer and clangd install
   from a registry of pinned downloads with per-event consent pills, checksum
   verification, and install / uninstall / re-verify from the Preferences
@@ -466,7 +466,7 @@ The capability layer itself is held together by enforced architecture:
 | Tauri commands | ~81 registered (registry of record: `src-tauri/src/lib.rs`) |
 | Workspace DB schema | v3 (2 migrations) |
 | Theme tokens | 47 (v3) |
-| Bundled runtimes | Node 24.14.0, pyright 1.1.411, ts-ls 5.3.0, ts 5.9.3 |
+| Bundled runtimes | Node 24.14.0, pyright 1.1.414, ts-ls 6.0.0, ts 6.0.3 |
 
 Guards are the enforcement of record; when this document and a guard
 disagree, the guard wins and this document gets fixed.
