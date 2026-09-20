@@ -1,4 +1,5 @@
 use std::fs::{self, OpenOptions};
+use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,24 +52,28 @@ fn sync_parent_dir(_: &Path) -> Result<(), String> {
 }
 
 fn replace_file(temp_path: &Path, target: &Path) -> Result<(), String> {
+    replace_file_with(temp_path, target, &mut |from, to| fs::rename(from, to))
+}
+
+/// Generic over the rename so tests can inject a failing replacement (the
+/// same seam `project_ops::move_with_cross_device_fallback` uses); a real
+/// rename failure against an existing target is not reproducible on demand.
+fn replace_file_with(
+    temp_path: &Path,
+    target: &Path,
+    rename: &mut dyn FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), String> {
     if target.is_dir() {
         return Err("Target path is a directory.".into());
     }
 
-    match fs::rename(temp_path, target) {
-        Ok(()) => Ok(()),
-        Err(first_error) => {
-            if target.exists() {
-                fs::remove_file(target)
-                    .map_err(|error| format!("Unable to replace existing file: {error}"))?;
-                fs::rename(temp_path, target)
-                    .map_err(|error| format!("Unable to move replacement file: {error}"))?;
-                Ok(())
-            } else {
-                Err(format!("Unable to replace target file: {first_error}"))
-            }
-        }
-    }
+    // ADR-032 decision 4 — no delete-then-rename fallback. `fs::rename` already
+    // replaces an existing target on every supported platform (POSIX
+    // `rename(2)` atomically; Windows `MoveFileEx` with
+    // MOVEFILE_REPLACE_EXISTING), so the fallback only ran once the rename had
+    // genuinely failed — and it opened a window with NEITHER version on disk.
+    // A failed rename leaves `temp_path` intact for the caller to preserve.
+    rename(temp_path, target).map_err(|error| format!("Unable to replace target file: {error}"))
 }
 
 fn write_backup_copy(target: &Path, backup_path: &Path) -> Result<(), String> {
@@ -133,6 +138,22 @@ fn atomic_write_string_with_options(
     backup_path: Option<&Path>,
     simulate_interrupt_after_temp_fsync: bool,
 ) -> Result<(), String> {
+    atomic_write_string_inner(
+        path,
+        content,
+        backup_path,
+        simulate_interrupt_after_temp_fsync,
+        &mut |from, to| fs::rename(from, to),
+    )
+}
+
+fn atomic_write_string_inner(
+    path: &Path,
+    content: &str,
+    backup_path: Option<&Path>,
+    simulate_interrupt_after_temp_fsync: bool,
+    rename: &mut dyn FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), String> {
     let parent = parent_dir(path)?;
     fs::create_dir_all(parent).map_err(|error| format!("Unable to create target directory: {error}"))?;
 
@@ -141,7 +162,10 @@ fn atomic_write_string_with_options(
     }
 
     let temp_path = temp_path_for(path)?;
-    let write_result = (|| -> Result<(), String> {
+
+    // Phase 1 — materialize the replacement beside the target. Nothing the user
+    // can see has changed yet, so a failure here removes the temp file.
+    let prepared = (|| -> Result<(), String> {
         let mut temp_file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -159,16 +183,30 @@ fn atomic_write_string_with_options(
             return Err("Simulated interrupted write after temp fsync.".into());
         }
 
-        replace_file(&temp_path, path)?;
-        sync_parent_dir(path)?;
         Ok(())
     })();
 
-    if write_result.is_err() && temp_path.exists() {
-        let _ = fs::remove_file(&temp_path);
+    if let Err(error) = prepared {
+        if temp_path.exists() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        return Err(error);
     }
 
-    write_result
+    // Phase 2 — put it in place. The temp file now holds the ONLY copy of the
+    // new content, so a failure preserves it and names it in the error rather
+    // than cleaning it up (ADR-032 decision 4). The previous revision is still
+    // at `path`: a failed rename changes neither file.
+    if let Err(error) = replace_file_with(&temp_path, path, rename) {
+        return Err(format!(
+            "{error} The replacement content was preserved at {}.",
+            temp_path.display()
+        ));
+    }
+
+    // The target already carries the new content and the temp file is gone; a
+    // failed directory fsync is a durability warning, not a lost document.
+    sync_parent_dir(path)
 }
 
 #[cfg(test)]
@@ -203,6 +241,82 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── ADR-032 D2 reproduction ────────────────────────────────────────────
+    // A rename that fails against an EXISTING target is the branch the rest of
+    // this suite never enters: `atomic_write_string_retry_succeeds_after_
+    // simulated_interruption` injects its failure before `replace_file` is
+    // reached. These two assert the invariant from ADR-032 decision 4 — no
+    // write path may leave zero readable versions of a document.
+
+    /// Every rename fails, as a locked target on Windows behaves.
+    fn always_failing_rename() -> impl FnMut(&Path, &Path) -> io::Result<()> {
+        |_from, _to| Err(io::Error::other("injected rename failure"))
+    }
+
+    #[test]
+    fn replace_file_preserves_the_target_when_replacement_fails() {
+        let target = temp_file_path("d2-target", "source.js");
+        fs::write(&target, "ORIGINAL").expect("must seed target");
+        let temp = temp_path_for(&target).expect("must derive temp path");
+        fs::write(&temp, "REPLACEMENT").expect("must seed temp");
+
+        let result = replace_file_with(&temp, &target, &mut always_failing_rename());
+
+        assert!(result.is_err(), "replacement must report failure");
+        assert!(
+            target.exists(),
+            "D2: the original file was destroyed by the replacement attempt"
+        );
+        assert_eq!(
+            fs::read_to_string(&target).expect("must read target"),
+            "ORIGINAL",
+            "the previous revision must survive a failed replacement"
+        );
+
+        let parent = target.parent().expect("must have parent");
+        fs::remove_dir_all(parent).expect("must remove temp directory");
+    }
+
+    #[test]
+    fn failed_replacement_leaves_a_readable_version_on_disk() {
+        let target = temp_file_path("d2-loss", "source.js");
+        fs::write(&target, "ORIGINAL").expect("must seed target");
+
+        let error = atomic_write_string_inner(
+            &target,
+            "REPLACEMENT",
+            None,
+            false,
+            &mut always_failing_rename(),
+        )
+        .expect_err("a failing rename must surface as an error");
+
+        let original_survived =
+            target.exists() && fs::read_to_string(&target).ok().as_deref() == Some("ORIGINAL");
+
+        let parent = target.parent().expect("must have parent");
+        let prefix = ".source.js.cmtmp-";
+        let preserved: Vec<_> = fs::read_dir(parent)
+            .expect("must read parent")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
+            .collect();
+        let replacement_recoverable = preserved
+            .iter()
+            .any(|entry| fs::read_to_string(entry.path()).ok().as_deref() == Some("REPLACEMENT"));
+
+        assert!(
+            original_survived || replacement_recoverable,
+            "D2: both the previous revision and the replacement content were              destroyed. error was: {error}"
+        );
+        assert!(
+            original_survived,
+            "the previous revision must remain in place when replacement fails"
+        );
+
+        fs::remove_dir_all(parent).expect("must remove temp directory");
     }
 
     #[test]
