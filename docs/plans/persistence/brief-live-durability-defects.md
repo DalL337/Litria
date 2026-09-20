@@ -301,6 +301,28 @@ then the fix, then the repro failing to reproduce.
 | **S4** | Truthful FSM outcomes (D5) | Force a `db_*` write to fail during a piece move; reopen the project | Result distinguishes confirmed filesystem effect from dispatched persistence; divergence is visible rather than silent |
 | **S5** | Guard + docs | — | Guard fails on a direct `invoke('db_…')`; `Orchestration.md` records the epoch contract; the three inaccurate source comments are corrected |
 
+### Delivery record (2026-09-19)
+
+All five delivered the same day. Order was S2 first — the probe in §D1's erratum
+demoted D1 from Critical to High, which put D2's total document loss ahead of it.
+
+| Slice | PR | Note |
+|---|---|---|
+| S2 | #57 | Repro entered a branch the suite had never reached; the failing assertion printed the predicted "both the previous revision and the replacement content were destroyed". |
+| S1 | #58 | The regression test refuted decision 2 as written — see the erratum on that decision. `activeInstanceIdRef` removed; three inaccurate source comments corrected. |
+| S3 | #59 | Two earlier drafts of the probes passed **vacuously** and were replaced. Two existing test stubs were found to be modelling a failing writer. |
+| S4 | #60 | The `ok()` sites are classified by a flag set next to each dispatch, not by hand: one site sits after a conditional `dbDeleteGroup` and a static reading would have been wrong. |
+| S5 | #61 | Both guard failure modes exercised before wiring it in. Seven guards now. |
+
+What the reproduction gate actually bought, since this was its first sustained use:
+it corrected D1's severity before any code was written, then caught a fix that would
+have shipped green and unfenced, then caught three probes of my own that could not
+fail. Every one of those would have passed a review of the design.
+
+Still owed: owner live acceptance and a release build. Decision 4's expected behavior
+change — replacement failures that the old fallback swallowed now surfacing as save
+errors — has not been exercised on a real Windows machine.
+
 S1 and S2 are independent and can run in parallel. S3 and S4 both touch write-result
 plumbing and should be sequential. S5 lands last so the guard codifies what shipped.
 

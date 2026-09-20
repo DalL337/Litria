@@ -2,6 +2,13 @@
 
 ## Status
 
+Delivered (2026-09-19 — five slices as PRs #57 (S2, non-destructive replace),
+#58 (S1, workspace epoch fence), #59 (S3, honest writers), #60 (S4, truthful
+manager outcomes) and #61 (S5, db-chokepoint guard). Owner live acceptance and
+a release build are still owed; in particular decision 4's expected behavior
+change — replacement failures that the old fallback swallowed now surface as
+save errors — has not been exercised on a real Windows machine.)
+
 Amended (2026-09-19 — Layer 1 probe executed against the real
 `useProjectPersistence` hook before acceptance. D1's ordering claim is confirmed and its
 severity is corrected from Critical to High: the corruption is timing-dependent on a
@@ -86,6 +93,22 @@ in one place. The epoch stamp is applied there, unconditionally.
 A sweep of the current tree finds 53 unawaited persistence writes across 19 files. Fencing
 them individually would be 53 edits and would regress at the 54th. Fencing them at the
 chokepoint is one edit that covers every present and future site.
+
+> **Erratum (2026-09-19, S1):** decision 2 as written is **insufficient on its
+> own**, and the regression test is what found it. A chokepoint stamps AMBIENT
+> state — the epoch current at invoke time — which is correct only when
+> issue-time equals queue-time. That holds for everything issued in the same
+> tick as the user action that caused it, including every fire-and-forget
+> `db*(...).catch(() => {})` write, because the workspace cannot change between
+> the call and the stamp. It is wrong for DEFERRED work: the position outbox is
+> flushed from a React effect cleanup that runs after the incoming project has
+> opened, so it stamped the INCOMING workspace's own epoch and passed the fence
+> cleanly (`ws-4 !== ws-3` in the failing assertion). Shipping decision 2 alone
+> would have delivered a fence that did not fence D1. Deferred callers
+> therefore record the epoch when work is QUEUED and present it explicitly —
+> `pendingEpochRef` in the outbox, carried through
+> `dbBatchMovePieces(moves, { epoch })` and reused by its retries. The general
+> rule: **any queue carries its own identity; a chokepoint cannot supply it.**
 
 ### 3. A fenced write is not a failed write
 
