@@ -145,9 +145,13 @@ identity is a migration; preventing new instances is free.)
   `crypto.randomUUID()` in the webview, the `uuid` crate in Rust — never
   AUTOINCREMENT/rowid, timestamps, or process-local counters.
 - Existing integer ids (pieces, connections) stay as-is: a known,
-  deliberately deferred pre-sync migration (paths recorded in the journal —
-  migrate to text UUIDs, or qualify with `project.instance_id` at the sync
-  boundary). Do not extend the pattern to new tables or object kinds.
+  deliberately deferred pre-sync migration — migrate to text ids, or qualify
+  with `project.instance_id` at the sync boundary. Do not extend the pattern
+  to new tables or object kinds. The shape that migration should take, and
+  why, is captured in
+  [brief-piece-identity](../../docs/plans/ideas/brief-piece-identity.md);
+  the origin journal it grew from is gitignored, so the brief is the
+  in-repo record.
 - New workspace.db tables/columns declare which side of the future sync
   line they live on — shared project truth (pieces, groups, group_pieces,
   connections) vs per-user/per-machine (viewport, editor_state,
