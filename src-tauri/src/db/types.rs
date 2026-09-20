@@ -93,6 +93,11 @@ pub(crate) struct ProjectState {
     /// canvas is viewable but every persistence write will fail with `db.read_only`.
     #[serde(default)]
     pub read_only: bool,
+    /// ADR-032 decision 1: identity of the workspace this state was read from.
+    /// The frontend presents it on every later `db_*` call so a request issued
+    /// for one workspace cannot execute against another.
+    #[serde(default)]
+    pub workspace_epoch: String,
 }
 
 // ---------------------------------------------------------------------------

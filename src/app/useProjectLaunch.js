@@ -284,8 +284,14 @@ export function useProjectLaunch({
     // next (project switch or launcher).
     clearHistory?.();
     // Close the SQLite connection cleanly. Rust drops the Connection
-    // and releases the WAL lock. Any in-flight debounced writes from
-    // useProjectPersistence will fail harmlessly (the DB is gone).
+    // and releases the WAL lock.
+    //
+    // ADR-032 D1 corrects what this comment used to claim. In-flight writes do
+    // NOT reliably "fail harmlessly because the DB is gone": the next project
+    // opens immediately after this line, and anything issued from a React
+    // effect cleanup runs after that — so it found a live connection belonging
+    // to the INCOMING project. The workspace epoch, not this ordering, is what
+    // makes a late write safe now.
     try {
       await dbCloseProject();
     } catch (e) {

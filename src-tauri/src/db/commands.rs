@@ -100,7 +100,7 @@ pub(crate) fn db_bootstrap_project(
         ));
     }
 
-    let read_only = db::open_workspace_db(project_root)?;
+    let (read_only, workspace_epoch) = db::open_workspace_db(project_root)?;
 
     // Insert project metadata
     let now = chrono::Utc::now().to_rfc3339();
@@ -110,7 +110,7 @@ pub(crate) fn db_bootstrap_project(
     // Clear-then-insert inside one transaction: the table is single-row by
     // construction (ADR-026 decision 2, audit H5), and a death mid-way leaves
     // no row rather than a half-written one.
-    db::with_workspace_db(|conn| {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         let tx = conn
             .unchecked_transaction()
             .map_err(db::DbError::sqlite("Failed to begin project bootstrap"))?;
@@ -148,6 +148,7 @@ pub(crate) fn db_bootstrap_project(
             created_at: now.clone(),
             updated_at: now,
         },
+        workspace_epoch,
         pieces: vec![],
         groups: vec![],
         group_pieces: vec![],
@@ -176,10 +177,11 @@ pub(crate) fn db_open_project(path: String) -> CommandResult<ProjectState> {
     // 3. Neither exists → fresh bootstrap (open-any-folder flow)
 
     if db::workspace_db_exists(project_root) {
-        let read_only = db::open_workspace_db(project_root)?;
-        if project_row_count()? > 0 {
-            let mut state = load_full_state()?;
+        let (read_only, epoch) = db::open_workspace_db(project_root)?;
+        if project_row_count(&epoch)? > 0 {
+            let mut state = load_full_state(&epoch)?;
             state.read_only = read_only;
+            state.workspace_epoch = epoch;
             let _ = app_db::register_project(&path, &state.project.name, state.project.framework.as_deref());
             return Ok(state);
         }
@@ -188,12 +190,15 @@ pub(crate) fn db_open_project(path: String) -> CommandResult<ProjectState> {
         // error (ADR-026 decision 2, audit S2/T9): an older build died between
         // creating the file and inserting the row. Re-run bootstrap (it only
         // touches `project`), then return whatever rows the file already holds.
+        // Bootstrap reopens the workspace, so it mints a FRESH epoch — the one
+        // above is dead from here and must not be reused to read state back.
         db::close_workspace_db()?;
         let name = read_litria_toml_name(project_root)
             .unwrap_or_else(|| folder_name(project_root));
-        db_bootstrap_project(path, name, None, None, None)?;
-        let mut state = load_full_state()?;
+        let bootstrapped = db_bootstrap_project(path, name, None, None, None)?;
+        let mut state = load_full_state(&bootstrapped.workspace_epoch)?;
         state.read_only = read_only;
+        state.workspace_epoch = bootstrapped.workspace_epoch;
         return Ok(state);
     }
 
@@ -221,6 +226,7 @@ pub(crate) fn db_close_project() -> CommandResult<()> {
 
 #[tauri::command]
 pub(crate) fn db_create_piece(
+    workspace_epoch: String,
     file_path: String,
     label: String,
     x: f64,
@@ -229,7 +235,7 @@ pub(crate) fn db_create_piece(
     scale: Option<f64>,
     is_hidden: Option<bool>,
 ) -> CommandResult<i64> {
-    db::with_workspace_db(|conn| {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "INSERT INTO pieces (file_path, label, x, y, scale, color, is_hidden)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -250,8 +256,10 @@ pub(crate) fn db_create_piece(
 }
 
 #[tauri::command]
-pub(crate) fn db_create_pieces_batch(pieces: Vec<PieceInput>) -> CommandResult<Vec<i64>> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_create_pieces_batch(
+    workspace_epoch: String,
+    pieces: Vec<PieceInput>,) -> CommandResult<Vec<i64>> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         let mut ids = Vec::with_capacity(pieces.len());
         let tx = conn
             .unchecked_transaction()
@@ -286,8 +294,10 @@ pub(crate) fn db_create_pieces_batch(pieces: Vec<PieceInput>) -> CommandResult<V
 }
 
 #[tauri::command]
-pub(crate) fn db_batch_move_pieces(moves: Vec<PieceMove>) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_batch_move_pieces(
+    workspace_epoch: String,
+    moves: Vec<PieceMove>,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         let tx = conn
             .unchecked_transaction()
             .map_err(db::DbError::sqlite("Failed to begin transaction"))?;
@@ -309,8 +319,10 @@ pub(crate) fn db_batch_move_pieces(moves: Vec<PieceMove>) -> CommandResult<()> {
 }
 
 #[tauri::command]
-pub(crate) fn db_update_piece(id: i64, fields: PieceUpdate) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_update_piece(
+    workspace_epoch: String,
+    id: i64, fields: PieceUpdate,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         let mut sets = Vec::new();
         let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -362,8 +374,10 @@ pub(crate) fn db_update_piece(id: i64, fields: PieceUpdate) -> CommandResult<()>
 }
 
 #[tauri::command]
-pub(crate) fn db_delete_piece(id: i64) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_delete_piece(
+    workspace_epoch: String,
+    id: i64,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute("DELETE FROM pieces WHERE id = ?1", [id])
             .map_err(db::DbError::sqlite(format!("Failed to delete piece {id}")))?;
         Ok(())
@@ -376,8 +390,10 @@ pub(crate) fn db_delete_piece(id: i64) -> CommandResult<()> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tauri::command]
-pub(crate) fn db_create_group(group: GroupInput) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_create_group(
+    workspace_epoch: String,
+    group: GroupInput,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "INSERT INTO groups (id, name, folder_path, is_collapsed, parent_id, theme_id, color, seed_x, seed_y, seed_w, seed_h)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -402,8 +418,10 @@ pub(crate) fn db_create_group(group: GroupInput) -> CommandResult<()> {
 }
 
 #[tauri::command]
-pub(crate) fn db_update_group(id: String, fields: GroupUpdate) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_update_group(
+    workspace_epoch: String,
+    id: String, fields: GroupUpdate,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         let mut sets = Vec::new();
         let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -457,8 +475,10 @@ pub(crate) fn db_update_group(id: String, fields: GroupUpdate) -> CommandResult<
 }
 
 #[tauri::command]
-pub(crate) fn db_delete_group(id: String) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_delete_group(
+    workspace_epoch: String,
+    id: String,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute("DELETE FROM groups WHERE id = ?1", [&id])
             .map_err(db::DbError::sqlite(format!("Failed to delete group {id}")))?;
         Ok(())
@@ -467,8 +487,10 @@ pub(crate) fn db_delete_group(id: String) -> CommandResult<()> {
 }
 
 #[tauri::command]
-pub(crate) fn db_add_piece_to_group(group_id: String, piece_id: i64) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_add_piece_to_group(
+    workspace_epoch: String,
+    group_id: String, piece_id: i64,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "INSERT OR IGNORE INTO group_pieces (group_id, piece_id) VALUES (?1, ?2)",
             params![group_id, piece_id],
@@ -480,8 +502,10 @@ pub(crate) fn db_add_piece_to_group(group_id: String, piece_id: i64) -> CommandR
 }
 
 #[tauri::command]
-pub(crate) fn db_remove_piece_from_group(group_id: String, piece_id: i64) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_remove_piece_from_group(
+    workspace_epoch: String,
+    group_id: String, piece_id: i64,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "DELETE FROM group_pieces WHERE group_id = ?1 AND piece_id = ?2",
             params![group_id, piece_id],
@@ -498,13 +522,14 @@ pub(crate) fn db_remove_piece_from_group(group_id: String, piece_id: i64) -> Com
 
 #[tauri::command]
 pub(crate) fn db_create_connection(
+    workspace_epoch: String,
     from_piece_id: i64,
     to_piece_id: i64,
     source_side: Option<String>,
     target_side: Option<String>,
     r#type: Option<String>,
 ) -> CommandResult<i64> {
-    db::with_workspace_db(|conn| {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "INSERT INTO connections (from_piece_id, to_piece_id, source_side, target_side, type)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -521,8 +546,10 @@ pub(crate) fn db_create_connection(
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tauri::command]
-pub(crate) fn db_save_editor_state(key: String, value: String) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_save_editor_state(
+    workspace_epoch: String,
+    key: String, value: String,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO editor_state (key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -534,8 +561,8 @@ pub(crate) fn db_save_editor_state(key: String, value: String) -> CommandResult<
 }
 
 #[tauri::command]
-pub(crate) fn db_load_editor_state() -> CommandResult<HashMap<String, String>> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_load_editor_state(workspace_epoch: String) -> CommandResult<HashMap<String, String>> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         let mut stmt = conn
             .prepare("SELECT key, value FROM editor_state")
             .map_err(db::DbError::sqlite("Failed to prepare editor state query"))?;
@@ -553,8 +580,10 @@ pub(crate) fn db_load_editor_state() -> CommandResult<HashMap<String, String>> {
 }
 
 #[tauri::command]
-pub(crate) fn db_save_viewport(x: f64, y: f64, scale: f64) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_save_viewport(
+    workspace_epoch: String,
+    x: f64, y: f64, scale: f64,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO viewport (id, x, y, scale) VALUES (1, ?1, ?2, ?3)",
             params![x, y, scale],
@@ -566,8 +595,10 @@ pub(crate) fn db_save_viewport(x: f64, y: f64, scale: f64) -> CommandResult<()> 
 }
 
 #[tauri::command]
-pub(crate) fn db_add_hidden_path(path: String) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_add_hidden_path(
+    workspace_epoch: String,
+    path: String,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute(
             "INSERT OR IGNORE INTO hidden_paths (path) VALUES (?1)",
             [&path],
@@ -579,8 +610,10 @@ pub(crate) fn db_add_hidden_path(path: String) -> CommandResult<()> {
 }
 
 #[tauri::command]
-pub(crate) fn db_remove_hidden_path(path: String) -> CommandResult<()> {
-    db::with_workspace_db(|conn| {
+pub(crate) fn db_remove_hidden_path(
+    workspace_epoch: String,
+    path: String,) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| {
         conn.execute("DELETE FROM hidden_paths WHERE path = ?1", [&path])
             .map_err(db::DbError::sqlite("Failed to remove hidden path"))?;
         Ok(())
@@ -631,16 +664,16 @@ pub(crate) fn db_load_preferences() -> CommandResult<HashMap<String, String>> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Number of rows in `project` (0 means a half-bootstrapped file).
-fn project_row_count() -> Result<i64, db::DbError> {
-    db::with_workspace_db(|conn| {
+fn project_row_count(workspace_epoch: &str) -> Result<i64, db::DbError> {
+    db::with_workspace_db(workspace_epoch, |conn| {
         conn.query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
             .map_err(db::DbError::sqlite("Failed to count project rows"))
     })
 }
 
 /// Load full project state from the open workspace database.
-fn load_full_state() -> Result<ProjectState, db::DbError> {
-    db::with_workspace_db(|conn| {
+fn load_full_state(workspace_epoch: &str) -> Result<ProjectState, db::DbError> {
+    db::with_workspace_db(workspace_epoch, |conn| {
         // Project metadata
         let project = conn
             .query_row(
@@ -818,6 +851,7 @@ fn load_full_state() -> Result<ProjectState, db::DbError> {
             editor_state,
             hidden_paths,
             viewport,
+            workspace_epoch: workspace_epoch.to_string(),
             // The open path knows the probe result and overwrites this.
             read_only: false,
         })
@@ -1168,8 +1202,8 @@ mod tests {
         dir
     }
 
-    fn project_rows() -> i64 {
-        project_row_count().unwrap()
+    fn project_rows(epoch: &str) -> i64 {
+        project_row_count(epoch).unwrap()
     }
 
     /// Audit T9: the file exists with a full schema but no `project` row.
@@ -1177,8 +1211,8 @@ mod tests {
     fn open_rebuilds_when_project_row_missing() {
         let _serial = db::serial_guard();
         let root = temp_dir("no-project-row");
-        db::open_workspace_db(&root).unwrap();
-        db::with_workspace_db(|conn| {
+        let (_read_only, epoch) = db::open_workspace_db(&root).unwrap();
+        db::with_workspace_db(&epoch, |conn| {
             conn.execute(
                 "INSERT INTO editor_state (key, value) VALUES ('survivor', 'yes')",
                 [],
@@ -1187,7 +1221,7 @@ mod tests {
             .map_err(db::DbError::sqlite("seed"))
         })
         .unwrap();
-        assert_eq!(project_rows(), 0);
+        assert_eq!(project_rows(&epoch), 0);
         db::close_workspace_db().unwrap();
 
         let state = db_open_project(root.to_string_lossy().into_owned())
@@ -1200,7 +1234,10 @@ mod tests {
             Some("yes"),
             "rows the file already held must survive the rebuild"
         );
-        assert_eq!(project_rows(), 1);
+        // The rebuild reopened the workspace, so state carries a FRESH epoch;
+        // the one seeded above is dead and must not be reusable here.
+        assert_ne!(state.workspace_epoch, epoch);
+        assert_eq!(project_rows(&state.workspace_epoch), 1);
         assert!(root.join("litria.toml").is_file());
         db::close_workspace_db().unwrap();
         fs::remove_dir_all(&root).ok();
@@ -1217,8 +1254,8 @@ mod tests {
         let second = db_bootstrap_project(path, "second".into(), None, None, None).unwrap();
         assert_ne!(first.project.instance_id, second.project.instance_id);
 
-        assert_eq!(project_rows(), 1);
-        let name: String = db::with_workspace_db(|conn| {
+        assert_eq!(project_rows(&second.workspace_epoch), 1);
+        let name: String = db::with_workspace_db(&second.workspace_epoch, |conn| {
             conn.query_row("SELECT name FROM project", [], |row| row.get(0))
                 .map_err(db::DbError::sqlite("read"))
         })

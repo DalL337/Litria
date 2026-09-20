@@ -19,6 +19,7 @@ import {
 // for the pill to report twice.
 import { canPersist } from './persistenceNotices.js';
 import { emitPersistenceWriteFailure } from './persistenceFailures.js';
+import { getWorkspaceEpoch } from './dbStorage.js';
 import {
   applySavedPieceBaseline,
   noSaveTargetOutcome,
@@ -80,8 +81,11 @@ export function useProjectPersistence({
   const snapshotTimerRef = useRef(null);
   const viewportTimerRef = useRef(null);
   const hasLoadedPiecesRef = useRef(false);
+  // ADR-032 D1: the workspace the pending moves belong to, captured when the
+  // outbox starts filling. The flush runs from an effect cleanup, after the
+  // NEXT project has opened, so it cannot ask which workspace is current.
+  const pendingEpochRef = useRef(null);
   const hasRestoredEditorSessionRef = useRef(false);
-  const activeInstanceIdRef = useRef(null);
 
   const normalizeId = useCallback((value) => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -169,7 +173,6 @@ export function useProjectPersistence({
 
   useEffect(() => {
     setProjectInstanceId(projectInstance?.instanceId ?? null);
-    activeInstanceIdRef.current = projectInstance?.instanceId ?? null;
     hasRestoredEditorSessionRef.current = false;
   }, [projectInstance?.instanceId, setProjectInstanceId]);
 
@@ -467,9 +470,10 @@ export function useProjectPersistence({
     };
 
     let run;
+    const epoch = pendingEpochRef.current;
     run = flushPositionOutbox({
       pending: pendingMovesRef.current,
-      writeMoves: dbBatchMovePieces,
+      writeMoves: (moves) => dbBatchMovePieces(moves, { epoch }),
       attempt: positionRetryAttemptRef.current,
       scheduleRetry: allowRetry ? scheduleRetry : null,
       retainOnFailure: allowRetry
@@ -512,6 +516,7 @@ export function useProjectPersistence({
     if (!isSeedRun && moves.length > 0) {
       if (pendingMovesRef.current.size === 0) {
         firstPendingAtRef.current = Date.now();
+        pendingEpochRef.current = getWorkspaceEpoch();
       }
       mergeIntoPending(pendingMovesRef.current, moves);
     }
@@ -524,10 +529,17 @@ export function useProjectPersistence({
     return () => clearTimeout(timer);
   }, [pieces, projectInstance?.instanceId, projectInstance?.rootPath, projectInstance?.manifestPath, projectInstance?.readOnly, flushPendingMoves]);
 
-  // Flush on project switch/unmount (best-effort — the workspace DB is still
-  // the outgoing project's at cleanup time) and reset the last-seen map so
+  // Flush on project switch/unmount and reset the last-seen map so
   // the next project's hydration re-seeds instead of diffing against stale
   // entries (piece ids are per-project autoincrement and overlap).
+  //
+  // ADR-032 D1: this cleanup runs during the commit that installs the NEW
+  // project, i.e. AFTER `dbOpenProject` — so the outgoing project's database
+  // is emphatically not the one open here, and before the epoch fence this
+  // flush wrote project A's moves into project B. It is left fire-and-forget
+  // on purpose: the backend now refuses it as `db.workspace_changed`, which
+  // is silent and correct. Whatever the debounce had not yet written is lost,
+  // which is the pre-existing behavior for an unflushed outbox.
   useEffect(() => {
     return () => {
       void flushPendingMoves({ allowRetry: false });
