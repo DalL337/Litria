@@ -31,6 +31,12 @@ src-tauri/resources/.tmp/
 # Research journals (persistent-research-policy.md) — local working notes
 .research/
 
+# Linked worktrees (AGENTS.md §7.1 — branches get their own tree, not the
+# shared one). Each holds a `.git` FILE, so git would otherwise record the
+# folder as a broken gitlink on a `git add -A` — three phantom submodules
+# with no .gitmodules behind them.
+.worktrees/
+
 # Private design docs — never leave this machine.
 # Matched by basename (no leading path) so moving a file between folders can't
 # silently re-expose it — the 2026-03-24 docs reorg did exactly that.
