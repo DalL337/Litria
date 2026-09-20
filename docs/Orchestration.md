@@ -235,6 +235,24 @@ marked below.
 - `ScaffoldTreeDomain` — planned owner of explorer tree state. In practice tree state
   lives with the scaffold drawer presentation. Same bar for revival.
 
+## 2.7 Accepted Domains Awaiting Implementation
+
+- `RunDomain` — accepted 2026-09-16 in
+  [ADR-029](adrs/029-managed-project-runs.md); **planned, not implemented**.
+  Planned module: `src/run/runDomain.js` (`createRunDomain`), with a Tauri
+  adapter and lifecycle hook. Owns target selection, command review, run
+  configuration interactions and the frontend projection of Rust-owned run
+  state. The Rust run service owns actual process lifetime, approvals,
+  output buffering and native supervision. Interactive shell sessions stay
+  with `TerminalDomain`; editor saves and project transitions use injected
+  owning-domain APIs, with no direct cross-domain state writes. App remains
+  a composition shell. Domain dependencies are injected infrastructure and
+  orchestration adapters, with no UI or other-domain implementation imports.
+  `src/run` is not currently in the architecture/contract guard scan lists;
+  [build-plan S1](plans/run-application/run-application-build-plan.md#s1-shared-contracts-and-domain-boundaries)
+  must add and verify that coverage before the domain is activated. The
+  [brief](plans/ideas/brief-run-application.md) owns the detailed design.
+
 ---
 
 # 3. Dependency Rules
