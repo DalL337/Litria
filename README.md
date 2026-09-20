@@ -46,6 +46,8 @@ out of an actual `import` — nothing here is drawn by hand.*
 | **macOS** Intel | `litria_<version>_x64.dmg` |
 | **Linux** x86_64 | `litria_<version>_amd64.AppImage` (portable, no root), or `.deb` / `.rpm` |
 
+### First run (unsigned builds)
+
 Builds are **unsigned**, so your OS will object the first time:
 
 - **Windows** — SmartScreen warns: *More info → Run anyway*.
