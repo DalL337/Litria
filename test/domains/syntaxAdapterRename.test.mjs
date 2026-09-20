@@ -24,6 +24,11 @@ function setupAdapter(diskFiles) {
     writeProjectFile: async (_root, rel, text) => {
       writes.push(rel);
       disk.set(rel, text);
+      // The real writer resolves true on success / false on failure
+      // (src/project/storage.js). Returning nothing modelled a FAILING write,
+      // which went unnoticed while `writeResultText` discarded the result
+      // (ADR-032 D3).
+      return true;
     },
   });
   for (const [rel, text] of disk) {

@@ -130,7 +130,15 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
     }
 
     if (writeProjectFile) {
-      await writeProjectFile(projectRoot, absToRel(absPath), newText);
+      // ADR-032 D3 (decision 5). `writeProjectFile` resolves false on failure
+      // rather than throwing, so the result IS the claim — discarding it made
+      // a failed write indistinguishable from a successful one. This is the
+      // canvas-wire import-stub path and it writes to CLOSED files, where the
+      // user has no editor buffer to notice the absence and no undo. Telling
+      // the syntax domain a file changed when it did not is the second half of
+      // the bug: it would keep serving an import that is not on disk.
+      const written = await writeProjectFile(projectRoot, absToRel(absPath), newText);
+      if (!written) return false;
       syntaxDomain.commands.notifyFileChanged(absPath, newText);
       return true;
     }

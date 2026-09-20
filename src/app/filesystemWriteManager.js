@@ -28,6 +28,7 @@
  */
 import { dbUpdatePiece, dbDeletePiece, dbUpdateGroup, dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup } from '../project/dbStorage.js';
 import { findReservedDeviceSegment } from '../utils/path.js';
+import { emitPersistenceWriteFailure } from '../project/persistenceFailures.js';
 
 /**
  * Reject creation targets that collide with reserved Windows device names
@@ -685,21 +686,42 @@ export function createFilesystemWriteManager(deps) {
         if (stashed) {
           const capturedPath = stashed.path;
           const capturedContent = stashed.content;
+          // ADR-032 D4 (decision 5): both directions used to discard their
+          // result. The piece leaves or returns on the canvas and the scaffold
+          // refreshes either way, so a refused disk operation showed the user a
+          // clean undo over a file that was still missing — or still present.
+          // Failures go to the one persistence surface ADR-027 established.
           extraActions.push({
             label: `Restore file ${capturedPath}`,
-            do: () => {
+            do: async () => {
               // On redo: re-delete the file, then refresh scaffold
               const currentRoot = getRootPath();
-              if (currentRoot) {
-                deleteProjectPath(currentRoot, capturedPath).then(() => bumpScaffoldRefresh());
+              if (!currentRoot) return false;
+              const removed = await deleteProjectPath(currentRoot, capturedPath);
+              bumpScaffoldRefresh();
+              if (!removed) {
+                emitPersistenceWriteFailure({
+                  command: 'fs.delete_redo',
+                  error: { code: 'fs.delete_failed', relativePath: capturedPath,
+                    message: `Could not remove "${capturedPath}" again.` }
+                });
               }
+              return !!removed;
             },
-            undo: () => {
+            undo: async () => {
               // On undo: restore the file from stashed content, then refresh scaffold
               const currentRoot = getRootPath();
-              if (currentRoot && writeProjectFile) {
-                writeProjectFile(currentRoot, capturedPath, capturedContent).then(() => bumpScaffoldRefresh());
+              if (!currentRoot || !writeProjectFile) return false;
+              const restored = await writeProjectFile(currentRoot, capturedPath, capturedContent);
+              bumpScaffoldRefresh();
+              if (!restored) {
+                emitPersistenceWriteFailure({
+                  command: 'fs.delete_undo',
+                  error: { code: 'fs.restore_failed', relativePath: capturedPath,
+                    message: `Could not restore "${capturedPath}" to disk.` }
+                });
               }
+              return !!restored;
             }
           });
           deleteJournal.delete(normalizedPath);
