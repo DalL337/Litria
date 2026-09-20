@@ -214,3 +214,43 @@ test('D4: a delete-undo whose restore succeeds puts the file back', async () => 
 
   assert.equal(disk.get('src/doomed.js'), 'CONTENT', 'the restore path must still work');
 });
+
+// ---------------------------------------------------------------------------
+// D5 — the manager's success value (ADR-032 decision 6)
+// ---------------------------------------------------------------------------
+//
+// `ok()` returned a bare `{ success: true }` after dispatching persistence
+// writes it never awaited (`db*(...).catch(() => {})`). The filesystem effect
+// IS confirmed — it is awaited — but the database write is only in flight, so
+// "success" claimed more than the manager knew. The canvas then shows the new
+// location while the database kept the old one, and the change silently
+// reverts on reopen.
+//
+// The writes stay unawaited on purpose: awaiting them would put a SQLite round
+// trip inside a canvas drag. What changes is the claim, not the concurrency.
+
+test('D5: an operation that dispatched persistence says so', async () => {
+  const { manager } = setupManager({ restoreSucceeds: true });
+
+  const result = await manager.deleteFile('src/doomed.js');
+
+  assert.equal(result.success, true, 'the filesystem effect is confirmed');
+  assert.equal(
+    result.persistence,
+    'dispatched',
+    'D5: success claimed more than the manager knows — the database write is only in flight',
+  );
+});
+
+test('D5: an operation with no persistence to dispatch says that instead', async () => {
+  const { manager } = setupManager({ restoreSucceeds: true });
+
+  const result = await manager.createDirectory('src/newdir');
+
+  assert.equal(result.success, true);
+  assert.equal(
+    result.persistence,
+    'none',
+    'a directory creation persists nothing, and should not imply it did',
+  );
+});
