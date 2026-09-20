@@ -21,6 +21,18 @@ for people who think visually and code seriously. Whether you're mapping out a
 new project, teaching someone how programs connect, or just tired of losing the 
 big picture inside a file tree.
 
+![The Litria canvas: source files as nodes, a folder group, and import wires routed between them](img/screenshot-canvas.png)
+
+*Every node is a real file. The dashed group is a real folder. Every wire was read
+out of an actual `import` — nothing here is drawn by hand.*
+
+### The same project, two other ways
+
+| | |
+|---|---|
+| ![A file open in the editor beside the canvas](img/screenshot-editor.png) | ![The scaffold drawer listing the project's files beside the canvas](img/screenshot-scaffold.png) |
+| **Open a node and it's just code.** A full editor with language-server support — the canvas keeps the file you are editing in view. | **The file tree is still there.** Add nodes and groups, or hide files from the canvas without touching disk. |
+
 ---
 
 ## Download
