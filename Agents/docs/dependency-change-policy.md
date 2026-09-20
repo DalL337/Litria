@@ -81,8 +81,13 @@ verify their contract with shared cases rather than independent assumptions.
 
 ## Rule 4 — Exercise Affected Recipes
 
-Before adding, expanding, or changing a support claim, validate the affected
-recipes in disposable fixtures under the applicable security rules:
+Before completing a dependency, external-tool, or recipe change, or adding
+or expanding a support claim, validate affected execution paths under the
+applicable security rules. For dependencies used only by Litria, exercise
+the affected application or build-tool integration alongside the standard
+checks. Generated-project checks apply when those recipes are affected.
+
+For generated-project recipes, use disposable fixtures and:
 
 1. Execute the real scaffold command/blueprint with the recorded tool and
    manager versions. Check both its exit/result and whether expected files
