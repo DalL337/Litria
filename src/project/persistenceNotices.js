@@ -28,6 +28,10 @@ export const READ_ONLY_PILL_TEXT = "Read-only workspace — layout changes won't
 export const DB_CODE_READ_ONLY = 'db.read_only';
 export const DB_CODE_BUSY = 'db.busy';
 export const DB_CODE_CORRUPT = 'db.corrupt';
+/** ADR-032 decision 3: a request for a workspace that is no longer open. A
+ *  correctly fenced write, not a failed one — `dbStorage` filters it out
+ *  before the failure observer, so it never reaches a notice. */
+export const CODE_WORKSPACE_CHANGED = 'db.workspace_changed';
 
 // Every mutating command in src/project/dbStorage.js starts with one of
 // these verbs; reads (db_load_*, db_list_*) and the lifecycle trio

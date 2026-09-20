@@ -8,6 +8,7 @@
 import { crumb } from '../crash/breadcrumbs.js';
 import { isPersistenceWrite } from './persistenceNotices.js';
 import { emitPersistenceWriteFailure } from './persistenceFailures.js';
+import { CODE_WORKSPACE_CHANGED } from './persistenceNotices.js';
 
 // Write-failure observer (ADR-026 decision 3): every persistence write in the
 // app passes through `invokeDb`, so this is the one place a failed write can
@@ -38,16 +39,57 @@ const CRUMB_KEEP = new Set([
   'db_delete_group',
 ]);
 
-async function invokeDb(command, payload = {}) {
+// ADR-032 decisions 1-2: the workspace epoch the backend minted for the open
+// workspace. Held here because `invokeDb` is the one funnel every db_* call
+// passes through — the same property ADR-026 decision 3 used for the failure
+// observer. Stamping it here fences every caller at once, including the ~53
+// unawaited persistence writes that no per-call-site fix would ever reach.
+let workspaceEpoch = null;
+
+function setWorkspaceEpoch(epoch) {
+  workspaceEpoch = typeof epoch === 'string' && epoch ? epoch : null;
+}
+
+/** The epoch currently presented to the backend; null before the first open. */
+export function getWorkspaceEpoch() {
+  return workspaceEpoch;
+}
+
+export function isWorkspaceChanged(error) {
+  return !!error && typeof error === 'object' && error.code === CODE_WORKSPACE_CHANGED;
+}
+
+async function invokeDb(command, payload = {}, { epoch } = {}) {
   const invoke = await getInvoke();
   if (!invoke) throw new Error('Tauri invoke bridge is unavailable.');
+  // Stamped unconditionally. Workspace-scoped commands validate it; app-scoped
+  // ones (recent projects, preferences) ignore the extra field. A command that
+  // arrives with a stale or absent epoch is refused by Rust before it can
+  // touch a connection.
+  //
+  // `epoch` overrides the current workspace for DEFERRED work. The default is
+  // right for anything issued in the same tick as the user action that caused
+  // it — including every fire-and-forget `db*().catch(() => {})` — because the
+  // workspace cannot change between the call and the stamp. It is WRONG for
+  // work queued earlier and flushed later: the position outbox is drained from
+  // a React effect cleanup that runs after the incoming project has already
+  // opened, so the current epoch is the wrong workspace's by then. Such callers
+  // record the epoch when the work is queued and present it here (ADR-032 D1).
+  const effective = epoch === undefined ? workspaceEpoch : epoch;
+  const stamped = effective === null || effective === undefined
+    ? payload
+    : { ...payload, workspaceEpoch: effective };
   try {
-    const result = await invoke(command, payload);
+    const result = await invoke(command, stamped);
     if (CRUMB_KEEP.has(command)) crumb('command', `${command}:ok`);
     return result;
   } catch (error) {
     if (CRUMB_KEEP.has(command)) crumb('command', `${command}:err`);
-    if (isPersistenceWrite(command)) {
+    // ADR-032 decision 3: a fenced write is not a failed write. The workspace
+    // it addressed is gone, so refusing it is correct behavior, not a
+    // persistence problem — surfacing it would train users to ignore a notice
+    // that exists to be believed. It stays in the breadcrumb ring.
+    if (isPersistenceWrite(command) && !isWorkspaceChanged(error)) {
       emitPersistenceWriteFailure({ command, error });
     }
     throw error;
@@ -60,17 +102,27 @@ async function invokeDb(command, payload = {}) {
 
 /** Open a project (handles returning, migration, and bootstrap). Returns ProjectState. */
 export async function dbOpenProject(path) {
-  return invokeDb('db_open_project', { path });
+  const state = await invokeDb('db_open_project', { path });
+  setWorkspaceEpoch(state?.workspaceEpoch);
+  return state;
 }
 
 /** Bootstrap a new project. Returns ProjectState.
  *  environmentPython: requires-python floor (e.g. "3.13") → written into
  *  litria.toml's `[environment]` block (ADR-020). */
 export async function dbBootstrapProject(path, name, language = null, framework = null, environmentPython = null) {
-  return invokeDb('db_bootstrap_project', { path, name, language, framework, environmentPython });
+  const state = await invokeDb('db_bootstrap_project', { path, name, language, framework, environmentPython });
+  setWorkspaceEpoch(state?.workspaceEpoch);
+  return state;
 }
 
-/** Close the currently open project. */
+/** Close the currently open project.
+ *
+ *  The epoch is deliberately NOT cleared here. A write still in flight for the
+ *  closed workspace should be refused as `db.workspace_changed` — silent, and
+ *  the honest description of what happened. Dropping the stamp instead would
+ *  make it a malformed request, which is both a worse error and one that the
+ *  failure observer would surface. The next open overwrites it. */
 export async function dbCloseProject() {
   return invokeDb('db_close_project');
 }
@@ -90,8 +142,10 @@ export async function dbCreatePiecesBatch(pieces) {
 }
 
 /** Batch move pieces (update x, y). */
-export async function dbBatchMovePieces(moves) {
-  return invokeDb('db_batch_move_pieces', { moves });
+export async function dbBatchMovePieces(moves, { epoch } = {}) {
+  // Deferred by design (the position outbox), so the caller declares which
+  // workspace the moves were computed for — see `invokeDb`.
+  return invokeDb('db_batch_move_pieces', { moves }, { epoch });
 }
 
 /** Update specific fields of a piece. */

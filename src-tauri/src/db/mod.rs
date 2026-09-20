@@ -7,6 +7,7 @@ use crate::errors::CommandError;
 use rusqlite::{Connection, DatabaseName, ErrorCode, OpenFlags};
 use std::fmt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 // This file is the SQLite adapter (ADR-026 decision 8): open flags, the
@@ -26,6 +27,10 @@ pub(crate) const CORRUPT_RECOVERY_HINT: &str = "Move or delete the project's .li
 pub(crate) const CODE_CORRUPT: &str = "db.corrupt";
 pub(crate) const CODE_READ_ONLY: &str = "db.read_only";
 pub(crate) const CODE_BUSY: &str = "db.busy";
+/// ADR-032 decision 3: a request aimed at a workspace that is no longer open.
+/// This is a correctly FENCED write, not a failed one — the frontend must not
+/// surface it as a persistence failure.
+pub(crate) const CODE_WORKSPACE_CHANGED: &str = "db.workspace_changed";
 pub(crate) const CODE_SQLITE: &str = "db.sqlite";
 
 /// A failure on the database path. SQLite failures keep their
@@ -40,6 +45,12 @@ pub(crate) enum DbError {
     /// Integrity failure detected by Litria itself (zero-length file, failed
     /// `quick_check`). Always maps to `db.corrupt`.
     Corrupt(String),
+    /// ADR-032 decision 1: the caller addressed a different workspace than the
+    /// one currently open. Carries the expected and actual epochs.
+    WorkspaceChanged {
+        expected: String,
+        open: Option<String>,
+    },
     /// Anything else on the database path (I/O, lock poisoning, "no project open").
     Other(String),
 }
@@ -63,6 +74,11 @@ impl fmt::Display for DbError {
         match self {
             DbError::Sqlite { context, source } => write!(f, "{context}: {source}"),
             DbError::Corrupt(text) | DbError::Other(text) => f.write_str(text),
+            DbError::WorkspaceChanged { expected, open } => write!(
+                f,
+                "Request was issued for workspace {expected}, but {} is open.",
+                open.as_deref().unwrap_or("no workspace")
+            ),
         }
     }
 }
@@ -73,6 +89,9 @@ impl From<DbError> for CommandError {
             DbError::Sqlite { context, source } => classify_sqlite(&context, &source),
             DbError::Corrupt(detail) => corrupt(&detail),
             DbError::Other(text) => CommandError::from_text(text),
+            ref changed @ DbError::WorkspaceChanged { .. } => {
+                CommandError::conflict(CODE_WORKSPACE_CHANGED, changed.to_string())
+            }
         }
     }
 }
@@ -169,11 +188,38 @@ fn quick_check(conn: &Connection) -> Result<(), DbError> {
     }
 }
 
-/// Holds the currently open per-project workspace database connection.
-static PROJECT_DB: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
+/// Holds the currently open per-project workspace database connection, tagged
+/// with the epoch minted when it was opened (ADR-032 decision 1).
+///
+/// The epoch is what gives the connection an identity. Without it every
+/// `db_*` command resolves to "whatever is open right now", so a request
+/// issued for project A — a queued write, an unawaited promise, a React
+/// effect cleanup that runs after the switch — executes against project B.
+/// Piece ids are per-workspace autoincrement and overlap, so that lands on
+/// real rows.
+static PROJECT_DB: OnceLock<Mutex<Option<OpenWorkspace>>> = OnceLock::new();
 
-fn project_db_lock() -> &'static Mutex<Option<Connection>> {
+struct OpenWorkspace {
+    epoch: String,
+    conn: Connection,
+}
+
+fn project_db_lock() -> &'static Mutex<Option<OpenWorkspace>> {
     PROJECT_DB.get_or_init(|| Mutex::new(None))
+}
+
+/// Mint an epoch for a newly opened workspace.
+///
+/// A monotonic counter is sufficient and deliberately dependency-free: the
+/// epoch is process-lifetime state, never persisted and never compared across
+/// processes (multi-process workspace ownership is out of scope — ADR-032
+/// costs). It is not a persistent entity id, so implementation-policy Rule 9's
+/// UUID requirement does not apply. Crucially it still distinguishes a
+/// close/reopen of the SAME folder, which a path hash would not.
+static EPOCH_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn mint_epoch() -> String {
+    format!("ws-{}", EPOCH_COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
 /// Open a workspace database at `.litria/workspace.db` inside the given
@@ -182,7 +228,7 @@ fn project_db_lock() -> &'static Mutex<Option<Connection>> {
 /// Returns whether the database opened read-only (ADR-026 decision 3): a
 /// read-only file is still opened so the canvas can be viewed; the caller
 /// reports the flag and every later write fails with `db.read_only`.
-pub(crate) fn open_workspace_db(project_root: &Path) -> Result<bool, DbError> {
+pub(crate) fn open_workspace_db(project_root: &Path) -> Result<(bool, String), DbError> {
     let litria_dir = project_root.join(".litria");
     if !litria_dir.exists() {
         std::fs::create_dir_all(&litria_dir)
@@ -204,12 +250,18 @@ pub(crate) fn open_workspace_db(project_root: &Path) -> Result<bool, DbError> {
         .is_readonly(DatabaseName::Main)
         .map_err(DbError::sqlite("Failed to probe workspace writability"))?;
 
+    // The epoch is minted and published under the SAME lock that installs the
+    // connection, so no request can observe a connection without its identity.
+    let epoch = mint_epoch();
     let lock = project_db_lock();
     let mut guard = lock
         .lock()
         .map_err(|_| "Project database lock poisoned.".to_string())?;
-    *guard = Some(conn);
-    Ok(read_only)
+    *guard = Some(OpenWorkspace {
+        epoch: epoch.clone(),
+        conn,
+    });
+    Ok((read_only, epoch))
 }
 
 /// Close the currently open workspace database.
@@ -222,9 +274,15 @@ pub(crate) fn close_workspace_db() -> Result<(), String> {
     Ok(())
 }
 
-/// Execute a closure with an exclusive reference to the open workspace database.
-/// Returns an error if no project is open.
-pub(crate) fn with_workspace_db<T, F>(f: F) -> Result<T, DbError>
+/// Execute a closure against the workspace the caller addressed.
+///
+/// ADR-032 decision 1: `expected` is the epoch the caller believes is open.
+/// The comparison happens under the same lock that hands out the connection,
+/// so a request for a workspace that has since been closed or replaced can
+/// never reach the wrong database. Rust owns this check because the stale
+/// notion of "the current project" lives in the frontend — asking that layer
+/// to detect its own staleness is the assumption that produced the defect.
+pub(crate) fn with_workspace_db<T, F>(expected: &str, f: F) -> Result<T, DbError>
 where
     F: FnOnce(&Connection) -> Result<T, DbError>,
 {
@@ -233,8 +291,15 @@ where
         .lock()
         .map_err(|_| "Project database lock poisoned.".to_string())?;
     match guard.as_ref() {
-        Some(conn) => f(conn),
-        None => Err(DbError::Other("No project is currently open.".to_string())),
+        Some(open) if open.epoch == expected => f(&open.conn),
+        Some(open) => Err(DbError::WorkspaceChanged {
+            expected: expected.to_string(),
+            open: Some(open.epoch.clone()),
+        }),
+        None => Err(DbError::WorkspaceChanged {
+            expected: expected.to_string(),
+            open: None,
+        }),
     }
 }
 
@@ -278,7 +343,7 @@ mod tests {
     /// Create a fresh workspace on disk and release it (checkpoints the WAL
     /// so the main file holds every page).
     fn create_and_close(root: &Path) {
-        let read_only = open_workspace_db(root).expect("fresh open");
+        let (read_only, _epoch) = open_workspace_db(root).expect("fresh open");
         assert!(!read_only);
         close_workspace_db().unwrap();
     }
@@ -399,6 +464,92 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    // ── ADR-032 D1: the workspace epoch fence ──────────────────────────────
+
+    #[test]
+    fn a_request_for_a_closed_workspace_is_fenced() {
+        let _serial = serial_guard();
+        let root = temp_dir("fence-closed");
+        let (_read_only, epoch) = open_workspace_db(&root).expect("fresh open");
+        close_workspace_db().unwrap();
+
+        let err = with_workspace_db(&epoch, |_conn| Ok(()))
+            .expect_err("a request for a closed workspace must not execute");
+        assert_eq!(command_error(err).code(), CODE_WORKSPACE_CHANGED);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// The D1 shape: work issued for project A arriving after B is open.
+    #[test]
+    fn a_request_for_the_previous_workspace_never_reaches_the_new_one() {
+        let _serial = serial_guard();
+        let root_a = temp_dir("fence-a");
+        let root_b = temp_dir("fence-b");
+
+        let (_ro_a, epoch_a) = open_workspace_db(&root_a).expect("open A");
+        with_workspace_db(&epoch_a, |conn| {
+            conn.execute(
+                "INSERT INTO editor_state (key, value) VALUES ('owner', 'A')",
+                [],
+            )
+            .map(|_| ())
+            .map_err(DbError::sqlite("seed A"))
+        })
+        .unwrap();
+        close_workspace_db().unwrap();
+
+        let (_ro_b, epoch_b) = open_workspace_db(&root_b).expect("open B");
+        assert_ne!(epoch_a, epoch_b, "each open mints its own epoch");
+
+        // A's epoch is now stale. Without the fence this write would land in B.
+        let err = with_workspace_db(&epoch_a, |conn| {
+            conn.execute(
+                "INSERT INTO editor_state (key, value) VALUES ('owner', 'A-LEAKED')",
+                [],
+            )
+            .map(|_| ())
+            .map_err(DbError::sqlite("stale write"))
+        })
+        .expect_err("a stale request must be refused");
+        assert_eq!(command_error(err).code(), CODE_WORKSPACE_CHANGED);
+
+        let leaked: i64 = with_workspace_db(&epoch_b, |conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM editor_state WHERE key = 'owner'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(DbError::sqlite("count B"))
+        })
+        .unwrap();
+        assert_eq!(leaked, 0, "D1: project A's write reached project B");
+
+        close_workspace_db().unwrap();
+        fs::remove_dir_all(&root_a).ok();
+        fs::remove_dir_all(&root_b).ok();
+    }
+
+    /// A close/reopen of the SAME folder must not revive the old epoch — the
+    /// reason the epoch is a minted token rather than a path or a row id.
+    #[test]
+    fn reopening_the_same_workspace_mints_a_new_epoch() {
+        let _serial = serial_guard();
+        let root = temp_dir("fence-reopen");
+        let (_ro_first, first) = open_workspace_db(&root).expect("first open");
+        close_workspace_db().unwrap();
+        let (_ro_second, second) = open_workspace_db(&root).expect("second open");
+
+        assert_ne!(first, second);
+        let err = with_workspace_db(&first, |_conn| Ok(()))
+            .expect_err("the previous session's epoch must stay dead");
+        assert_eq!(command_error(err).code(), CODE_WORKSPACE_CHANGED);
+        with_workspace_db(&second, |_conn| Ok(())).expect("the current epoch works");
+
+        close_workspace_db().unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn open_reports_read_only() {
         let _serial = serial_guard();
@@ -409,10 +560,10 @@ mod tests {
         perms.set_readonly(true);
         fs::set_permissions(&path, perms).unwrap();
 
-        let read_only = open_workspace_db(&root).expect("a read-only file still opens");
+        let (read_only, epoch) = open_workspace_db(&root).expect("a read-only file still opens");
         assert!(read_only, "writability probe must report read-only");
 
-        let err = with_workspace_db(|conn| {
+        let err = with_workspace_db(&epoch, |conn| {
             conn.execute(
                 "INSERT INTO editor_state (key, value) VALUES ('probe', '1')",
                 [],
