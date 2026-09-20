@@ -53,12 +53,12 @@ somewhere more precise:
 > **The tail is the identity, so the tail is the key. The prefix is a rendering concern.**
 
 ```
-id        = a3f2c9e1d4            opaque, minted at creation, never recomputed
+id        = 7M3QX9K2VB4TZH0N      opaque, minted at creation, never recomputed (see 3a)
 file_path = src/auth/session.js   already exists, already current
 label     = session.js            already exists, already current
 ```
 
-A reader that wants `session_a3f2c9e1` composes it at **read time** from `label` and `id`.
+A reader that wants `session_7M3QX9K2` composes it at **read time** from `label` and `id`.
 
 This keeps everything the readable-id idea was for — a row, a log line or a diagnostics
 panel says what it is at a glance, instead of showing a bare opaque token — while the key
@@ -85,13 +85,82 @@ rename (truncated to a fixed length so the recalculation is deterministic). Reje
   rarely.
 - **Entropy.** A short numeric tail is roughly one-in-a-million *per identical basename* —
   acceptable inside one project, thin for merging id spaces across machines, which is the
-  case that motivates the change. Prefer a longer random tail.
+  case that motivates the change. Sized in §3a.
 - If a prefix is ever composed into an id, a log line or a URL, it must be a **sanitized
   slug** — basenames carry spaces, unicode and platform-hostile characters.
 
 The stored-prefix scheme is strictly worse on both axes: the rendered name is *more* current
 than a stored one (it cannot go stale between a rename and its recalculation), and the key
 stays immutable.
+
+## 3a. The tail (owner-defined, 2026-09-19)
+
+**16 characters, Crockford base32 — 80 bits of randomness.**
+
+Crockford rather than plain alphanumeric because these get read by humans. Its alphabet is
+`0-9` plus `A-Z` **minus `I`, `L`, `O` and `U`** — the first three because they are misread
+as `1`, `1` and `0`, and `U` to avoid accidental obscenities. The digits `0` and `1` are
+kept; it is the confusable *letters* that are dropped, and a decoder maps them back to their
+digit twins if someone types one anyway. That readability is the reason this scheme exists
+at all, so the charset should protect it.
+
+### Why 16 and not 11-13
+
+Collisions are birthday-bound (`p ~ n^2 / 2N`). Sizing against a genuinely large tree —
+the Windows source repo is the largest publicly documented at roughly 3.5 million files,
+so call it 10 million ids over a project's lifetime with churn:
+
+| Tail | Space | p at 10M ids |
+|---|---|---|
+| 11 x base36 | 1.3e17 | **1 in 2,600** |
+| 13 x base32 | 3.7e19 | 1 in 740,000 |
+| 16 x base32 | 1.2e24 | 1 in 24 billion |
+| UUIDv4 (122 bit) | 5.3e36 | ~1e-23 |
+
+An initial estimate of 11-13 characters was sized against a canvas-sized project. At
+OS-tree scale 11 characters is not defensible in a primary key. 16 costs three more
+characters and buys four orders of magnitude.
+
+For calibration: nanoid defaults to 21 characters, UUIDv4 spends 122 bits. 80 bits is the
+deliberate middle — far past any realistic merge population, still short enough to read.
+
+### What is actually being sized
+
+Within a project the id is the PRIMARY KEY, so SQLite **rejects** a duplicate insert. A
+local collision is therefore a caught, retryable event, not silent corruption — and
+mint-with-retry makes within-project collisions a non-issue **at any length**.
+
+The collision that matters is the one nothing can check at mint time: two replicas
+independently generating the same id, discovered only at merge. That population — every id
+across every replica that will ever be merged — is what the tail is sized for, and it has
+to be right on the first attempt because no constraint fires.
+
+A 13-character tail remains defensible **only if** both mechanisms exist: mint-with-retry
+against the local constraint, and a collision check at merge. 16 characters requires
+neither, which is why it is preferred.
+
+### Not a source of entropy
+
+`project.instance_id` is the obvious candidate for a project-specific segment and should
+**not** be used as one:
+
+- `uuid_v4_simple()` ([`commands.rs`](../../../src-tauri/src/db/commands.rs)) is not a
+  UUID v4. It is `nanos-pid-hash(SystemTime, thread::id)` — predictable, low entropy.
+  Adequate as a machine-local project marker, unsound as an identity seed.
+- It is **copied** with the project folder, so two divergent forks stamp the same segment
+  onto pieces created after the split — exactly the merge case this is for.
+
+### Provenance is a separate question, still open
+
+A project-specific segment buys **provenance, not uniqueness** — a random tail already does
+not collide across projects. Carrying origin is worth having (the id travels into
+`editor_state` values, logs and exported canvases, where a bare token says nothing), but it
+is a label riding along, the same category as the filename prefix.
+
+Preference, not decided: keep meaning out of the key and record origin in its own column,
+minted from real randomness. The argument against is that a column can be dropped by a
+careless import while an embedded segment travels everywhere. Settle it with the fork
+question in §6.
 
 ## 4. Relationship to the ADR-032 epoch
 
