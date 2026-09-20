@@ -1,6 +1,6 @@
 # Litria — Capabilities & Features
 
-> **Version**: 1.0.8 | **Date**: 2026-09-17 | **Status**: Public Beta (MIT)
+> **Version**: 1.0.9 | **Date**: 2026-09-19 | **Status**: Public Beta (MIT)
 
 ## How to read this document
 
@@ -487,7 +487,7 @@ The capability layer itself is held together by enforced architecture:
 | Metric | Current |
 |--------|---------|
 | Domain modules | 15 (registry: `docs/Orchestration.md` §2) |
-| Architecture guards | **6** — imports, app shell, protected zones, domain contract, settings keys, editor engine |
+| Architecture guards | **7** — imports, app shell, protected zones, domain contract, settings keys, editor engine, db chokepoint |
 | JS tests | **1049** across 85 suites (`test/domains/`) |
 | Rust tests | **257** |
 | ADRs | **25** |
