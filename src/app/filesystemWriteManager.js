@@ -319,8 +319,22 @@ export function createFilesystemWriteManager(deps) {
 
   // ---- Result helpers -----------------------------------------------------
 
-  function ok() {
-    return { success: true };
+  /**
+   * ADR-032 decision 6 — separate what the manager CONFIRMED from what it
+   * merely dispatched.
+   *
+   * The filesystem effect is awaited, so `success: true` is a real claim about
+   * it. The database writes below are fire-and-forget (`db*().catch(...)`) and
+   * stay that way on purpose: awaiting them would put a SQLite round trip
+   * inside a canvas drag. Reporting them as part of "success" was the lie —
+   * the canvas would show the new state while the database kept the old one,
+   * and the change would silently revert on reopen.
+   *
+   * @param {'none'|'dispatched'} persistence - 'dispatched' when this operation
+   *   fired persistence writes whose completion it did not await.
+   */
+  function ok(persistence = 'none') {
+    return { success: true, persistence };
   }
 
   function fail(error, code = 'fs.operation_failed') {
@@ -339,6 +353,7 @@ export function createFilesystemWriteManager(deps) {
    * @returns {Promise<{success: boolean, error?: string, code?: string, updates?: Array}>}
    */
   async function movePipeline(sourcePath, destPath, isDir, opts = {}) {
+    let dispatchedPersistence = false;
     const rootPath = getRootPath();
     if (!rootPath) return fail('No project root path available', 'fs.no_root');
 
@@ -350,13 +365,13 @@ export function createFilesystemWriteManager(deps) {
     if (!moved) return fail(`Cannot move "${sourcePath}" to "${destPath}"`, 'fs.move_failed');
 
     const piecesByFilename = getPiecesByFilename();
-    if (!piecesByFilename) return ok(); // No piece tracking available
+    if (!piecesByFilename) return ok(dispatchedPersistence ? 'dispatched' : 'none'); // No piece tracking available
 
     // Step 2: Identify affected pieces
     const affected = collectAffectedPieces(piecesByFilename, normalizePath, sourcePath, isDir);
     if (affected.length === 0) {
       if (!opts.skipScaffold) bumpScaffoldRefresh();
-      return ok();
+      return ok(dispatchedPersistence ? 'dispatched' : 'none');
     }
 
     // Step 3: Update piece filenames
@@ -424,12 +439,14 @@ export function createFilesystemWriteManager(deps) {
         });
       }
       for (const { groupId, folderPath } of folderPathUpdates) {
+        dispatchedPersistence = true;
         dbUpdateGroup(groupId, { folderPath }).catch(() => {});
       }
       // Auto-created groups persist like reconciler-created ones: the group
       // row is what makes them exist on the next launch (membership rows are
       // a fallback cache — hydration derives membership from folderPath).
       for (const created of plan.creations) {
+        dispatchedPersistence = true;
         dbCreateGroup({
           id: created.groupId,
           name: created.name,
@@ -439,6 +456,7 @@ export function createFilesystemWriteManager(deps) {
           color: null,
         }).then(() => {
           for (const pieceId of created.pieceIds) {
+            dispatchedPersistence = true;
             dbAddPieceToGroup(created.groupId, pieceId).catch(() => {});
           }
         }).catch(() => {});
@@ -446,6 +464,7 @@ export function createFilesystemWriteManager(deps) {
       // Folder groups the plan emptied get culled from state by keepGroup —
       // persist the deletion too, or the row ghosts until next launch.
       for (const emptiedId of collectEmptiedFolderGroups(groups, plan.removals)) {
+        dispatchedPersistence = true;
         dbDeleteGroup(emptiedId).catch(() => {});
       }
     }
@@ -464,13 +483,14 @@ export function createFilesystemWriteManager(deps) {
     // Step 7: Persistence update (SQLite — always, even in batch mode since
     // individual row updates are cheap).
     for (const entry of updates) {
+      dispatchedPersistence = true;
       dbUpdatePiece(entry.pieceId, { filePath: entry.path, label: getBasename(entry.path) }).catch(() => {});
     }
 
     // Step 8: Scaffold refresh
     if (!opts.skipScaffold) bumpScaffoldRefresh();
 
-    return { success: true, updates };
+    return { success: true, persistence: dispatchedPersistence ? 'dispatched' : 'none', updates };
   }
 
   /**
@@ -500,6 +520,7 @@ export function createFilesystemWriteManager(deps) {
    * @param {object} [opts] - { skipGroupSync, skipScaffold }
    */
   async function moveOrWriteFile(sourcePath, destPath, fallbackContents, opts = {}) {
+    let dispatchedPersistence = false;
     const moveResult = await movePipeline(sourcePath, destPath, false, opts);
     if (moveResult.success || moveResult.code !== 'fs.move_failed') {
       return { ...moveResult, materialized: false };
@@ -529,6 +550,7 @@ export function createFilesystemWriteManager(deps) {
       updatePieceFilenames([{ pieceId: piece.id, path: normalizedDest }]);
       if (updateTabFilename) updateTabFilename(piece.id, normalizedDest);
       if (unregisterFile) unregisterFile(normalizePath(piece.filename));
+      dispatchedPersistence = true;
       dbUpdatePiece(piece.id, { filePath: normalizedDest, label: getBasename(normalizedDest) }).catch(() => {});
 
       const groups = getGroups();
@@ -557,6 +579,7 @@ export function createFilesystemWriteManager(deps) {
           });
         }
         for (const created of plan.creations) {
+          dispatchedPersistence = true;
           dbCreateGroup({
             id: created.groupId,
             name: created.name,
@@ -566,11 +589,13 @@ export function createFilesystemWriteManager(deps) {
             color: null,
           }).then(() => {
             for (const pieceId of created.pieceIds) {
+              dispatchedPersistence = true;
               dbAddPieceToGroup(created.groupId, pieceId).catch(() => {});
             }
           }).catch(() => {});
         }
         for (const emptiedId of collectEmptiedFolderGroups(groups, plan.removals)) {
+          dispatchedPersistence = true;
           dbDeleteGroup(emptiedId).catch(() => {});
         }
       }
@@ -578,7 +603,7 @@ export function createFilesystemWriteManager(deps) {
     if (notifyFileChanged) notifyFileChanged(normalizedDest, contents);
 
     if (!opts.skipScaffold) bumpScaffoldRefresh();
-    return { success: true, materialized: true };
+    return { success: true, persistence: dispatchedPersistence ? 'dispatched' : 'none', materialized: true };
   }
 
   // ---- Delete pipeline ----------------------------------------------------
@@ -592,6 +617,7 @@ export function createFilesystemWriteManager(deps) {
    * @returns {Promise<{success: boolean, error?: string, code?: string}>}
    */
   async function deletePipeline(path, isDir, opts = {}) {
+    let dispatchedPersistence = false;
     const rootPath = getRootPath();
     if (!rootPath) return fail('No project root path available', 'fs.no_root');
 
@@ -626,7 +652,7 @@ export function createFilesystemWriteManager(deps) {
     const piecesByFilename = getPiecesByFilename();
     if (!piecesByFilename) {
       if (!opts.skipScaffold) bumpScaffoldRefresh();
-      return ok();
+      return ok(dispatchedPersistence ? 'dispatched' : 'none');
     }
 
     // Step 2: Identify affected pieces
@@ -643,12 +669,13 @@ export function createFilesystemWriteManager(deps) {
           const groupDomain = getGroupDomain();
           if (groupDomain) {
             groupDomain.commands.deleteGroup(matchingGroup.id);
+            dispatchedPersistence = true;
             dbDeleteGroup(matchingGroup.id).catch(() => {});
           }
         }
       }
       if (!opts.skipScaffold) bumpScaffoldRefresh();
-      return ok();
+      return ok(dispatchedPersistence ? 'dispatched' : 'none');
     }
 
     const pieceIds = affected.map((p) => p.id);
@@ -742,6 +769,7 @@ export function createFilesystemWriteManager(deps) {
           .map((pid) => ({ groupId: groupByPieceId.get(pid), pieceId: pid }))
           .filter((entry) => entry.groupId);
         for (const emptiedId of collectEmptiedFolderGroups(getGroups(), removals)) {
+          dispatchedPersistence = true;
           dbDeleteGroup(emptiedId).catch(() => {});
         }
       }
@@ -757,6 +785,7 @@ export function createFilesystemWriteManager(deps) {
         const groupDomain = getGroupDomain();
         if (groupDomain) {
           groupDomain.commands.deleteGroup(matchingGroup.id);
+          dispatchedPersistence = true;
           dbDeleteGroup(matchingGroup.id).catch(() => {});
         }
       }
@@ -765,13 +794,14 @@ export function createFilesystemWriteManager(deps) {
     // Step 8: Persistence update (SQLite — CASCADE handles group_pieces + connections).
     // Always fire, even in batch mode since individual DELETEs are cheap.
     for (const pid of pieceIds) {
+      dispatchedPersistence = true;
       dbDeletePiece(pid).catch(() => {});
     }
 
     // Step 9: Scaffold refresh
     if (!opts.skipScaffold) bumpScaffoldRefresh();
 
-    return ok();
+    return ok(dispatchedPersistence ? 'dispatched' : 'none');
   }
 
   /**
@@ -788,11 +818,12 @@ export function createFilesystemWriteManager(deps) {
    * piece back and re-wires it.
    */
   async function removeFromCanvas(pieceIdsInput) {
+    let dispatchedPersistence = false;
     const ids = Array.isArray(pieceIdsInput) ? pieceIdsInput : [pieceIdsInput];
     const piecesById = getPiecesById();
     const pieces = getPieces();
     const affected = ids.map((id) => piecesById?.get(id)).filter(Boolean);
-    if (affected.length === 0) return ok();
+    if (affected.length === 0) return ok(dispatchedPersistence ? 'dispatched' : 'none');
     const pieceIds = affected.map((p) => p.id);
 
     if (closeTab) {
@@ -813,6 +844,7 @@ export function createFilesystemWriteManager(deps) {
           .map((pid) => ({ groupId: groupByPieceId.get(pid), pieceId: pid }))
           .filter((entry) => entry.groupId);
         for (const emptiedId of collectEmptiedFolderGroups(getGroups(), removals)) {
+          dispatchedPersistence = true;
           dbDeleteGroup(emptiedId).catch(() => {});
         }
       }
@@ -820,10 +852,11 @@ export function createFilesystemWriteManager(deps) {
     }
     // SQLite CASCADE clears group_pieces + connections rows.
     for (const pid of pieceIds) {
+      dispatchedPersistence = true;
       dbDeletePiece(pid).catch(() => {});
     }
     bumpScaffoldRefresh();
-    return ok();
+    return ok(dispatchedPersistence ? 'dispatched' : 'none');
   }
 
   /**
@@ -850,7 +883,7 @@ export function createFilesystemWriteManager(deps) {
     const removed = await removeEmptyDirectory(rootPath, folderPath);
     if (!removed) return fail(`Cannot delete folder "${folderPath}" (it may not be empty)`, 'fs.dir_not_empty');
     bumpScaffoldRefresh();
-    return ok();
+    return ok('none');
   }
 
   // ---- Write pipeline -----------------------------------------------------
@@ -884,7 +917,7 @@ export function createFilesystemWriteManager(deps) {
     }
 
     if (!skipScaffold) bumpScaffoldRefresh();
-    return ok();
+    return ok('none');
   }
 
   /**
@@ -903,7 +936,7 @@ export function createFilesystemWriteManager(deps) {
     const created = await createProjectDirectory(rootPath, dirPath);
     if (!created) return fail(`Cannot create directory "${dirPath}"`, 'fs.mkdir_failed');
     if (!opts.skipScaffold) bumpScaffoldRefresh();
-    return ok();
+    return ok('none');
   }
 
   // ---- Batch operations ---------------------------------------------------
