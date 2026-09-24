@@ -1,5 +1,65 @@
 # Release Notes
 
+## v1.0.9 — Live durability
+
+**Date:** 2026-09-19 (PRs #54–#61; documentation #62–#66)
+
+> Platform status: unsigned artifacts everywhere. Windows is the only platform
+> a human has run end-to-end this cycle; the macOS and Linux artifacts compile
+> and pass their test suites in CI, but nobody has clicked through them.
+
+Every fix in this release is about Litria telling you the truth about your
+files. A live-use audit on 2026-09-19 found five defects where a write could
+go wrong without anyone being told. Each one was reproduced before it was fixed
+(ADR-032).
+
+### ⚠️ Data-loss fix — please update
+
+- **A failed save no longer destroys both versions of a file (#57).** A save
+  that failed while the target was locked by antivirus, a sync client or
+  another program could delete the original and then fail the retry, losing
+  both the old file and the content being saved. On a failed replacement the
+  original now stays where it was, the new content is kept beside it as
+  `.<name>.cmtmp-…`, and the error names that path. **You may see save errors
+  you never saw before.** Those saves were already failing silently and
+  costing you the edit.
+
+### Fixed
+
+- **Writes can no longer land in the wrong project (#58).** Each workspace
+  database now has an identity (an epoch minted when it opens), and every
+  workspace write carries the epoch it was issued under. Piece IDs are
+  per-project and overlap, so a canvas move issued just before a project
+  switch could previously land on a real file in the incoming project. That
+  write is now refused.
+- **Writers report what actually happened (#59).** Dragging a wire to a closed
+  file reported success even when the import could not be written. Undoing a
+  delete reported success even when the file could not be restored. Both now
+  report the failure.
+- **Canvas operations separate confirmed from in-flight (#60).** A change that
+  will not survive a reload is no longer reported as done.
+- **Terminal and language-server teardown on macOS and Linux (#55)** signals
+  only the process group Litria owns, using `kill -s SIG -- -pgid`. The old
+  form could signal the caller's own group. A scaffold test that assumed a
+  Windows drive path now uses a rooted path on every platform (#54).
+
+### Under the hood
+
+- **Seventh architecture guard (#61):** `db-chokepoint` enforces that
+  `db_*` commands reach Tauri only through `dbStorage.invokeDb`, so every one
+  of them carries a workspace epoch. The rule is now enforced at build time
+  rather than by convention.
+- **Design records (#56):** ADR-032 and its brief
+  (`docs/plans/persistence/brief-live-durability-defects.md`) record the five
+  defects and how each was reproduced.
+
+### Documentation (no behaviour change)
+
+- ADR-029 managed project runs, with brief and build plan (#65).
+- ADR-030 structural grid and spatial workspace (#66).
+- Pre-sync piece identity direction (#62).
+- README product screenshots (#63).
+
 ## v1.0.8 — Scaffold recipe integrity
 
 **Date:** 2026-09-17 (PRs #44–#53)
