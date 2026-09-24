@@ -1,0 +1,103 @@
+name: Rust Tests
+
+# Runs the Rust suite on macOS and Linux for every change that can affect it.
+#
+# WHY THIS EXISTS
+#   Until this workflow, `cargo test` ran off Windows only inside release.yml,
+#   so the first run of platform-conditional Rust code on Unix happened after a
+#   release was tagged. v1.0.8 paid for that: a Windows-drive-path test failed
+#   on macOS (#54) and a `kill -TERM -pgid` form signalled the caller's own
+#   process group and shut down the Linux runner (#55), both found at release
+#   time. Windows is the development platform and runs the suite locally
+#   (verification-policy Rule 1), so this job covers the two it cannot.
+#
+# The steps mirror release.yml's proven sequence; keep them in step with it.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: &rust_inputs
+      - "src-tauri/**"
+      # Files the crate compiles in from outside src-tauri (include_str!).
+      - "src/scaffold/recipes.json"
+      - "resources/language-server-registry.json"
+      - "test/fixtures/scaffold-plans/**"
+      # Runtime staging that tauri-build validates.
+      - "scripts/bundle-node.mjs"
+      - "scripts/bundle-servers.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/rust-tests.yml"
+  push:
+    branches:
+      - main
+    paths: *rust_inputs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: cargo test (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Same images as release.yml, so a green PR predicts a green release.
+          - os: ubuntu-22.04
+            label: linux-x86_64
+          - os: macos-14
+            label: macos-aarch64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # Tauri v2's Debian/Ubuntu prerequisites (see release.yml for the
+      # libappindicator3-dev conflict). patchelf is bundling-only, so it is left out.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-07
+        with:
+          toolchain: stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tauri-build validates the resource paths in tauri.conf.json even under
+      # `cargo test`, so the runtimes must be staged first (see release.yml).
+      - name: Stage bundled runtimes
+        run: |
+          npm run bundle:node
+          npm run bundle:servers
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
