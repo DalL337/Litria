@@ -81,8 +81,21 @@ verify their contract with shared cases rather than independent assumptions.
 
 ## Rule 4 — Exercise Affected Recipes
 
-Before adding, expanding, or changing a support claim, validate the affected
-recipes in disposable fixtures under the applicable security rules:
+Before completing a dependency, external-tool, or recipe change, or adding
+or expanding a support claim, validate affected execution paths under the
+applicable security rules. For dependencies used only by Litria, exercise
+the affected application or build-tool integration alongside the standard
+checks. Generated-project checks apply when those recipes are affected.
+
+> Corrected 2026-09-24: this rule previously triggered only on support-claim
+> changes, so a dependency bump or tool-argument change that left every claim
+> intact (e.g. the #44 TypeScript 5.9 → 6.0 bump) needed no execution
+> evidence even though dispatch loads this policy for it. The broader trigger
+> came from the authoring session's own final review on 2026-09-16; it was
+> left uncommitted in the shared tree, swept into an unrelated commit, and held
+> out of #71 until the owner ruled on it.
+
+For generated-project recipes, use disposable fixtures and:
 
 1. Execute the real scaffold command/blueprint with the recorded tool and
    manager versions. Check both its exit/result and whether expected files
