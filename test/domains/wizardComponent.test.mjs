@@ -156,9 +156,13 @@ test('changing the runtime after reaching Create clamps the stepper and disables
 test('Cancel during a run reaches the runner and the run ends failed with the report (F30, R7)', async () => {
   // A fake runner: scaffold_project stays pending until cancel_scaffold
   // arrives with the same runId, then rejects the way the real runner does
-  // (tree torn down, preservation report in the message).
+  // (tree torn down, preservation report in the message). The rejection is
+  // held until the test releases it: a timer here could fire inside the
+  // cancel click's act() on a slow runner and end the run before the
+  // "Stopping" state was observed (flaked on CI 2026-09-17/20/24).
   const calls = [];
   let rejectRun = null;
+  let finishStopping = null;
   const invokeImpl = (cmd, args) => {
     calls.push([cmd, args]);
     if (cmd === 'scaffold_project') {
@@ -170,7 +174,7 @@ test('Cancel during a run reaches the runner and the run ends failed with the re
     if (cmd === 'cancel_scaffold') {
       const run = calls.find(([c]) => c === 'scaffold_project');
       assert.equal(args.runId, run[1].config.runId, 'cancel names the live run');
-      setTimeout(() => rejectRun(new Error('`npm` cancelled — its process tree torn down. Partial project retained — C:\\projects\\demo kept: package.json is subprocess output that was never recorded; nothing was deleted.')), 0);
+      finishStopping = () => rejectRun(new Error('`npm` cancelled — its process tree torn down. Partial project retained — C:\\projects\\demo kept: package.json is subprocess output that was never recorded; nothing was deleted.'));
       return Promise.resolve(true);
     }
     return Promise.resolve({});
@@ -203,10 +207,11 @@ test('Cancel during a run reaches the runner and the run ends failed with the re
   assert.ok(Array.from(container.querySelectorAll('.npw-step')).every((b) => b.disabled), 'stepper frozen while running');
   await act(async () => { cancel.click(); });
   assert.ok(container.querySelector('.npw-btn-cancel').textContent.startsWith('Stopping'), 'debounced while the runner stops');
-  await flush();
+  assert.ok(calls.some(([c]) => c === 'cancel_scaffold'), 'the runner was asked to stop');
+  assert.equal(typeof finishStopping, 'function', 'cancel reached the runner before the run ended');
+  await act(async () => { finishStopping(); });
   await flush();
 
-  assert.ok(calls.some(([c]) => c === 'cancel_scaffold'), 'the runner was asked to stop');
   const error = container.querySelector('.npw-error')?.textContent ?? '';
   assert.match(error, /cancelled/);
   assert.match(error, /Partial project retained/);
