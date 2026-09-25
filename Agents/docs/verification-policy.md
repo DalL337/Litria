@@ -36,6 +36,29 @@ Run the checks whenever any of the following is true:
 
 Record pass/fail evidence in the related plan/checklist doc when applicable.
 
+**Docs-only exemption (added 2026-09-25).** A change where every file is
+under `docs/` or `Agents/`, or is the root `README.md`, skips the standard
+checks. This overrides the "any PR" bullet above: the exemption holds even
+when the change goes through a PR. Such changes may go straight to `main`
+(AGENTS.md §7.2).
+
+The exemption is safe because no guard, test, or build step reads those
+paths, so the checks cannot see the change. This was verified on 2026-09-25
+by searching `scripts/`, `test/`, `.github/workflows/` and the Vite config.
+
+Still required for docs-only changes:
+- Rule 3: check the files-changed count after committing.
+- The repository is public, so read what you publish for personal or account
+  data before pushing (AGENTS.md §3 housekeeping, §7.6 identity).
+
+> Origin: PR #74 (docs only) ran the full local trio plus the CI `guard` job,
+> and the results showed nothing. The owner ruled a policy note rather than a
+> CI path filter, so `architecture-guard.yml` still runs on every PR and every
+> push to `main`; this exemption removes the agent-side ceremony only. If a
+> guard, test, or build step ever starts reading one of these paths (for
+> example, a guard that parses the domain register in `docs/Orchestration.md`),
+> narrow or remove the exemption in the same change.
+
 ## Rule 3 — Verify the Commit, Not Just the Tree (added 2026-07-13)
 
 After committing, check the files-changed count in the commit output matches
