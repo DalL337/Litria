@@ -74,6 +74,22 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
+/* Node scale readout (ADR-030): beside zoom, only with a selection. */
+.status-bar-scale-btn {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* Landing readout while a drag is in flight (the owner ruled the on-canvas
+   reticle out; the coordinate lives here). */
+.status-bar-landing {
+  color: rgba(200, 200, 200, 0.75);
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Zoom popover (positioned by Radix Popover via Portal) */
 .status-bar-zoom-popover {
   width: 200px;

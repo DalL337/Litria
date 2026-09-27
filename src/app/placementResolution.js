@@ -227,3 +227,76 @@ export function resolvePlacement({
     level: null,
   };
 }
+
+// Most neighbors one scale command may part (cascade included), matching the
+// seam cascade's bound; overlaps past it are left for the user.
+const PART_MAX_CASCADE = 6;
+
+/**
+ * Part the neighbors a grown node now overlaps (node scale, owner rulings
+ * 2026-09-27: growth into a neighbor resolves in the same settlement). Each
+ * overlapped neighbor moves out along its shallowest overlap, away from the
+ * node that reached it, to the first lattice line in that direction: Strict
+ * uses major lines, so a parted neighbor never ends flush; Flex uses the
+ * finest step. A parted neighbor that now overlaps another passes the push
+ * on, up to a bounded cascade. Hidden nodes are skipped. Deterministic.
+ *
+ * @returns {Array<{id, dx, dy}>|null}
+ */
+export function partOverlappedNeighbors({
+  pieces,
+  pusherIds,
+  hiddenPieceIds = null,
+  steps,
+  mode,
+  baseWidth = PIECE_WIDTH,
+  baseHeight = PIECE_HEIGHT,
+}) {
+  const strict = mode === 'strict';
+  const stepX = strict ? steps.majorX : steps.subX;
+  const stepY = strict ? steps.majorY : steps.subY;
+  const working = new Map();
+  for (const piece of pieces ?? []) {
+    if (hiddenPieceIds?.has(piece.id)) continue;
+    if (!Number.isFinite(piece.x) || !Number.isFinite(piece.y)) continue;
+    working.set(piece.id, pieceRect(piece, baseWidth, baseHeight));
+  }
+  const ordered = [...working.keys()].sort((a, b) => String(a).localeCompare(String(b)));
+  const fixed = new Set(pusherIds);
+  const queue = [...pusherIds].filter((id) => working.has(id));
+  const moves = new Map();
+  let parted = 0;
+  while (queue.length && parted < PART_MAX_CASCADE) {
+    const pusher = working.get(queue.shift());
+    for (const id of ordered) {
+      if (fixed.has(id)) continue;
+      const other = working.get(id);
+      if (!rectsOverlap(pusher, other)) continue;
+      const overlapX = Math.min(pusher.x + pusher.width, other.x + other.width) - Math.max(pusher.x, other.x);
+      const overlapY = Math.min(pusher.y + pusher.height, other.y + other.height) - Math.max(pusher.y, other.y);
+      const towardX = (other.x + other.width / 2) >= (pusher.x + pusher.width / 2) ? 1 : -1;
+      const towardY = (other.y + other.height / 2) >= (pusher.y + pusher.height / 2) ? 1 : -1;
+      let next;
+      if (overlapX <= overlapY) {
+        const clear = towardX > 0 ? pusher.x + pusher.width : pusher.x - other.width;
+        const x = towardX > 0 ? Math.ceil(clear / stepX - EPSILON) * stepX : Math.floor(clear / stepX + EPSILON) * stepX;
+        next = { ...other, x: normalizeZero(x) };
+      } else {
+        const clear = towardY > 0 ? pusher.y + pusher.height : pusher.y - other.height;
+        const y = towardY > 0 ? Math.ceil(clear / stepY - EPSILON) * stepY : Math.floor(clear / stepY + EPSILON) * stepY;
+        next = { ...other, y: normalizeZero(y) };
+      }
+      const previous = moves.get(id) ?? { dx: 0, dy: 0 };
+      moves.set(id, { dx: previous.dx + (next.x - other.x), dy: previous.dy + (next.y - other.y) });
+      working.set(id, next);
+      fixed.add(id);
+      queue.push(id);
+      parted += 1;
+      if (parted >= PART_MAX_CASCADE) break;
+    }
+  }
+  if (!moves.size) return null;
+  return [...moves.entries()]
+    .sort(([a], [b]) => String(a).localeCompare(String(b)))
+    .map(([id, delta]) => ({ id, dx: delta.dx, dy: delta.dy }));
+}

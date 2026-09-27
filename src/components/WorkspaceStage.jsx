@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Rect, Line, Group, Shape, Text, Circle } from 'react-konva';
 
 import PuzzlePiece, { PIECE_WIDTH, PIECE_HEIGHT } from './PuzzlePiece';
@@ -7,6 +7,9 @@ import LassoBox from './LassoBox';
 import Desk from './Desk';
 import EdgeGlow from './EdgeGlow';
 import CanvasGrid from './CanvasGrid';
+import { GridGuides, GridMarks, originInk } from './GridOverlays';
+import { resolveGridPaint } from '../theme/gridPaint';
+import { DEFAULT_GRID_DEFINITION, deriveGridSteps } from '../utils/gridGeometry';
 import GridChevrons from './GridChevrons';
 import { computeGridLayout, getTierCapacity, getMaxTier } from '../utils/gridLayout';
 import { resolveNodeEdgeColor, GROUP_OUTLINE_PAD, GROUP_NEST_PAD } from '../app/selectors/workspaceSelectors';
@@ -20,6 +23,9 @@ const GROUP_LED_COLORS = {
   amber: 'rgba(240, 180, 40, 0.9)',
   red: 'rgba(240, 60, 60, 0.95)'
 };
+
+// Before a workspace's grid hydrates, draw the default lattice.
+const FALLBACK_GRID_STEPS = deriveGridSteps(DEFAULT_GRID_DEFINITION);
 
 function clampValue(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -86,6 +92,10 @@ function WorkspaceStage({
   handleStageMouseUp,
   handleStageMouseLeave,
   theme,
+  energyLevel = 'live',
+  gridSteps = null,
+  gridPreferences = null,
+  placementPreview = null,
   viewportScale = 1,
   viewportOffsetX = 0,
   viewportOffsetY = 0,
@@ -119,6 +129,23 @@ function WorkspaceStage({
     }
   }, [onTrackpadPan, onZoomAtPoint]);
   const themeTokens = theme?.tokens ?? {};
+  // Structural grid paint (ADR-030): the theme's ink and opacities, or the
+  // personal override for this theme, energy and ink.
+  const steps = gridSteps ?? FALLBACK_GRID_STEPS;
+  const gridInk = gridPreferences?.ink ?? 'theme';
+  const gridOverrides = gridPreferences?.paintOverrides ?? null;
+  const gridPaint = useMemo(
+    () => resolveGridPaint(themeTokens, { ink: gridInk, themeId: theme?.id ?? null, energyLevel, overrides: gridOverrides }),
+    [themeTokens, gridInk, theme?.id, energyLevel, gridOverrides]
+  );
+  const showMajor = gridPreferences?.showMajor ?? true;
+  const showMinor = gridPreferences?.showMinor ?? true;
+  const showSub = gridPreferences?.showSub ?? true;
+  const gridLevels = useMemo(
+    () => ({ major: showMajor, minor: showMinor, sub: showSub }),
+    [showMajor, showMinor, showSub]
+  );
+  const guideColor = themeTokens.nodeSelectedStroke ?? '#00BFFF';
   const groupPillFill = themeTokens.groupPillFill ?? 'rgba(30, 30, 30, 0.75)';
   const groupPillStroke = themeTokens.groupPillStroke ?? '#5c6bc0';
   const groupPillSelectedStroke = themeTokens.groupPillSelectedStroke ?? '#2979ff';
@@ -172,8 +199,25 @@ function WorkspaceStage({
       >
         <Layer ref={backgroundLayerRef} listening={false}>
           <CanvasGrid
-            gridOpacity={Number(themeTokens.canvasGridOpacity) || 0.03}
-            gridAccentOpacity={Number(themeTokens.canvasGridAccentOpacity) || 0.06}
+            steps={steps}
+            paint={gridPaint}
+            levels={gridLevels}
+            viewportScale={viewportScale}
+            viewportOffsetX={viewportOffsetX}
+            viewportOffsetY={viewportOffsetY}
+            width={deskWidth}
+            height={deskHeight}
+          />
+        </Layer>
+        {/* Smart guides sit UNDER the nodes (read in the gaps) and above the
+            background, so glass never samples them. */}
+        <Layer listening={false}>
+          <GridGuides
+            lines={placementPreview?.guideLines ?? null}
+            color={guideColor}
+            viewportScale={viewportScale}
+            viewportOffsetX={viewportOffsetX}
+            viewportOffsetY={viewportOffsetY}
           />
         </Layer>
         <Layer>
@@ -654,6 +698,18 @@ function WorkspaceStage({
               listening={false}
             />
           )}
+        </Layer>
+        {/* Landing outline and origin marker: above the nodes, never sampled. */}
+        <Layer listening={false}>
+          <GridMarks
+            preview={placementPreview}
+            piecesById={piecesById}
+            outlineColor={guideColor}
+            cornerRadius={Number(themeTokens.nodeCornerRadius) || 12}
+            showOrigin={gridPreferences?.showOrigin ?? true}
+            originColor={originInk(gridPaint)}
+            viewportScale={viewportScale}
+          />
         </Layer>
       </Stage>
     </Desk>

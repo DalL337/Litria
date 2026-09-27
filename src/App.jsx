@@ -111,6 +111,7 @@ import { createConnectionDomain } from './app/connectionDomain';
 import { THEME_ACCENT_SWATCHES } from './app/themeDomain';
 import { useThemeActions } from './app/useThemeActions';
 import { useGridActions } from './app/useGridActions';
+import { useGridWidget } from './app/useGridWidget';
 import { usePreferencesSurface } from './app/usePreferencesSurface';
 import { useSplashVisibility } from './app/useSplashVisibility';
 import { useTopDrawers } from './components/useTopDrawers';
@@ -1005,6 +1006,8 @@ function App() {
     isPanActive: viewport.isPanActive,
     getGridPlacement,
     getViewportScale: () => viewport.scale,
+    // A project switch cancels any settle slide still running.
+    projectKey: projectInstance?.instanceId ?? null,
   });
   const {
     handleStageMouseDown,
@@ -1020,6 +1023,22 @@ function App() {
     handleGroupPillDragEnd,
     scaleSelectedPieces
   } = interactionDomain.commands;
+
+  // The canvas HUD's Grid widget (ADR-030): a window onto the grid's owners.
+  const gridWidget = useGridWidget({
+    grid,
+    canvasHud,
+    canvasTheme,
+    energyLevel,
+    toggleEnergyLevel,
+    themeOptions,
+    activeThemeId,
+    onSetActiveTheme: handleSetActiveTheme,
+    selectedIds,
+    piecesById,
+    scaleSelectedPieces,
+    placementPreview: interactionDomain.lifecycle.placementPreview,
+  });
 
   // Drag a canvas node into an editor pane (ADR-017 Phase C node→pane slice):
   // wraps the piece-drag handlers so a drop over the drawer cancels the
@@ -1170,6 +1189,7 @@ function App() {
     syntaxConnStatuses,
     PIECE_WIDTH,
     PIECE_HEIGHT,
+    settle: interactionDomain.lifecycle.settle,
   });
 
   const {
@@ -1338,8 +1358,12 @@ function App() {
     hoverTarget,
     dragLine,
     activeTheme: canvasTheme,
+    energyLevel,
     viewport,
     handleTrackpadPan,
+    gridSteps: grid.gridSteps,
+    gridPreferences: grid.gridPreferences,
+    placementPreview: interactionDomain.lifecycle.placementPreview,
   });
 
   const menuBarBindings = useMenuBarBindings({
@@ -1372,6 +1396,8 @@ function App() {
     handleClearConnectionSelection,
     selectedConnectionId,
     selectedCount,
+    nodeScale: gridWidget.nodeScale,
+    onScaleNode: scaleSelectedPieces,
     targetGroupId,
     selectionDomain,
     allVisiblePieces,
@@ -1668,6 +1694,8 @@ function App() {
           onFitContent={handleFitContent}
           resetZoom={canvasHud.resetZoom}
           viewportScale={canvasHud.viewportScale}
+          gridWidget={gridWidget}
+          sectionsMaxHeight={canvasHud.sectionsMaxHeight}
         />
         <PersistencePill
           readOnly={persistenceNotices.readOnly}
@@ -1713,6 +1741,10 @@ function App() {
         interactionModeLabel={interactionModeLabel}
         energyLevel={energyLevel}
         onToggleEnergy={toggleEnergyLevel}
+        nodeScaleText={gridWidget.selectionCount ? gridWidget.scaleText : null}
+        nodeScale={gridWidget.nodeScale}
+        onNodeScaleChange={scaleSelectedPieces}
+        landingReadout={gridWidget.landingReadout}
       />
       </div>
       </DrawerProvider>

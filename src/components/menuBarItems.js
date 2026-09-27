@@ -57,7 +57,28 @@ export function buildEditMenu(ctx) {
     { label: 'Select All', shortcut: labels.selectAll, onClick: ctx.onSelectAll, disabled: !ctx.canSelectAll },
     { label: 'Deselect All', onClick: ctx.onDeselectAll, disabled: !ctx.canDeselect },
     { separator: true },
-    { label: 'Delete', onClick: ctx.onDelete, disabled: !ctx.canDelete }
+    { label: 'Delete', onClick: ctx.onDelete, disabled: !ctx.canDelete },
+    { separator: true },
+    // Node scale (owner rulings 2026-09-27): visible but disabled without a
+    // selection; each node grows from its own top-left corner.
+    {
+      type: 'submenu',
+      label: 'Scale Node',
+      disabled: !ctx.canScaleNode,
+      items: [
+        {
+          type: 'radioGroup',
+          value: Number.isFinite(ctx.nodeScale) ? String(ctx.nodeScale) : '',
+          onValueChange: (value) => ctx.onScaleNode?.(Number(value)),
+          options: (ctx.nodeScalePresets ?? []).map((scale) => ({
+            value: String(scale),
+            label: `${Math.round(scale * 100)}%`,
+          })),
+        },
+        { separator: true },
+        { label: 'Reset to 100%', onClick: () => ctx.onScaleNode?.(1), disabled: !ctx.canScaleNode },
+      ],
+    },
   ];
 }
 

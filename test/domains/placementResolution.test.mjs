@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   guideLinesFor,
   nearestGuide,
+  partOverlappedNeighbors,
   resolvePlacement,
   staticObstacles,
 } from '../../src/app/placementResolution.js';
@@ -147,4 +148,36 @@ test('nearestGuide prefers same-side edges on exact ties', () => {
   const guide = nearestGuide({ x: 0, y: 300, width: 180, height: 110 }, 'x', obstacles, 0);
   assert.equal(guide.rank, 0);
   assert.equal(guide.value, 0);
+});
+
+test('a grown node parts the neighbor it now overlaps to the next major line (Strict)', () => {
+  const pieces = [{ id: 'A', x: 0, y: 0, scale: 1.25 }, { id: 'B', x: 200, y: 0 }, { id: 'C', x: 0, y: 400 }];
+  const moves = partOverlappedNeighbors({ pieces, pusherIds: ['A'], steps, mode: 'strict' });
+  // A reaches x = 225; B moves right to the next major line, 300 — not flush.
+  assert.deepEqual(moves, [{ id: 'B', dx: 100, dy: 0 }]);
+});
+
+test('Flex parts to the finest step, and pushes follow the shallowest overlap', () => {
+  const pieces = [{ id: 'A', x: 0, y: 0, scale: 1.5 }, { id: 'B', x: 0, y: 150 }];
+  // A is 270 x 165: B overlaps it 15 deep vertically, 180 horizontally.
+  const moves = partOverlappedNeighbors({ pieces, pusherIds: ['A'], steps, mode: 'flex' });
+  assert.deepEqual(moves, [{ id: 'B', dx: 0, dy: 20 }]);
+});
+
+test('parting cascades through a chain but stays bounded and skips hidden nodes', () => {
+  const pieces = [
+    { id: 'A', x: 0, y: 0, scale: 1.5 },
+    { id: 'B', x: 200, y: 0 },
+    { id: 'C', x: 380, y: 0 },
+    { id: 'H', x: 100, y: 0 },
+  ];
+  const moves = partOverlappedNeighbors({ pieces, pusherIds: ['A'], steps, mode: 'strict', hiddenPieceIds: new Set(['H']) });
+  const byId = Object.fromEntries(moves.map((m) => [m.id, m]));
+  assert.equal(byId.B.dx, 100, 'B → 300');
+  assert.equal(byId.C.dx, 120, 'C was reached by B (300 + 180 = 480) → 500');
+  assert.equal(byId.H, undefined);
+});
+
+test('nothing overlapping, nothing parted', () => {
+  assert.equal(partOverlappedNeighbors({ pieces: [{ id: 'A', x: 0, y: 0 }, { id: 'B', x: 400, y: 0 }], pusherIds: ['A'], steps, mode: 'strict' }), null);
 });

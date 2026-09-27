@@ -1,6 +1,8 @@
 import { useMemo, useRef } from 'react';
 
 import {
+  buildGroupBoundsWithDescendants,
+  buildPiecesById,
   buildSlotColorsByPieceId,
   buildGroupPills,
   buildRenderableWires,
@@ -8,6 +10,7 @@ import {
   buildVisiblePieces,
   hasCollapsedAncestor,
 } from './selectors/workspaceSelectors';
+import { piecesAt } from '../utils/placementTransition';
 import { buildWireObstacles, computeWireRoutes, buildDragWireRoutes } from './selectors/wireRoutes';
 import { computeAllNodeHealth, useDiagnosticVersion } from '../hooks/useNodeHealth';
 import { useGroupHealth } from '../hooks/useGroupHealth';
@@ -47,23 +50,42 @@ export function useWorkspaceRenderSelectors({
   syntaxConnStatuses,
   PIECE_WIDTH,
   PIECE_HEIGHT,
+  // The settle slide (usePlacementTransition): while it runs, nodes, wire
+  // endpoints, group boxes and pills are drawn from interpolated positions.
+  // State is already final, so health, routing obstacles and saves ignore it.
+  settle = null,
 }) {
   const allConnections = connectionsByPiece.all;
+  const isSettling = Boolean(settle?.isSettling);
+  const drawnPieces = useMemo(
+    () => (isSettling ? piecesAt(pieces, settle.transition, settle.now) : pieces),
+    [isSettling, pieces, settle?.transition, settle?.now]
+  );
+  const drawnPiecesById = useMemo(
+    () => (isSettling ? buildPiecesById(drawnPieces) : piecesById),
+    [isSettling, drawnPieces, piecesById]
+  );
+  const getDrawnGroupBounds = useMemo(
+    () => (isSettling
+      ? (group) => buildGroupBoundsWithDescendants(group, groups, drawnPiecesById, PIECE_WIDTH, PIECE_HEIGHT)
+      : getGroupBounds),
+    [isSettling, getGroupBounds, groups, drawnPiecesById, PIECE_WIDTH, PIECE_HEIGHT]
+  );
   // Endpoint RESOLVER, not a filter (brief-cross-group-wires D1): wires to
   // collapsed-group members re-anchor to the pill instead of vanishing.
   const renderableWires = useMemo(
     () => buildRenderableWires({
       connections: allConnections,
-      piecesById,
+      piecesById: drawnPiecesById,
       groups,
       groupByPieceId,
       hiddenPieceIds,
-      getGroupBounds,
+      getGroupBounds: getDrawnGroupBounds,
       isPathHidden,
       pieceWidth: PIECE_WIDTH,
       pieceHeight: PIECE_HEIGHT,
     }),
-    [allConnections, piecesById, groups, groupByPieceId, hiddenPieceIds, getGroupBounds, isPathHidden, PIECE_WIDTH, PIECE_HEIGHT]
+    [allConnections, drawnPiecesById, groups, groupByPieceId, hiddenPieceIds, getDrawnGroupBounds, isPathHidden, PIECE_WIDTH, PIECE_HEIGHT]
   );
   // Global routing pass (ADR-025 §1): every wire's point list is computed
   // here, canvas-wide, and ConnectionLine draws what it's given. The
@@ -107,7 +129,9 @@ export function useWorkspaceRenderSelectors({
   // other wire keeps its frozen settled route; the router computes final
   // paths on drop. Off-drag, the settled map feeds back as previousRoutes
   // (stability bias: unchanged wires keep their exact route, no flap).
-  const isDragActive = interactionDomain.lifecycle.isDragActive;
+  // The settle slide keeps the cheap drag-time wires until it finishes, then
+  // the router computes final paths once (brief §5: no A* per frame).
+  const isDragActive = interactionDomain.lifecycle.isDragActive || isSettling;
   const settledRoutesRef = useRef(new Map());
   const wireRoutes = useMemo(() => {
     if (isDragActive) {
@@ -150,20 +174,20 @@ export function useWorkspaceRenderSelectors({
   const groupPills = useMemo(
     () => buildGroupPills(
       renderableGroups,
-      getGroupBounds,
+      getDrawnGroupBounds,
       PIECE_WIDTH,
       PIECE_HEIGHT,
       (group) => themeDomain.selectors.resolveGroupTokens(group),
       groups
     ),
-    [getGroupBounds, renderableGroups, groups, themeDomain]
+    [getDrawnGroupBounds, renderableGroups, groups, themeDomain]
   );
   const groupOutlines = useMemo(() => {
     return renderableGroups
       // Memberless manual groups (ADR-018 box-first) render via seedBounds.
       .filter((g) => !g.isCollapsed && (g.pieceIds.length > 0 || g.seedBounds))
       .map((g) => {
-        const bounds = getGroupBounds(g);
+        const bounds = getDrawnGroupBounds(g);
         if (!bounds) return null;
         const themeTokens = themeDomain.selectors.resolveGroupTokens(g);
         return {
@@ -175,11 +199,11 @@ export function useWorkspaceRenderSelectors({
         };
       })
       .filter(Boolean);
-  }, [renderableGroups, getGroupBounds, themeDomain]);
+  }, [renderableGroups, getDrawnGroupBounds, themeDomain]);
   const visiblePieces = useMemo(
-    () => buildViewportCulledPieces(pieces, hiddenPieceIds, isPathHidden, isFiniteNumber,
+    () => buildViewportCulledPieces(drawnPieces, hiddenPieceIds, isPathHidden, isFiniteNumber,
       viewport.getVisibleBounds(), PIECE_WIDTH, PIECE_HEIGHT),
-    [hiddenPieceIds, isPathHidden, pieces, viewport.scale, viewport.offsetX, viewport.offsetY]
+    [hiddenPieceIds, isPathHidden, drawnPieces, viewport.scale, viewport.offsetX, viewport.offsetY]
   );
   const allVisiblePieces = useMemo(
     () => buildVisiblePieces(pieces, hiddenPieceIds, isPathHidden, isFiniteNumber),

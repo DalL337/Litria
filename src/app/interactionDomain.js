@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCanvasInteractionController } from '../behaviors/useCanvasInteractionController';
+import { usePlacementTransition } from '../behaviors/usePlacementTransition';
 import { createInteractionModeDomain } from './interactionModeDomain.js';
 import { DEFAULT_SUB_MODE, TOKEN_FOR_BINDING } from './actionTokens.js';
 import { containsTextFocus } from '../editor/engineCapabilities.js';
@@ -28,11 +29,30 @@ export function useInteractionDomain(params) {
     applySubMode: setActiveSubMode,
   }), [interactionMode, activeSubMode]);
 
+  // Settle coordination (brief §4: InteractionDomain owns it). The
+  // controller reports each grid drop's release → settled corners; the
+  // transition slides the drawing between them. Bound through a ref so the
+  // controller's callbacks stay stable.
+  const settleBeginRef = useRef(null);
+  const onPlacementSettled = useCallback((descriptor) => {
+    settleBeginRef.current?.(descriptor);
+  }, []);
   const controller = useCanvasInteractionController({
     ...params,
     isEditMode: modeDomain.selectors.isEditMode,
     activeActionToken: modeDomain.selectors.activeActionToken,
+    onPlacementSettled,
   });
+  const gridNow = params.getGridPlacement?.() ?? null;
+  const settle = usePlacementTransition({
+    durationMs: gridNow?.settleMs ?? 0,
+    easing: gridNow?.settleEasing,
+    reduceMotion: Boolean(gridNow?.reduceMotion),
+    isDragActive: controller.isDragActive,
+    history: params.history,
+    resetKey: params.projectKey ?? null,
+  });
+  settleBeginRef.current = ({ from, to }) => settle.begin(from, to);
 
   // Keyboard wiring lives here (not App.jsx) so the shell stays composition-only
   // and the existing modifier-gated shortcut handler is untouched.
@@ -87,6 +107,8 @@ export function useInteractionDomain(params) {
       // Where the dragged set will land (ADR-030): positions, reason,
       // level and smart-guide lines, or null outside a drag.
       placementPreview: controller.placementPreview,
+      // The settle slide in flight ({ transition, now, isSettling }).
+      settle: { transition: settle.transition, now: settle.now, isSettling: settle.isSettling },
       interactionMode,
       // Only meaningful while editing; null in default mode for clarity.
       activeSubMode: interactionMode === 'edit' ? activeSubMode : null
@@ -125,5 +147,5 @@ export function useInteractionDomain(params) {
     },
     // Exposed for WorkspaceContext → useActionToken consumers (ADR-013 Layer 3).
     modeDomain
-  }), [controller, params.connectionDrag, params.lasso?.isSelecting, modeDomain, interactionMode, activeSubMode]);
+  }), [controller, params.connectionDrag, params.lasso?.isSelecting, modeDomain, interactionMode, activeSubMode, settle.transition, settle.now, settle.isSettling]);
 }

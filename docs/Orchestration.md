@@ -83,7 +83,11 @@ marked below.
 
 3. `InteractionDomain`
 - Module: `src/app/interactionDomain.js` — wired via `useInteractionDomain` in App.jsx.
-- Owns: drag lifecycle, snap/lasso logic, pointer-state machine.
+- Owns: drag lifecycle, snap/lasso logic, pointer-state machine, and (ADR-030)
+  grid placement: the landing preview while a drag is in flight
+  (`app/placementResolution.js`), Escape cancel, and the settle slide
+  (`behaviors/usePlacementTransition.js`, presentation only — state is
+  committed once at the drop).
 - Depends on: `PieceDomain`, `SelectionDomain`, `ConnectionDomain`, `HistoryDomain`.
 - Cross-domain wiring: receives `syntaxAdapter` as an injected param from the App shell
   (no direct import — composition-shell pattern).
