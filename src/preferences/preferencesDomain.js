@@ -26,6 +26,10 @@ function isValid(entry, value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
   if (entry.type === 'text') return typeof value === 'string';
+  if (entry.type === 'number') {
+    return typeof value === 'number' && Number.isFinite(value)
+      && value >= entry.min && value <= entry.max;
+  }
   return false;
 }
 

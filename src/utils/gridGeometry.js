@@ -34,6 +34,21 @@ export const DEFAULT_GRID_DEFINITION = Object.freeze({
   subDivisions: 2,
 });
 
+// The lattice a workspace with no grid record reads: the lines CanvasGrid
+// drew before the grid existed (100 major, 20 minor) plus a 10 sub level.
+// Frozen for good. Record-less workspaces are never written on open, so if
+// the default above ever changes, workspaces created after that change must
+// capture the new default when they are created (brief §7).
+export const GRID_COMPATIBILITY_DEFINITION = Object.freeze({
+  schemaVersion: GRID_SCHEMA_VERSION,
+  coordinateSystem: GRID_COORDINATE_SYSTEM,
+  origin: Object.freeze({ x: 0, y: 0 }),
+  majorX: 100,
+  majorY: 100,
+  minorDivisions: 5,
+  subDivisions: 2,
+});
+
 // The spacing presets offered in the Grid widget. Each keeps the sub step a
 // divisor of 10 = gcd(180, 110), so a flush dock against an on-lattice
 // neighbor stays on the Flex lattice.

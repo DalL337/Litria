@@ -19,12 +19,15 @@
  * - type         'enum' (values + defaultValue) | 'boolean' (on/off, rendered
  *                as a slide toggle — ADR-024) | 'json' (plain object) |
  *                'text' (string; empty allowed and usually means "use the
- *                built-in default")
+ *                built-in default") | 'number' (finite, min..max, rendered as
+ *                a slider with `step` and an optional `unit`)
  * - label        short display name
  * - caption      one plain-English line, ALWAYS visible in UI (not a tooltip)
  * - place        context keys where this entry surfaces
  *                ('preferences.global' = the global scope on any Preferences
- *                surface; 'preferences.project' = the project-override scope)
+ *                surface; 'preferences.project' = the project-override scope;
+ *                'hud.grid' = the canvas HUD's Grid widget, a window onto the
+ *                same values — ADR-030 playground-review ruling)
  * - when         optional state predicate — the node-vs-group HUD pattern
  * - projectOverridable  whether a project file may override the global value
  * - comingSoon   entry renders disabled with this reason; setValue refuses it
@@ -50,6 +53,11 @@ export const PREFERENCE_ROOMS = Object.freeze([
     id: 'projectCreation',
     label: 'Project creation',
     description: 'What the New Project wizard starts from and what happens when it finishes.'
+  },
+  {
+    id: 'grid',
+    label: 'Grid',
+    description: 'How nodes land on the canvas grid and how the grid looks. The canvas HUD’s Grid widget shows the same settings.'
   },
   {
     id: 'behavior',
@@ -165,6 +173,151 @@ export const PREFERENCE_REGISTRY = [
     label: 'Save build logs automatically',
     caption: 'Write every build trace to the build log without asking. Off keeps it manual — use “Send to logs” on the trace. Saved runs are under Actions ▸ Logs.',
     place: ['preferences.global'],
+    projectOverridable: false
+  },
+  // ── Structural grid (ADR-030) ──────────────────────────────────────────
+  // Owner ruling 2026-09-27 (playground review): the playground's panel ships
+  // as the canvas HUD's Grid widget, every option included. Defaults are the
+  // playground's starting state. Spacing is not here: it belongs to the
+  // workspace (GridDomain), not to a person.
+  {
+    key: 'gridSnapMode',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'enum',
+    values: ['flex', 'strict'],
+    defaultValue: 'flex',
+    label: 'Placement',
+    caption: 'Flex docks against neighbors and otherwise lands on the finest grid point. Strict lands only on major intersections and never docks flush.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridSmartGuides',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'boolean',
+    defaultValue: true,
+    label: 'Smart guides',
+    caption: 'While dragging, thin lines show when a node lines up with another node’s edge or center. In Flex a node pulls into line from 6 pixels away.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridSettleMs',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'number',
+    min: 0,
+    max: 400,
+    step: 10,
+    unit: 'ms',
+    defaultValue: 150,
+    label: 'Settle time',
+    caption: 'How long a dropped node takes to slide onto its grid point. 0 places it instantly.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridSettleEasing',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'enum',
+    values: ['cubic', 'quint', 'sine', 'linear'],
+    defaultValue: 'cubic',
+    label: 'Settle easing',
+    caption: 'The shape of the slide: cubic eases out, quint is snappier, sine is softer, linear keeps one speed.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridReduceMotion',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'enum',
+    values: ['system', 'always', 'never'],
+    defaultValue: 'system',
+    label: 'Reduce motion',
+    caption: 'Skip the settle slide. System follows your operating system’s reduce-motion setting.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridInk',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'enum',
+    values: ['theme', 'neutral'],
+    defaultValue: 'theme',
+    label: 'Grid line color',
+    caption: 'Theme tints the lines with the theme’s wire color, just as visible as white. Neutral keeps them white.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridShowMajor',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'boolean',
+    defaultValue: true,
+    label: 'Major lines',
+    caption: 'Show the major grid lines. Hidden lines still place nodes.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridShowMinor',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'boolean',
+    defaultValue: true,
+    label: 'Minor lines',
+    caption: 'Show the minor grid lines. Hidden lines still place nodes.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridShowSub',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'boolean',
+    defaultValue: true,
+    label: 'Sub lines',
+    caption: 'Show the finest grid lines. Hidden lines still place nodes.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridShowOrigin',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'boolean',
+    defaultValue: true,
+    label: 'Origin marker',
+    caption: 'Mark the canvas origin (0, 0), where Home centers the view.',
+    place: ['preferences.global', 'hud.grid'],
+    projectOverridable: false
+  },
+  {
+    key: 'gridPaintOverrides',
+    room: 'grid',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'json',
+    defaultValue: {},
+    label: 'Line opacity',
+    caption: 'Your own line opacity per theme, set with the Grid widget’s sliders. Reset returns every theme to its own values.',
+    place: ['preferences.global', 'hud.grid'],
     projectOverridable: false
   },
   {

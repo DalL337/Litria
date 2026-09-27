@@ -14,7 +14,7 @@ import {
 // same shape at build time; this is the executable contract.
 
 test('rooms are declared in display order with a label and a description', () => {
-  assert.deepEqual(PREFERENCE_ROOM_IDS, ['appearance', 'projectCreation', 'behavior']);
+  assert.deepEqual(PREFERENCE_ROOM_IDS, ['appearance', 'projectCreation', 'grid', 'behavior']);
   for (const room of PREFERENCE_ROOMS) {
     assert.ok(room.label?.length > 0, `${room.id}: label required`);
     assert.ok(room.description?.length > 0, `${room.id}: one-line description required (rooms explain themselves)`);
@@ -39,11 +39,13 @@ test('the rooms hold what the brief says they hold', () => {
   assert.equal(byKey.wireDropOnCollapsedGroup, 'behavior');
   assert.equal(byKey.terminalDrawerClose, 'behavior');
   assert.equal(byKey.splashScreen, 'behavior');
+  assert.equal(byKey.gridSnapMode, 'grid');
+  assert.equal(byKey.gridPaintOverrides, 'grid');
 });
 
 test('entriesByRoom groups the place query by room, in room order then registry order', () => {
   const rooms = entriesByRoom('preferences.global');
-  assert.deepEqual(rooms.map((r) => r.id), ['appearance', 'projectCreation', 'behavior']);
+  assert.deepEqual(rooms.map((r) => r.id), ['appearance', 'projectCreation', 'grid', 'behavior']);
   const flattened = rooms.flatMap((r) => r.entries.map((e) => e.key));
   const viaPlace = entriesForPlace('preferences.global').map((e) => e.key);
   assert.deepEqual([...flattened].sort(), [...viaPlace].sort(), 'no entry is lost or duplicated');

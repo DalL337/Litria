@@ -131,6 +131,11 @@ const SHELL_COMPOSITION_MANIFEST = new Set([
   './app/useGroupMenuUi',
   // Theme commands + palette state (create/rename/delete/accent/tokens).
   './app/useThemeActions',
+  // Structural grid (ADR-030) — GridDomain state, hydration from the
+  // workspace record, undoable spacing apply with epoch-fenced saves, and the
+  // grid's personal settings; pure logic in app/gridDomain.js,
+  // app/gridPreferences.js and utils/gridGeometry.js (node-tested).
+  './app/useGridActions',
   // Preferences panel open-state (ADR-019 Slice 2) — File menu surface.
   './app/usePreferencesSurface',
   // Splash gating on the splashScreen preference (ADR-024) — mounts the

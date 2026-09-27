@@ -427,6 +427,47 @@ function PreferencesPanel({
             </button>
           );
         }
+        if (entry.type === 'number') {
+          const stored = values[entry.key];
+          const current = typeof stored === 'number' && Number.isFinite(stored) ? stored : entry.defaultValue;
+          return (
+            <span className="pf-range">
+              <input
+                type="range"
+                aria-label={entry.label}
+                min={entry.min}
+                max={entry.max}
+                step={entry.step}
+                value={current}
+                disabled={Boolean(entry.comingSoon) || !isLoaded}
+                onChange={(e) => setValues((prev) => ({ ...prev, [entry.key]: Number(e.target.value) }))}
+                onPointerUp={(e) => handleSetGeneric(entry, Number(e.currentTarget.value))}
+                onKeyUp={(e) => handleSetGeneric(entry, Number(e.currentTarget.value))}
+              />
+              <span className="pf-range-value">{current}{entry.unit ? ` ${entry.unit}` : ''}</span>
+            </span>
+          );
+        }
+        if (entry.key === PREF_KEYS.gridPaintOverrides) {
+          // Personal grid line opacity, set with the Grid widget's sliders.
+          // This room shows how many theme combinations carry one and resets
+          // them all; the sliders themselves live on the canvas.
+          const stored = values[entry.key];
+          const count = stored && typeof stored === 'object' ? Object.keys(stored).length : 0;
+          return (
+            <span className="pf-range">
+              <span className="pf-range-value">{count ? `${count} customized` : 'Theme values'}</span>
+              <button
+                type="button"
+                className="pf-pill"
+                disabled={!count || !isLoaded}
+                onClick={() => handleSetGeneric(entry, {})}
+              >
+                Reset
+              </button>
+            </span>
+          );
+        }
         if (entry.type === 'text') {
           return (
             <input

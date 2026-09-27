@@ -110,6 +110,7 @@ import { createGroupDomain } from './app/groupDomain';
 import { createConnectionDomain } from './app/connectionDomain';
 import { THEME_ACCENT_SWATCHES } from './app/themeDomain';
 import { useThemeActions } from './app/useThemeActions';
+import { useGridActions } from './app/useGridActions';
 import { usePreferencesSurface } from './app/usePreferencesSurface';
 import { useSplashVisibility } from './app/useSplashVisibility';
 import { useTopDrawers } from './components/useTopDrawers';
@@ -659,6 +660,11 @@ function App() {
     handleSetFolderColor,
     getFolderColor
   } = useThemeActions({ projectInstance, pieceDomain, groupDomain, targetGroupId, groups });
+
+  // Structural grid (ADR-030): the workspace's applied lattice plus the
+  // personal grid settings. Placement (grid slice 3) and the canvas surface
+  // and Grid widget (slice 4) read it; this slice hydrates and saves it.
+  const grid = useGridActions({ projectInstance, history });
 
   const { isPreferencesOpen, openPreferences, closePreferences } = usePreferencesSurface();
 

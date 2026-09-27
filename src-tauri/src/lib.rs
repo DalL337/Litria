@@ -103,6 +103,7 @@ pub fn run() {
             db::commands::db_save_editor_state,
             db::commands::db_load_editor_state,
             db::commands::db_save_viewport,
+            db::commands::db_save_workspace_grid,
             db::commands::db_add_hidden_path,
             db::commands::db_remove_hidden_path,
             db::commands::db_list_recent_projects,
