@@ -367,6 +367,58 @@ test('GroupDomain allocateGroupId mints sequential ids and advances the counter'
   assert.equal(nextGroupId, 9);
 });
 
+// The app's counter is React state read through a ref: setNextGroupId only
+// queues an update, and the ref catches up on the next render. This models
+// that, which the immediate setter above does not.
+function createRenderedCounter(initial) {
+  let rendered = initial;
+  const queue = [];
+  return {
+    getNextGroupId: () => rendered,
+    setNextGroupId: (updater) => { queue.push(updater); },
+    render() {
+      for (const updater of queue.splice(0)) {
+        rendered = typeof updater === 'function' ? updater(rendered) : updater;
+      }
+      return rendered;
+    },
+  };
+}
+
+test('GroupDomain allocateGroupId mints distinct ids within one render (one reconciliation pass)', () => {
+  // Owner's testblank (2026-09-27): five folders without groups each got
+  // group-4 in one launch pass, so every insert after the first failed with
+  // "UNIQUE constraint failed: groups.id".
+  const counter = createRenderedCounter(4);
+  const domain = createGroupDomain({ setGroups: () => {}, getGroups: () => [], ...counter });
+
+  const ids = Array.from({ length: 5 }, () => domain.commands.allocateGroupId().groupId);
+  assert.deepEqual(ids, ['group-4', 'group-5', 'group-6', 'group-7', 'group-8']);
+  assert.equal(counter.render(), 9);
+  assert.equal(domain.commands.allocateGroupId().groupId, 'group-9', 'continues from the rendered counter');
+});
+
+test('GroupDomain allocateGroupId never returns an id a current group holds', () => {
+  const counter = createRenderedCounter(2);
+  const groups = [{ id: 'group-1' }, { id: 'group-2' }, { id: 'group-3' }, { id: 'group-5' }];
+  const domain = createGroupDomain({ setGroups: () => {}, getGroups: () => groups, ...counter });
+
+  const ids = Array.from({ length: 3 }, () => domain.commands.allocateGroupId().groupId);
+  assert.deepEqual(ids, ['group-4', 'group-6', 'group-7']);
+  assert.equal(counter.render(), 8);
+});
+
+test('GroupDomain allocateGroupId starts over from a counter that moved (a newly hydrated project)', () => {
+  const counter = createRenderedCounter(4);
+  const domain = createGroupDomain({ setGroups: () => {}, getGroups: () => [], ...counter });
+  domain.commands.allocateGroupId();
+  domain.commands.allocateGroupId();
+  counter.render();
+  counter.setNextGroupId(2); // hydration of a project whose highest group is group-1
+  counter.render();
+  assert.equal(domain.commands.allocateGroupId().groupId, 'group-2');
+});
+
 test('GroupDomain applyFsSyncPlan applies folderPaths, removals, additions, and upserts in one update', () => {
   let groups = [
     { id: 'g1', name: 'src', pieceIds: [1, 2], folderPath: 'src' },

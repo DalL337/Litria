@@ -24,8 +24,6 @@ export function useGroupMenuActions({
   setIsGroupMenuOpen,
   setIsRenameGroupOpen,
   setSelectedGroupId,
-  nextGroupId,
-  setNextGroupId,
   getBasename,
   targetGroup,
   themeOptions,
@@ -313,19 +311,18 @@ export function useGroupMenuActions({
   const handleCreateFolderGroup = useCallback(async () => {
     if (!selectedCount) return;
     const rootPath = projectRootPath ?? null;
-    const groupIndex = nextGroupId;
+    const { groupId, groupIndex } = groupDomain.commands.allocateGroupId();
     const name = `Group ${groupIndex}`;
     const folderPath = `Group-${groupIndex}`;
     const pieceIds = [...selectedIds];
 
     groupDomain.commands.createFolderGroup({
-      groupId: `group-${groupIndex}`,
+      groupId,
       name,
       pieceIds,
       folderPath
     });
-    setSelectedGroupId(`group-${groupIndex}`);
-    setNextGroupId((value) => value + 1);
+    setSelectedGroupId(groupId);
     setIsRenameGroupOpen(false);
 
     if (rootPath) {
@@ -352,7 +349,6 @@ export function useGroupMenuActions({
     fsManager,
     getBasename,
     groupDomain,
-    nextGroupId,
     normalizePath,
     piecesById,
     projectRootPath,
@@ -360,7 +356,6 @@ export function useGroupMenuActions({
     selectedIds,
     setIsGroupMenuOpen,
     setIsRenameGroupOpen,
-    setNextGroupId,
     setSelectedGroupId
   ]);
 

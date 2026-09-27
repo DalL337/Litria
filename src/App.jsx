@@ -444,7 +444,7 @@ function App() {
   // Read-only pill + rate-limited write-failure notices (ADR-026 decision 3).
   const persistenceNotices = usePersistenceNotices({ projectInstance });
 
-  const { persistConnectionSides } = useProjectPersistence({
+  const { persistConnectionSides, hydratedLoad } = useProjectPersistence({
     projectInstance,
     pieces,
     setPieces,
@@ -772,14 +772,18 @@ function App() {
     groupDomain,
     scaffoldRefreshToken,
     // Per-load identity: reconciliation runs once after pieces hydrate on
-    // every project open, so groups draw at launch (live-verify D fix).
-    loadToken: projectInstance?._dbState ?? null,
+    // every project open, so groups draw at launch (live-verify D fix). Token
+    // and root come from the hydrated load, not the instance: on a switch the
+    // instance changes a render before the canvas does, and the pass would
+    // reconcile (and persist) the previous project's groups against the new
+    // project's workspace.
+    loadToken: hydratedLoad?.token ?? null,
     normalizePath,
     getBasename,
     // D2 parity (brief-group-physicality): the disk tree is the reconcile
     // input — every folder gets a group, empty included; seeds place them.
     listTree: listProjectTree,
-    projectRootPath: projectInstance?.rootPath ?? null,
+    projectRootPath: hydratedLoad?.rootPath ?? null,
     getSpawnPosition,
     getGroupBounds,
     pieceWidth: PIECE_WIDTH,
@@ -893,8 +897,6 @@ function App() {
     setIsGroupMenuOpen,
     setIsRenameGroupOpen,
     setSelectedGroupId,
-    nextGroupId,
-    setNextGroupId,
     getBasename,
     targetGroup,
     themeOptions,
