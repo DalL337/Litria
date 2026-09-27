@@ -35,10 +35,28 @@ export async function prefsLoadGlobal() {
   return invokePrefs('prefs_load_global');
 }
 
+// Listeners told after a global preference is saved, so two surfaces showing
+// the same setting (the Preferences panel and the canvas HUD's Grid widget)
+// agree without reloading.
+const globalSavedListeners = new Set();
+
+/** Subscribe to saved global preferences. Returns the unsubscribe function. */
+export function onGlobalPreferenceSaved(listener) {
+  globalSavedListeners.add(listener);
+  return () => globalSavedListeners.delete(listener);
+}
+
 /** Persist one global preference. Preference writes are rare, real user actions. */
 export async function prefsSaveGlobal(key, value) {
   const result = await invokePrefs('prefs_save_global', { key, value });
   crumb('command', `prefs_save_global:${key}`);
+  for (const listener of globalSavedListeners) {
+    try {
+      listener(key, value);
+    } catch (error) {
+      console.warn('[preferences] a saved-preference listener failed:', error);
+    }
+  }
   return result;
 }
 

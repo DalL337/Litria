@@ -82,6 +82,24 @@ CREATE TABLE IF NOT EXISTS viewport (
 );
 "#;
 
+/// The workspace's applied grid (ADR-030, v4): one singleton row holding the
+/// lattice the node positions were arranged on. Sync side (implementation
+/// Rule 9): shared project truth; it travels with the positions it describes.
+/// Kept apart from `WORKSPACE_SCHEMA_V1` so the v4 migration step creates it
+/// with exactly the same DDL.
+pub(crate) const WORKSPACE_GRID_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS workspace_grid (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    schema_version INTEGER NOT NULL,
+    coordinate_system TEXT NOT NULL,
+    major_x REAL NOT NULL,
+    major_y REAL NOT NULL,
+    minor_divisions INTEGER NOT NULL,
+    sub_divisions INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"#;
+
 /// App-level database schema (recent projects + preferences).
 pub(crate) const APP_SCHEMA_V1: &str = r#"
 PRAGMA journal_mode=WAL;
@@ -102,7 +120,7 @@ CREATE TABLE IF NOT EXISTS preferences (
 );
 "#;
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 3;
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 4;
 
 /// One additive column: `(table, column, declaration)`. Table and column
 /// names are compile-time literals and must stay so: they are interpolated
@@ -134,6 +152,8 @@ const V3_COLUMNS: &[AddColumn] = &[
 pub(crate) fn initialize_workspace_schema(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(WORKSPACE_SCHEMA_V1)
         .map_err(DbError::sqlite("Failed to initialize workspace schema"))?;
+    conn.execute_batch(WORKSPACE_GRID_DDL)
+        .map_err(DbError::sqlite("Failed to initialize the workspace grid table"))?;
 
     // Set schema version if not already set
     let count: i32 = conn
@@ -170,7 +190,25 @@ pub(crate) fn migrate_workspace_schema(conn: &Connection) -> Result<(), DbError>
     if version < 3 {
         apply_additive_step(conn, 3, V3_COLUMNS)?;
     }
+    if version < 4 {
+        apply_table_step(conn, 4, WORKSPACE_GRID_DDL)?;
+    }
 
+    Ok(())
+}
+
+/// Run one table-creating migration step atomically: the `CREATE TABLE IF
+/// NOT EXISTS` plus the version bump in a single transaction.
+fn apply_table_step(conn: &Connection, target: i32, ddl: &str) -> Result<(), DbError> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(DbError::sqlite(format!("Failed to begin migration to v{target}")))?;
+    tx.execute_batch(ddl)
+        .map_err(DbError::sqlite(format!("Failed to create a table for v{target}")))?;
+    tx.execute("UPDATE schema_version SET version = ?1", [target])
+        .map_err(DbError::sqlite(format!("Failed to bump schema version to v{target}")))?;
+    tx.commit()
+        .map_err(DbError::sqlite(format!("Failed to commit migration to v{target}")))?;
     Ok(())
 }
 
@@ -264,6 +302,7 @@ mod tests {
         assert!(tables.contains(&"editor_state".to_string()));
         assert!(tables.contains(&"hidden_paths".to_string()));
         assert!(tables.contains(&"viewport".to_string()));
+        assert!(tables.contains(&"workspace_grid".to_string()));
     }
 
     #[test]
@@ -336,6 +375,7 @@ mod tests {
         assert!(gcols.contains(&"seed_y".to_string()));
         assert!(gcols.contains(&"seed_w".to_string()));
         assert!(gcols.contains(&"seed_h".to_string()));
+        assert!(columns(conn, "workspace_grid").contains(&"major_x".to_string()));
         assert_eq!(get_schema_version(conn).unwrap(), CURRENT_SCHEMA_VERSION);
     }
 
@@ -458,6 +498,48 @@ mod tests {
         assert!(gcols.contains(&"seed_x".to_string()));
         assert!(gcols.contains(&"seed_h".to_string()));
         assert_eq!(get_schema_version(&conn).unwrap(), CURRENT_SCHEMA_VERSION);
+    }
+
+    /// A v3 workspace (before the grid) gains an empty grid table at v4, and
+    /// no row: it hydrates to the compatibility lattice without a write.
+    #[test]
+    fn migrate_upgrades_a_v3_database_with_the_grid_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        v1_fixture(&conn);
+        migrate_workspace_schema(&conn).unwrap();
+        conn.execute("DROP TABLE workspace_grid", []).unwrap();
+        conn.execute("UPDATE schema_version SET version = 3", []).unwrap();
+
+        migrate_workspace_schema(&conn).unwrap();
+
+        assert_at_current_version_with_all_columns(&conn);
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM workspace_grid", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    /// The v4 step is transactional: if the version bump cannot happen, the
+    /// table creation rolls back with it and the file stays at v3.
+    #[test]
+    fn migrate_failed_v4_step_leaves_v3() {
+        let conn = Connection::open_in_memory().unwrap();
+        v1_fixture(&conn);
+        migrate_workspace_schema(&conn).unwrap();
+        conn.execute("DROP TABLE workspace_grid", []).unwrap();
+        conn.execute("UPDATE schema_version SET version = 3", []).unwrap();
+        // Make the bump itself fail: a trigger that aborts updates to v4.
+        conn.execute_batch(
+            "CREATE TRIGGER block_v4 BEFORE UPDATE ON schema_version
+             WHEN NEW.version = 4 BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+
+        let err = migrate_workspace_schema(&conn).expect_err("the v4 bump must fail");
+        assert!(err.to_string().contains("v4"), "{err}");
+        assert_eq!(get_schema_version(&conn).unwrap(), 3);
+        let tables: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'workspace_grid'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tables, 0, "table creation rolled back with the failed bump");
     }
 
     #[test]

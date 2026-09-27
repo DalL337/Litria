@@ -83,6 +83,17 @@ for (const entry of PREFERENCE_REGISTRY ?? []) {
   if (entry.type === 'boolean' && typeof entry.defaultValue !== 'boolean') {
     violations.push(`${REGISTRY_REL}: ${k}: boolean requires a boolean defaultValue`);
   }
+  if (entry.type === 'number') {
+    const finite = (n) => typeof n === 'number' && Number.isFinite(n);
+    if (!finite(entry.min) || !finite(entry.max) || entry.min >= entry.max) {
+      violations.push(`${REGISTRY_REL}: ${k}: number requires finite min < max`);
+    } else if (!finite(entry.defaultValue) || entry.defaultValue < entry.min || entry.defaultValue > entry.max) {
+      violations.push(`${REGISTRY_REL}: ${k}: defaultValue must be a number within min..max`);
+    }
+    if (!finite(entry.step) || entry.step <= 0) {
+      violations.push(`${REGISTRY_REL}: ${k}: number requires a positive step`);
+    }
+  }
 }
 
 if (!PREF_KEYS || Object.isFrozen(PREF_KEYS) !== true) {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_GRID_DEFINITION,
+  GRID_COMPATIBILITY_DEFINITION,
   GRID_PRESETS,
   GRID_SCHEMA_VERSION,
   deriveGridSteps,
@@ -21,6 +22,14 @@ test('the default is the owner-ruled 100 · 20 · 10 square lattice', () => {
   const steps = deriveGridSteps(DEFAULT_GRID_DEFINITION);
   assert.deepEqual(steps, { majorX: 100, majorY: 100, minorX: 20, minorY: 20, subX: 10, subY: 10 });
   assert.equal(validateGridDefinition(DEFAULT_GRID_DEFINITION).ok, true);
+});
+
+test('the default still equals the compatibility lattice', () => {
+  // Workspaces with no grid record read GRID_COMPATIBILITY_DEFINITION and are
+  // never written on open. That is only right while the default matches it:
+  // changing the default also requires capturing it at workspace creation.
+  assert.equal(sameGridDefinition(DEFAULT_GRID_DEFINITION, GRID_COMPATIBILITY_DEFINITION), true);
+  assert.deepEqual(deriveGridSteps(GRID_COMPATIBILITY_DEFINITION).minorX, 20, 'the pre-grid minor lines');
 });
 
 test('every preset is valid and keeps the sub step a divisor of 10', () => {

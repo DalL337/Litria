@@ -1,5 +1,6 @@
 pub(crate) mod app_db;
 pub(crate) mod commands;
+pub(crate) mod grid;
 pub(crate) mod schema;
 pub(crate) mod types;
 
@@ -53,6 +54,13 @@ pub(crate) enum DbError {
     },
     /// Anything else on the database path (I/O, lock poisoning, "no project open").
     Other(String),
+    /// A write the storage boundary refused on purpose (an invalid record, or
+    /// one that would overwrite a record this build must keep). Maps to a
+    /// `Conflict` carrying `code`.
+    Rejected {
+        code: &'static str,
+        message: String,
+    },
 }
 
 impl DbError {
@@ -74,6 +82,7 @@ impl fmt::Display for DbError {
         match self {
             DbError::Sqlite { context, source } => write!(f, "{context}: {source}"),
             DbError::Corrupt(text) | DbError::Other(text) => f.write_str(text),
+            DbError::Rejected { message, .. } => f.write_str(message),
             DbError::WorkspaceChanged { expected, open } => write!(
                 f,
                 "Request was issued for workspace {expected}, but {} is open.",
@@ -89,6 +98,7 @@ impl From<DbError> for CommandError {
             DbError::Sqlite { context, source } => classify_sqlite(&context, &source),
             DbError::Corrupt(detail) => corrupt(&detail),
             DbError::Other(text) => CommandError::from_text(text),
+            DbError::Rejected { code, message } => CommandError::conflict(code, message),
             ref changed @ DbError::WorkspaceChanged { .. } => {
                 CommandError::conflict(CODE_WORKSPACE_CHANGED, changed.to_string())
             }

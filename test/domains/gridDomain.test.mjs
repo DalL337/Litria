@@ -50,6 +50,13 @@ test('an invalid record falls back diagnostically and locks editing', () => {
   assert.equal(attempt.ok, false, 'the unreadable record must not be overwritten');
 });
 
+test('a stored row the backend could not read is shown as a fallback and kept', () => {
+  const grid = createGridDomain();
+  const state = grid.commands.hydrate({ record: null, unreadable: true });
+  assert.equal(state.source, 'fallback');
+  assert.equal(grid.selectors.canEdit(), false);
+});
+
 test('a newer schema record is never overwritten', () => {
   const grid = createGridDomain();
   const state = grid.commands.hydrate({ record: record({ schemaVersion: GRID_SCHEMA_VERSION + 1 }) });

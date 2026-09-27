@@ -24,10 +24,36 @@ test('every registry entry declares the full ADR-019 contract', () => {
       PREFERENCE_PROPAGATIONS.includes(entry.propagation),
       `${entry.key}: bad propagation ${entry.propagation}`
     );
-    assert.ok(['enum', 'boolean', 'json', 'text'].includes(entry.type), `${entry.key}: bad type ${entry.type}`);
+    assert.ok(['enum', 'boolean', 'json', 'text', 'number'].includes(entry.type), `${entry.key}: bad type ${entry.type}`);
     assert.ok(entry.label?.length > 0, `${entry.key}: label required`);
     assert.ok(entry.caption?.length > 0, `${entry.key}: always-visible caption required`);
     assert.ok(Array.isArray(entry.place) && entry.place.length > 0, `${entry.key}: place required`);
+  }
+});
+
+test('number entries: setValue accepts only finite values within min..max', () => {
+  const domain = createPreferencesDomain();
+  const next = domain.commands.setValue({ key: 'gridSettleMs', value: 200 });
+  assert.equal(next.gridSettleMs, 200);
+  assert.equal(domain.commands.setValue({ key: 'gridSettleMs', value: 0 }).gridSettleMs, 0, 'zero is a legal value');
+  for (const bad of [-10, 401, Number.NaN, '150', null]) {
+    assert.throws(() => domain.commands.setValue({ key: 'gridSettleMs', value: bad }), undefined, String(bad));
+  }
+});
+
+test('number getEffective: an out-of-range stored value falls back to the default', () => {
+  const stored = createPreferencesDomain({ values: { gridSettleMs: 9999 } });
+  assert.equal(stored.selectors.getEffective('gridSettleMs'), 150);
+  assert.equal(stored.selectors.getLayer('gridSettleMs'), 'default');
+});
+
+test('every grid setting lives in the grid room and surfaces in the Grid widget', () => {
+  const grid = PREFERENCE_REGISTRY.filter((entry) => entry.key.startsWith('grid'));
+  assert.ok(grid.length >= 10);
+  for (const entry of grid) {
+    assert.equal(entry.room, 'grid', entry.key);
+    assert.ok(entry.place.includes('hud.grid'), `${entry.key}: Grid widget`);
+    assert.ok(entry.place.includes('preferences.global'), `${entry.key}: exhaustive Preferences home`);
   }
 });
 

@@ -1,5 +1,6 @@
 use crate::db;
 use crate::db::app_db;
+use crate::db::grid::{self, StoredGrid};
 use crate::db::schema;
 use crate::db::types::*;
 use crate::errors::{CommandError, CommandResult};
@@ -156,6 +157,8 @@ pub(crate) fn db_bootstrap_project(
         editor_state: HashMap::new(),
         hidden_paths: vec![],
         viewport: None,
+        grid: None,
+        grid_unreadable: false,
         read_only,
     })
 }
@@ -594,6 +597,17 @@ pub(crate) fn db_save_viewport(
     .map_err(CommandError::from)
 }
 
+/// Apply a new grid definition to the open workspace (ADR-030). One
+/// structural record change; node positions are untouched.
+#[tauri::command]
+pub(crate) fn db_save_workspace_grid(
+    workspace_epoch: String,
+    grid: WorkspaceGrid,
+) -> CommandResult<()> {
+    db::with_workspace_db(&workspace_epoch, |conn| grid::save_grid(conn, &grid))
+        .map_err(CommandError::from)
+}
+
 #[tauri::command]
 pub(crate) fn db_add_hidden_path(
     workspace_epoch: String,
@@ -842,6 +856,13 @@ fn load_full_state(workspace_epoch: &str) -> Result<ProjectState, db::DbError> {
             )
             .ok();
 
+        // Applied grid (ADR-030). A bad row never fails the open.
+        let (grid, grid_unreadable) = match grid::load_grid(conn)? {
+            StoredGrid::Absent => (None, false),
+            StoredGrid::Readable(grid) => (Some(grid), false),
+            StoredGrid::Unreadable => (None, true),
+        };
+
         Ok(ProjectState {
             project,
             pieces,
@@ -851,6 +872,8 @@ fn load_full_state(workspace_epoch: &str) -> Result<ProjectState, db::DbError> {
             editor_state,
             hidden_paths,
             viewport,
+            grid,
+            grid_unreadable,
             workspace_epoch: workspace_epoch.to_string(),
             // The open path knows the probe result and overwrites this.
             read_only: false,
@@ -1277,6 +1300,58 @@ mod tests {
         assert_eq!(state.project.name, "proj");
         assert!(!state.read_only);
         db::close_workspace_db().unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    // ── Workspace grid (ADR-030) ───────────────────────────────────────────
+
+    #[test]
+    fn a_saved_grid_comes_back_with_the_project_and_nodes_stay_put() {
+        let _serial = db::serial_guard();
+        let root = temp_dir("grid-roundtrip");
+        let path = root.to_string_lossy().into_owned();
+        let fresh = db_bootstrap_project(path.clone(), "proj".into(), None, None, None).unwrap();
+        assert_eq!(fresh.grid, None, "a fresh workspace has no grid record");
+        assert!(!fresh.grid_unreadable);
+        let epoch = fresh.workspace_epoch.clone();
+        let piece_id = db_create_piece(epoch.clone(), "a.js".into(), "a.js".into(), 13.0, 27.0, None, None, None).unwrap();
+
+        let grid = WorkspaceGrid {
+            schema_version: grid::GRID_SCHEMA_VERSION,
+            coordinate_system: grid::GRID_COORDINATE_SYSTEM.to_string(),
+            major_x: 50.0,
+            major_y: 50.0,
+            minor_divisions: 5,
+            sub_divisions: 2,
+        };
+        db_save_workspace_grid(epoch.clone(), grid.clone()).unwrap();
+        db::close_workspace_db().unwrap();
+
+        let reopened = db_open_project(path).unwrap();
+        assert_eq!(reopened.grid, Some(grid));
+        let moved = reopened.pieces.iter().find(|p| p.id == piece_id).unwrap();
+        assert_eq!((moved.x, moved.y), (13.0, 27.0), "applying spacing never moves a node");
+        db::close_workspace_db().unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn saving_a_grid_to_a_closed_workspace_is_fenced() {
+        let _serial = db::serial_guard();
+        let root = temp_dir("grid-fenced");
+        let path = root.to_string_lossy().into_owned();
+        let state = db_bootstrap_project(path, "proj".into(), None, None, None).unwrap();
+        db::close_workspace_db().unwrap();
+        let grid = WorkspaceGrid {
+            schema_version: grid::GRID_SCHEMA_VERSION,
+            coordinate_system: grid::GRID_COORDINATE_SYSTEM.to_string(),
+            major_x: 100.0,
+            major_y: 100.0,
+            minor_divisions: 5,
+            sub_divisions: 2,
+        };
+        let err = db_save_workspace_grid(state.workspace_epoch, grid).expect_err("fenced");
+        assert_eq!(err.code(), db::CODE_WORKSPACE_CHANGED);
         fs::remove_dir_all(&root).ok();
     }
 

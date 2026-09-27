@@ -77,6 +77,19 @@ pub(crate) struct Viewport {
     pub scale: f64,
 }
 
+/// A workspace's applied grid record (ADR-030): the major step per axis and
+/// the integer division counts. Minor and sub steps are derived, never stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkspaceGrid {
+    pub schema_version: i64,
+    pub coordinate_system: String,
+    pub major_x: f64,
+    pub major_y: f64,
+    pub minor_divisions: i64,
+    pub sub_divisions: i64,
+}
+
 /// Full project state returned by `open_project` / `bootstrap_project`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +102,14 @@ pub(crate) struct ProjectState {
     pub editor_state: HashMap<String, String>,
     pub hidden_paths: Vec<String>,
     pub viewport: Option<Viewport>,
+    /// The workspace's applied grid, or None when it has no record (saved
+    /// before the grid existed, or never edited).
+    #[serde(default)]
+    pub grid: Option<WorkspaceGrid>,
+    /// A grid row exists but could not be read. The frontend shows a
+    /// fallback lattice and must not overwrite the row.
+    #[serde(default)]
+    pub grid_unreadable: bool,
     /// True when `workspace.db` opened read-only (ADR-026 decision 3): the
     /// canvas is viewable but every persistence write will fail with `db.read_only`.
     #[serde(default)]

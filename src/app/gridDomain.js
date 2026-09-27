@@ -15,6 +15,7 @@
 
 import {
   DEFAULT_GRID_DEFINITION,
+  GRID_COMPATIBILITY_DEFINITION,
   deriveGridSteps,
   sameGridDefinition,
   validateGridDefinition,
@@ -58,12 +59,20 @@ export function createGridDomain() {
       /**
        * Load a workspace's saved record. `record` is null for a workspace
        * saved before the grid existed: it gets the compatibility definition
-       * and no node moves. Hydration never writes back.
+       * and no node moves. `unreadable` reports a stored row the backend
+       * could not decode: it is shown as a fallback and never overwritten.
+       * Hydration never writes back.
        */
-      hydrate({ record = null, readOnly = false } = {}) {
-        if (record == null) {
+      hydrate({ record = null, readOnly = false, unreadable = false } = {}) {
+        if (unreadable) {
           return withDefinition(
             { ...DEFAULT_GRID_DEFINITION, origin: { x: 0, y: 0 } },
+            { source: 'fallback', hydrated: true, locked: true, diagnostics: ['the saved grid record could not be read'] },
+          );
+        }
+        if (record == null) {
+          return withDefinition(
+            { ...GRID_COMPATIBILITY_DEFINITION, origin: { x: 0, y: 0 } },
             { source: 'compatibility', hydrated: true, locked: Boolean(readOnly), diagnostics: [] },
           );
         }

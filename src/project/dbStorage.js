@@ -232,6 +232,24 @@ export async function dbSaveViewport(x, y, scale) {
   return invokeDb('db_save_viewport', { x, y, scale });
 }
 
+/**
+ * Save the workspace's applied grid definition (ADR-030). Grid saves are
+ * queued and serialized by useGridActions, so the caller passes the epoch it
+ * captured when the save was queued (ADR-032 D1).
+ */
+export async function dbSaveWorkspaceGrid(definition, { epoch } = {}) {
+  return invokeDb('db_save_workspace_grid', {
+    grid: {
+      schemaVersion: definition.schemaVersion,
+      coordinateSystem: definition.coordinateSystem,
+      majorX: definition.majorX,
+      majorY: definition.majorY,
+      minorDivisions: definition.minorDivisions,
+      subDivisions: definition.subDivisions,
+    },
+  }, { epoch });
+}
+
 /** Add a path to the hidden scaffold paths list. */
 export async function dbAddHiddenPath(path) {
   return invokeDb('db_add_hidden_path', { path });

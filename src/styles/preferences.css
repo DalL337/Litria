@@ -513,6 +513,26 @@
   color: rgba(255, 255, 255, 0.4);
 }
 
+/* Number setting (registry type 'number'): a slider and its value. */
+.pf-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pf-range input[type='range'] {
+  width: 160px;
+  accent-color: var(--cm-electric-blue);
+}
+
+.pf-range-value {
+  min-width: 56px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  text-align: right;
+}
+
 /* Boolean slide toggle (ADR-024): pill track, "on" lit in the LED glow
    language. */
 .pf-switch {
