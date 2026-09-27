@@ -603,6 +603,12 @@ function App() {
     PIECE_HEIGHT,
   });
 
+  // Structural grid (ADR-030): the workspace's applied lattice plus the
+  // personal grid settings. Creation and drag placement read it through
+  // getGridPlacement; the canvas surface and Grid widget arrive in slice 4.
+  const grid = useGridActions({ projectInstance, history });
+  const { getGridPlacement } = grid;
+
   /* ================================
      Piece creation
   ================================ */
@@ -611,7 +617,8 @@ function App() {
     pieces: piecesRef.current,
     pieceWidth: PIECE_WIDTH,
     pieceHeight: PIECE_HEIGHT,
-  }), [viewport.getVisibleBounds]);
+    grid: getGridPlacement(),
+  }), [getGridPlacement, viewport.getVisibleBounds]);
 
   const pieceDomain = useMemo(() => createPieceDomain({
     history,
@@ -660,11 +667,6 @@ function App() {
     handleSetFolderColor,
     getFolderColor
   } = useThemeActions({ projectInstance, pieceDomain, groupDomain, targetGroupId, groups });
-
-  // Structural grid (ADR-030): the workspace's applied lattice plus the
-  // personal grid settings. Placement (grid slice 3) and the canvas surface
-  // and Grid widget (slice 4) read it; this slice hydrates and saves it.
-  const grid = useGridActions({ projectInstance, history });
 
   const { isPreferencesOpen, openPreferences, closePreferences } = usePreferencesSurface();
 
@@ -1001,6 +1003,8 @@ function App() {
     updatePan: viewport.updatePan,
     endPan: viewport.endPan,
     isPanActive: viewport.isPanActive,
+    getGridPlacement,
+    getViewportScale: () => viewport.scale,
   });
   const {
     handleStageMouseDown,
