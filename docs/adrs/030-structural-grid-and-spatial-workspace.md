@@ -5,6 +5,10 @@
 - Accepted direction — 2026-09-17 (owner discussion: top-left corner anchoring,
   Strict/Flex placement, routing accommodation after snapping, and a future
   inhabitable VR/AR workspace). Implementation has not begun.
+- Extended — 2026-09-27 (owner decisions: Strict drops never dock flush;
+  themes paint the grid while spacing belongs to the workspace; node scale
+  returns as a feature. Details are in the brief's §2 rulings. Numerical
+  defaults remain open, pending a playground prototype.)
 - Proposed implementation detail — 2026-09-17 (the accompanying brief proposes
   ownership, storage, candidate arbitration, and delivery slices; numerical
   defaults and remaining interaction choices are not ratified by this record).
@@ -69,6 +73,10 @@ existing nodes. Neighbor docking's precedence relative to grid candidates is an
 explicit interaction decision in the brief; it must not emerge accidentally from
 helper execution order.
 
+> **Addendum (2026-09-27, owner decision):** in Strict, grid candidates always
+> win and a drop never docks flush against a neighbor. Flex keeps the existing
+> docking behavior. The rationale and cost are in the brief's §2 rulings.
+
 ### 4. Routing accommodation follows placement and may override grid alignment
 
 Preserve ADR-025's wire corridor and adjacency accommodation behavior. Once an
@@ -112,6 +120,10 @@ The brief proposes theme-owned structural presets, an applied workspace grid
 record, and a separate personal snap preference. Exact storage and editor
 contracts remain implementation proposals. Maintain ADR-019's distinction
 between theme definitions, preference choices, and workspace state.
+
+> **Addendum (2026-09-27, owner decision):** in v1, themes paint the grid
+> only. Spacing is a workspace setting, changed through an explicit, undoable
+> apply. Theme-carried structural presets are deferred.
 
 ### 7. Build 2D with a boundary for a future inhabitable workspace
 

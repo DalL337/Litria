@@ -7,6 +7,12 @@
 >
 > **Evidence:** Source inspection and existing tests against `main` commit
 > `ef4c2a3`, 2026-09-17. This is the canonical detailed design for ADR-030.
+>
+> **Updated 2026-09-27:** owner rulings recorded in §2 (Strict docking,
+> theme/spacing split, node scale, playground first). Errata added to §3
+> (node scale) and §7 (ADR-032 epoch fence). The canvas, interaction, routing
+> and theme sources cited in §3 were re-checked against `main` `810d527`:
+> none changed since `ef4c2a3`.
 
 ## 1. Objective and boundaries
 
@@ -69,6 +75,55 @@ that interaction explicitly rather than letting whichever helper runs last win.
 No new modifier key is reserved here; existing edit/additive/subtractive bindings
 remain governed by ADR-013.
 
+### Owner rulings — 2026-09-27
+
+These owner decisions supersede the matching rows of the table above. The
+owner may revisit the tuning after live use.
+
+| Question | Ruling |
+|---|---|
+| Neighbor docking vs Strict | **The grid always wins in Strict.** A Strict drop lands on a major intersection and never docks flush. Dropping onto or over a neighbor resolves to the nearest free major intersection. Flex keeps today's docking unchanged. Routing accommodation (§5) stays the only thing that moves a Strict placement off the lattice. |
+| Theme spacing edits | **Themes paint; spacing belongs to the workspace.** Themes own each level's appearance (color, opacity, visibility, line weight). Spacing lives only in the workspace grid record and is edited in grid settings as an explicit, undoable apply. Theme-carried structural presets are deferred; adding them later needs no migration, because the workspace record is the authority either way. |
+| Node scale (new question) | **Scale returns as a real feature** (see the §3 erratum: it is unreachable today). Slice 1's scaled-bounds work is therefore required rather than defensive, and Slice 3 covers scale commands: seam maintenance and a single undo action. Where the UI exposes scale is not yet decided. |
+| Node scale controls | **Three surfaces over the one existing command** (`scaleSelectedPieces`), mirroring zoom's dial, View menu and status readout: an Edit-menu "Scale Node" submenu (step presets plus Reset to 100%); a node-scale readout beside the status-bar zoom that opens the same slider popover; and a "Node" HUD widget (− / percent / +) added to `HUD_WIDGETS`. Scale applies only while one or more nodes are selected. The Edit menu entry and the HUD widget stay visible but disabled with no selection, so the HUD does not change size on every selection change. The status-bar readout appears only while a node is selected. A selection with mixed scales reads "Mixed". The existing 25–150% range stands. |
+| Node scale anchor | **Scale about each node's top-left corner**, the grid anchor (ADR-030 §2), replacing today's scaling about the selection's center. A Strict node keeps its intersection and grows right and down. In a multi-selection each node scales about its own corner, so every member stays on the lattice. Growth into a neighbor resolves through the common settlement path (§5): seams and one undo action. |
+| Exact intervals, Flex feel, motion | **Decide in a playground prototype** before freezing defaults. The starting positions in the table above stand until then. |
+
+**Node scale scope, checked 2026-09-27.**
+
+- Scale changes do not persist today. The position outbox saves only x and
+  y, and no frontend caller sends `scale`, although the backend
+  `db_update_piece` already accepts it. Reviving scale therefore needs a save
+  path through `invokeDb`, including undo and redo.
+- `StatusBar.jsx` is an ADR-008 protected file (`PROTECTED_FILES`), so the
+  readout uses the existing `StatusBarPopover` chrome and hand-rolled BEM,
+  with no shadcn.
+- Slice mapping: scaled bounds belong to Slice 1; the corner anchor,
+  persistence and settlement to Slice 3; and the three controls to Slice 4.
+
+**Why Strict does not dock.** At a 100-unit major step, neighboring Strict
+slots leave a 20-unit gap, the same width the snap-seam opens for one wire
+(`WIRE_SNAP_SEAM` in `useSnap.js`). Strict layouts therefore never cover a
+wired face. Flush docking in Strict would cover faces again and hand the
+router node moves off the lattice, the snap/seam loop §5 rules out. Letting
+docking win inside the snap distance would override most drops on a busy
+canvas. The overlap gesture already vetoes the seam, so giving it a second
+meaning would let one gesture defeat a wire.
+
+**Cost.** Strict layouts contain no adjacency: `useAdjacency` only detects
+edges within 5 units of flush. The D1c fade band (`adjacencyFadeFactor` in
+`wireAppearance.js`) still draws a wire across a 20-unit gap at about a third
+of full ink, so neighbors still read as related.
+
+**Arithmetic behind the interval choice** (checked 2026-09-27 against the
+source constants):
+
+- The sub step must divide gcd(180, 110) = 10, so 5 or 10. Then a flush dock
+  to an on-lattice neighbor stays on the Flex lattice, and docking and the
+  grid never conflict in Flex.
+- At a major step of 100, Strict's tightest packing leaves gaps of 20
+  horizontally and 90 vertically. At 50 it leaves 20 and 40.
+
 ## 3. What the code actually does today
 
 Values below are observations at the reviewed commit, not newly declared
@@ -91,6 +146,14 @@ constants. The linked modules remain authoritative for existing values.
 | [spawnPosition.js](../../../src/utils/spawnPosition.js), [usePieceUiActions.js](../../../src/app/usePieceUiActions.js), [useScaffoldActions.js](../../../src/app/useScaffoldActions.js) | Creation uses a viewport-centered collision search with random fallback; scaffold batches use folder-grid positions. | Cover creation separately from drag, using deterministic eligible placement for new top-level nodes while preserving folder arrangement. |
 | [themeDomain.js](../../../src/app/themeDomain.js), [useThemeActions.js](../../../src/app/useThemeActions.js), [themeDefaults.js](../../../src/theme/themeDefaults.js), [manifest.js](../../../src/project/manifest.js) | Appearance is a global preference despite the `projectAppearance` name. Theme normalization keeps id/name/version/tokens; token values are strings. Live/Calm overrides grid opacity. | New structured presets require explicit normalization, cloning, and migration. Numeric token patches cannot be assumed to survive. |
 | [useProjectPersistence.js](../../../src/project/useProjectPersistence.js), [dbStorage.js](../../../src/project/dbStorage.js) | Workspace state is SQLite. Position changes flow through a debounced outbox, which observes live piece state including previews. The current loader restores a saved viewport. | Do not implement against the old JSON manifest plan or assume its Home-on-open flag is current. Avoid persisting animation frames. |
+
+> **Erratum (2026-09-27, checked on `main` `810d527`):** node scale cannot
+> be reached from the UI today. `scaleSelectedPieces` is destructured in
+> `App.jsx` but never called, and no public commit has ever called it. Pieces
+> are created at scale 1, but the database keeps a `scale` column, so older
+> saves may hold other values. The scaled-rendering row above describes
+> rendering support, not a live feature. The owner decided the same day to
+> bring scale back (§2 rulings).
 
 ## 4. Ownership and proposed contracts
 
@@ -347,6 +410,14 @@ Do not introduce geometry keys into `editor_state` as a shortcut, resurrect the
 old JSON workspace manifest, or rely on global appearance to reconstruct an
 existing arrangement. `src/project/manifest.js` remains a relevant edit for theme
 normalization only.
+
+> **Erratum (2026-09-27):** ADR-032, merged after this brief was written,
+> stamps a workspace epoch on every `db_*` command in `dbStorage.invokeDb`,
+> and `scripts/db-chokepoint-guard.mjs` enforces that path. New grid commands
+> must go through `invokeDb`. A coalesced or deferred grid save must capture
+> the epoch when it is queued and pass it explicitly; the guard cannot check
+> that, so review must. The "project identity guards" named above now mean
+> this epoch fence.
 
 ## 8. File-level change map
 
