@@ -20,6 +20,12 @@ const normalizeSeedBounds = (seedBounds) => {
 };
 
 export function createGroupDomain({ setGroups, history, getGroups, getNextGroupId, setNextGroupId }) {
+  // The counter is React state, read through a ref that only catches up on
+  // the next render, so every allocation in one tick reads the same value.
+  // `reserved` carries this tick's allocations forward for as long as the
+  // counter still reads the value they started from.
+  let reserved = null;
+
   const applyGroupsUpdate = ({ label, update, withHistory = true }) => {
     if (typeof update !== 'function') return false;
     const before = typeof getGroups === 'function' ? getGroups() : null;
@@ -51,9 +57,19 @@ export function createGroupDomain({ setGroups, history, getGroups, getNextGroupI
       // lives with the app's persistence state (hydrated per project); the
       // allocation semantics live here. Not undoable — id allocation is
       // bookkeeping, not a user action.
+      //
+      // Ids are distinct within a tick (a reconciliation or write plan mints
+      // several in one loop) and never one a current group already holds: a
+      // repeated id is a UNIQUE failure in SQLite and a silently merged
+      // group in memory.
       allocateGroupId() {
-        const idx = getNextGroupId();
-        setNextGroupId((prev) => prev + 1);
+        const base = getNextGroupId();
+        let idx = reserved && reserved.base === base ? reserved.next : base;
+        const current = typeof getGroups === 'function' ? getGroups() : null;
+        const taken = new Set(Array.isArray(current) ? current.map((group) => group.id) : []);
+        while (taken.has(`group-${idx}`)) idx += 1;
+        reserved = { base, next: idx + 1 };
+        setNextGroupId((prev) => Math.max(prev, idx + 1));
         return { groupId: `group-${idx}`, groupIndex: idx };
       },
       // pieceIds may be empty (D2: empty folders are first-class — the group

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   dbSaveEditorState,
   dbSaveViewport,
@@ -86,6 +86,12 @@ export function useProjectPersistence({
   // NEXT project has opened, so it cannot ask which workspace is current.
   const pendingEpochRef = useRef(null);
   const hasRestoredEditorSessionRef = useRef(false);
+  // The load whose state is on the canvas: `{ token, rootPath }`, set in the
+  // same render as the hydrated pieces, groups and id counters. The instance
+  // (`_dbState`, `rootPath`) changes one render earlier, and a project switch
+  // does not wipe the canvas, so a per-load pass keyed on the instance can
+  // run the previous project's state against the new project's workspace.
+  const [hydratedLoad, setHydratedLoad] = useState(null);
 
   const normalizeId = useCallback((value) => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -178,10 +184,14 @@ export function useProjectPersistence({
 
   // ─── Hydration from SQLite ProjectState ──────────────────────────────────
   useEffect(() => {
-    if (!projectInstance?.rootPath || !projectInstance?.instanceId) return;
+    if (!projectInstance?.rootPath || !projectInstance?.instanceId) {
+      setHydratedLoad(null);
+      return;
+    }
     // Single-file "Open File" flow: no workspace DB attached, nothing to load
     if (projectInstance.manifestPath === null) {
       hasLoadedPiecesRef.current = true;
+      setHydratedLoad(null);
       return;
     }
 
@@ -192,6 +202,7 @@ export function useProjectPersistence({
     if (!dbState) {
       // No pre-loaded state — nothing to hydrate (should not happen in normal flow)
       hasLoadedPiecesRef.current = true;
+      setHydratedLoad(null);
       return;
     }
 
@@ -277,6 +288,7 @@ export function useProjectPersistence({
     setGroups(hydratedGroups);
     setNextGroupId(nextGroupId);
     setHiddenScaffoldPaths(dbState.hiddenPaths || []);
+    setHydratedLoad({ token: dbState, rootPath: projectInstance.rootPath });
 
     if (dbState.viewport) {
       setViewportScale(dbState.viewport.scale || 1);
@@ -657,5 +669,5 @@ export function useProjectPersistence({
     });
   }, [projectInstance]);
 
-  return { persistConnectionSides };
+  return { persistConnectionSides, hydratedLoad };
 }

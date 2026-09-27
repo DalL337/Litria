@@ -25,7 +25,11 @@ import { dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup, dbUpdateGroup } from '
  * groups weren't in the DB launched with NO groups drawn until some
  * scaffold operation happened to bump the token):
  *  1. Once per PROJECT LOAD, after pieces hydrate (loadToken + non-empty
- *     pieces — same per-load pattern discovery uses).
+ *     pieces — same per-load pattern discovery uses). The token and root
+ *     must come from the hydrated load, so they change in the same render
+ *     as the pieces and groups they describe. A launch pass cancelled
+ *     before it applied (pieces or groups changed while the tree loaded) is
+ *     released and rerun on the newer state, not dropped for the load.
  *  2. Every scaffold refresh (token change), as before.
  *
  * The whole delta (creations, removals, parent links) is applied through
@@ -43,7 +47,7 @@ import { dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup, dbUpdateGroup } from '
  * @param {Array}    params.groups          - All groups
  * @param {object}   params.groupDomain     - Group domain with commands
  * @param {number}   params.scaffoldRefreshToken - Increments on scaffold refresh
- * @param {any}      params.loadToken       - Per-open identity (projectInstance._dbState)
+ * @param {any}      params.loadToken       - Per-open identity of the HYDRATED load
  * @param {function} params.normalizePath   - Path normalizer
  * @param {function} params.getBasename     - Basename extractor
  * @param {function} [params.listTree]      - async (rootPath) => tree entries
@@ -82,6 +86,7 @@ export function useGroupFolderReconciliation({
     if (launchDue) ranForTokenRef.current = loadToken;
 
     let cancelled = false;
+    let applied = false;
     (async () => {
       let folders = null;
       if (typeof listTree === 'function' && projectRootPath) {
@@ -98,6 +103,7 @@ export function useGroupFolderReconciliation({
         }
       }
       if (cancelled) return;
+      applied = true;
 
       const { createGroups, removeGroups, parentUpdates } = reconcileGroupsWithFolders({
         pieces,
@@ -208,6 +214,11 @@ export function useGroupFolderReconciliation({
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (launchDue && !applied && ranForTokenRef.current === loadToken) {
+        ranForTokenRef.current = null;
+      }
+    };
   }, [scaffoldRefreshToken, loadToken, pieces, groups, groupDomain, normalizePath, getBasename, listTree, projectRootPath, getSpawnPosition, getGroupBounds, pieceWidth]);
 }
