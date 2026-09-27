@@ -110,8 +110,13 @@ marked below.
 
 8. `GridDomain`
 - Module: `src/app/gridDomain.js` — `createGridDomain` (ADR-030, accepted
-  2026-09-27 with the structural grid's Slice 1). Wired through the grid
-  orchestration hook when persistence lands (the brief's Slice 2).
+  2026-09-27 with the structural grid's Slice 1), wired via `useGridActions`
+  in App.jsx. The hook hydrates it from the workspace's `workspace_grid` row
+  (`ProjectState.grid`), applies spacing as one undoable step, and saves
+  through `invokeDb` with the epoch captured at queue time (ADR-032).
+- The grid's personal settings are ADR-019 preferences (room `grid`, place
+  `hud.grid`); `useGridActions` resolves them via `app/gridPreferences.js`.
+  Grid paint is theme tokens, resolved by `theme/gridPaint.js`.
 - Owns: the workspace's applied grid definition (major step per axis, minor
   and sub division counts), its validation and hydration, explicit structural
   changes, and the geometry revision caches key on.
