@@ -17,6 +17,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { buildPathToPiece, createConnectionsForEdges } from './useDiscoveryLifecycle.js';
+import { pieceScale } from '../utils/spatialGeometry2d.js';
 
 /**
  * Pure derivation: pending edges grouped by their ON-canvas importer piece,
@@ -100,7 +101,7 @@ export function useOffCanvasImports({
     setBadgeMenu({
       pieceId: piece.id,
       entries,
-      style: toScreenAnchor(piece.x + (PIECE_WIDTH ?? 180), piece.y),
+      style: toScreenAnchor(piece.x + (PIECE_WIDTH ?? 180) * pieceScale(piece), piece.y),
     });
   }, [offCanvasByPieceId, root, toScreenAnchor, PIECE_WIDTH]);
 

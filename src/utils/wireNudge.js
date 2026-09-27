@@ -32,6 +32,7 @@
 
 import { WIRE_CLEARANCE } from './orthogonalRouter.js';
 import { WIRE_CORRIDOR_SPACING } from './wireSpacing.js';
+import { pieceSize } from './spatialGeometry2d.js';
 
 // The opened seam: matches the corridor-width family (GAP_X 20,
 // WIRE_SNAP_SEAM 20). Stub (10) + clearance (9.5) fit inside it.
@@ -61,11 +62,11 @@ const rectsOverlap = (a, b) =>
  * @param {string} params.sourceSide
  * @param {number|string} params.targetId
  * @param {string} params.targetSide
- * @param {Array<{id:number|string,x:number,y:number}>} params.pieces
+ * @param {Array<{id:number|string,x:number,y:number,scale?:number}>} params.pieces
  * @param {Set<number|string>} [params.hiddenPieceIds]
  * @param {Map<number|string, number>} [params.groupByPieceId]
- * @param {number} params.pieceWidth
- * @param {number} params.pieceHeight
+ * @param {number} params.pieceWidth - base width; each piece's scale applies
+ * @param {number} params.pieceHeight - base height; each piece's scale applies
  * @returns {Array<{id:number|string, dx:number, dy:number}>|null}
  */
 export function computeBirthNudge({
@@ -86,7 +87,7 @@ export function computeBirthNudge({
   for (const piece of pieces ?? []) {
     if (!Number.isFinite(piece.x) || !Number.isFinite(piece.y)) continue;
     if (hiddenPieceIds?.has(piece.id)) continue;
-    working.set(piece.id, { x: piece.x, y: piece.y });
+    working.set(piece.id, { x: piece.x, y: piece.y, ...pieceSize(piece, pieceWidth, pieceHeight) });
   }
   if (!working.has(sourceId) || !working.has(targetId)) return null;
 
@@ -104,8 +105,8 @@ export function computeBirthNudge({
     // extending WIRE_NUDGE_SEAM out from the face, WIRE_CLEARANCE either
     // side of the terminal.
     const terminal = {
-      x: anchor.x + (normal.x === 1 ? pieceWidth : normal.x === -1 ? 0 : pieceWidth / 2),
-      y: anchor.y + (normal.y === 1 ? pieceHeight : normal.y === -1 ? 0 : pieceHeight / 2),
+      x: anchor.x + (normal.x === 1 ? anchor.width : normal.x === -1 ? 0 : anchor.width / 2),
+      y: anchor.y + (normal.y === 1 ? anchor.height : normal.y === -1 ? 0 : anchor.height / 2),
     };
     const zone = normal.x !== 0
       ? {
@@ -125,8 +126,7 @@ export function computeBirthNudge({
     const blockers = [];
     for (const [id, pos] of working.entries()) {
       if (endpointIds.has(id)) continue;
-      const rect = { x: pos.x, y: pos.y, width: pieceWidth, height: pieceHeight };
-      if (rectsOverlap(rect, zone)) blockers.push(id);
+      if (rectsOverlap(pos, zone)) blockers.push(id);
     }
     if (blockers.length === 0) continue;
 
@@ -136,9 +136,9 @@ export function computeBirthNudge({
     // flushness is preserved and only the seam at the face opens.
     const faceSeamDelta = (pos) => (
       normal.x === 1 ? (terminal.x + WIRE_NUDGE_SEAM) - pos.x
-        : normal.x === -1 ? pos.x + pieceWidth - (terminal.x - WIRE_NUDGE_SEAM)
+        : normal.x === -1 ? pos.x + pos.width - (terminal.x - WIRE_NUDGE_SEAM)
           : normal.y === 1 ? (terminal.y + WIRE_NUDGE_SEAM) - pos.y
-            : pos.y + pieceHeight - (terminal.y - WIRE_NUDGE_SEAM)
+            : pos.y + pos.height - (terminal.y - WIRE_NUDGE_SEAM)
     );
     const queue = blockers.map((id) => ({ id, inherited: null }));
     const pushed = new Set();
@@ -157,7 +157,7 @@ export function computeBirthNudge({
 
       const dx = normal.x * delta;
       const dy = normal.y * delta;
-      const before = { x: pos.x, y: pos.y, width: pieceWidth, height: pieceHeight };
+      const before = { x: pos.x, y: pos.y, width: pos.width, height: pos.height };
       pos.x += dx;
       pos.y += dy;
       const prev = moves.get(id) ?? { dx: 0, dy: 0 };
@@ -168,21 +168,19 @@ export function computeBirthNudge({
       const swept = {
         x: Math.min(before.x, pos.x),
         y: Math.min(before.y, pos.y),
-        width: pieceWidth + Math.abs(dx),
-        height: pieceHeight + Math.abs(dy),
+        width: pos.width + Math.abs(dx),
+        height: pos.height + Math.abs(dy),
       };
       for (const [otherId, otherPos] of working.entries()) {
         if (pushed.has(otherId) || otherId === id) continue;
-        const otherRect = { x: otherPos.x, y: otherPos.y, width: pieceWidth, height: pieceHeight };
         if (endpointIds.has(otherId)) {
           // Endpoints are never pushed. A pre-existing overlap the blocker
           // is moving AWAY from is fine; the blocker's post-move rect
           // landing ON an endpoint is a genuine shove — abort to D4.
-          const landed = { x: pos.x, y: pos.y, width: pieceWidth, height: pieceHeight };
-          if (rectsOverlap(otherRect, landed)) return null;
+          if (rectsOverlap(otherPos, pos)) return null;
           continue;
         }
-        if (rectsOverlap(otherRect, swept)) queue.push({ id: otherId, inherited: delta });
+        if (rectsOverlap(otherPos, swept)) queue.push({ id: otherId, inherited: delta });
       }
     }
   }
@@ -235,7 +233,7 @@ export function computeTransitSeams({
   for (const piece of pieces ?? []) {
     if (!Number.isFinite(piece.x) || !Number.isFinite(piece.y)) continue;
     if (hiddenPieceIds?.has(piece.id)) continue;
-    working.set(piece.id, { x: piece.x, y: piece.y });
+    working.set(piece.id, { x: piece.x, y: piece.y, ...pieceSize(piece, pieceWidth, pieceHeight) });
   }
   const moves = new Map();
   const addMove = (id, dx, dy) => {
@@ -250,8 +248,8 @@ export function computeTransitSeams({
     const pos = working.get(id);
     if (!pos) return null;
     return {
-      x: pos.x + (side === 'right' ? pieceWidth : side === 'left' ? 0 : pieceWidth / 2),
-      y: pos.y + (side === 'bottom' ? pieceHeight : side === 'top' ? 0 : pieceHeight / 2),
+      x: pos.x + (side === 'right' ? pos.width : side === 'left' ? 0 : pos.width / 2),
+      y: pos.y + (side === 'bottom' ? pos.height : side === 'top' ? 0 : pos.height / 2),
     };
   };
 
@@ -274,12 +272,11 @@ export function computeTransitSeams({
       const swept = {
         x: Math.min(pos.x, pos.x + dirX * WIRE_NUDGE_SEAM),
         y: Math.min(pos.y, pos.y + dirY * WIRE_NUDGE_SEAM),
-        width: pieceWidth + Math.abs(dirX * WIRE_NUDGE_SEAM),
-        height: pieceHeight + Math.abs(dirY * WIRE_NUDGE_SEAM),
+        width: pos.width + Math.abs(dirX * WIRE_NUDGE_SEAM),
+        height: pos.height + Math.abs(dirY * WIRE_NUDGE_SEAM),
       };
       for (const [otherId, otherPos] of working.entries()) {
         if (seen.has(otherId)) continue;
-        const rect = { x: otherPos.x, y: otherPos.y, width: pieceWidth, height: pieceHeight };
         if (endpointIds.has(otherId)) {
           // Same rule as the face phase: only a post-move landing on an
           // endpoint is a shove (abort); moving away past a pre-existing
@@ -287,13 +284,13 @@ export function computeTransitSeams({
           const landed = {
             x: pos.x + dirX * WIRE_NUDGE_SEAM,
             y: pos.y + dirY * WIRE_NUDGE_SEAM,
-            width: pieceWidth,
-            height: pieceHeight,
+            width: pos.width,
+            height: pos.height,
           };
-          if (rectsOverlap(rect, landed)) return null;
+          if (rectsOverlap(otherPos, landed)) return null;
           continue;
         }
-        if (rectsOverlap(rect, swept)) queue.push(otherId);
+        if (rectsOverlap(otherPos, swept)) queue.push(otherId);
       }
     }
     return chain;
@@ -324,19 +321,22 @@ export function computeTransitSeams({
     for (const [idB, posB] of working.entries()) {
       if (idB === idA) continue;
 
-      // Vertical shared seam: A left of B.
-      const vGap = posB.x - (posA.x + pieceWidth);
-      const vOverlap = Math.min(posA.y + pieceHeight, posB.y + pieceHeight)
+      // Vertical shared seam: A left of B. The "inner halves" band spans half
+      // of each piece's width either side of the seam (the pair's mean
+      // half-width, which is one half-width when both share a scale).
+      const vGap = posB.x - (posA.x + posA.width);
+      const vOverlap = Math.min(posA.y + posA.height, posB.y + posB.height)
         - Math.max(posA.y, posB.y);
       if (vGap >= 0 && vGap < SEAM_CANDIDATE_CEILING && vOverlap > 0) {
-        const seamX = posA.x + pieceWidth + vGap / 2;
+        const seamX = posA.x + posA.width + vGap / 2;
+        const innerHalfX = (posA.width + posB.width) / 4;
         const y0 = Math.max(posA.y, posB.y);
         const crossing = wireGeo.filter(({ endpointIds, a, b }) => {
           if (endpointIds.has(idA) || endpointIds.has(idB)) return false;
           const crossX = bandCrossing(a, b, y0, y0 + vOverlap, 'y');
           return crossX != null
-            && crossX > posA.x && crossX < posB.x + pieceWidth
-            && Math.abs(crossX - seamX) <= pieceWidth / 2;
+            && crossX > posA.x && crossX < posB.x + posB.width
+            && Math.abs(crossX - seamX) <= innerHalfX;
         });
         const required = crossing.length > 0
           ? WIRE_NUDGE_SEAM + (crossing.length - 1) * WIRE_CORRIDOR_SPACING
@@ -354,18 +354,19 @@ export function computeTransitSeams({
       }
 
       // Horizontal shared seam: A above B — same rule rotated.
-      const hGap = posB.y - (posA.y + pieceHeight);
-      const hOverlap = Math.min(posA.x + pieceWidth, posB.x + pieceWidth)
+      const hGap = posB.y - (posA.y + posA.height);
+      const hOverlap = Math.min(posA.x + posA.width, posB.x + posB.width)
         - Math.max(posA.x, posB.x);
       if (hGap >= 0 && hGap < SEAM_CANDIDATE_CEILING && hOverlap > 0) {
-        const seamY = posA.y + pieceHeight + hGap / 2;
+        const seamY = posA.y + posA.height + hGap / 2;
+        const innerHalfY = (posA.height + posB.height) / 4;
         const x0 = Math.max(posA.x, posB.x);
         const crossing = wireGeo.filter(({ endpointIds, a, b }) => {
           if (endpointIds.has(idA) || endpointIds.has(idB)) return false;
           const crossY = bandCrossing(a, b, x0, x0 + hOverlap, 'x');
           return crossY != null
-            && crossY > posA.y && crossY < posB.y + pieceHeight
-            && Math.abs(crossY - seamY) <= pieceHeight / 2;
+            && crossY > posA.y && crossY < posB.y + posB.height
+            && Math.abs(crossY - seamY) <= innerHalfY;
         });
         const required = crossing.length > 0
           ? WIRE_NUDGE_SEAM + (crossing.length - 1) * WIRE_CORRIDOR_SPACING

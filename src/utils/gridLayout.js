@@ -1,4 +1,4 @@
-import { PIECE_WIDTH, PIECE_HEIGHT } from '../components/PuzzlePiece';
+import { PIECE_WIDTH, PIECE_HEIGHT } from './pieceDimensions.js';
 
 /**
  * Grid layout engine for folder groups.

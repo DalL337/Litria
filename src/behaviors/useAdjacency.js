@@ -6,41 +6,49 @@
 // Code relationships (imports/calls) will be handled by references later.
 
 import { useCallback } from 'react';
-import { PIECE_WIDTH, PIECE_HEIGHT } from '../utils/pieceDimensions.js';
+import { pieceRect } from '../utils/spatialGeometry2d.js';
 
 function useAdjacency() {
   
   // Determine which direction piece A is relative to piece B
   // Returns: 'left', 'right', 'top', 'bottom', or null
+  // Edges and centers come from each piece's scaled rectangle.
   const getSnapDirection = useCallback((pieceA, pieceB, tolerance = 5) => {
+    const a = pieceRect(pieceA);
+    const b = pieceRect(pieceB);
+    const aCenterX = a.x + a.width / 2;
+    const aCenterY = a.y + a.height / 2;
+    const bCenterX = b.x + b.width / 2;
+    const bCenterY = b.y + b.height / 2;
+
     // A is to the LEFT of B (A's right edge touches B's left edge)
     if (
-      Math.abs((pieceA.x + PIECE_WIDTH) - pieceB.x) < tolerance &&
-      Math.abs((pieceA.y + PIECE_HEIGHT / 2) - (pieceB.y + PIECE_HEIGHT / 2)) < tolerance
+      Math.abs((a.x + a.width) - b.x) < tolerance &&
+      Math.abs(aCenterY - bCenterY) < tolerance
     ) {
       return 'left';
     }
 
     // A is to the RIGHT of B (A's left edge touches B's right edge)
     if (
-      Math.abs(pieceA.x - (pieceB.x + PIECE_WIDTH)) < tolerance &&
-      Math.abs((pieceA.y + PIECE_HEIGHT / 2) - (pieceB.y + PIECE_HEIGHT / 2)) < tolerance
+      Math.abs(a.x - (b.x + b.width)) < tolerance &&
+      Math.abs(aCenterY - bCenterY) < tolerance
     ) {
       return 'right';
     }
 
     // A is ABOVE B (A's bottom edge touches B's top edge)
     if (
-      Math.abs((pieceA.y + PIECE_HEIGHT) - pieceB.y) < tolerance &&
-      Math.abs((pieceA.x + PIECE_WIDTH / 2) - (pieceB.x + PIECE_WIDTH / 2)) < tolerance
+      Math.abs((a.y + a.height) - b.y) < tolerance &&
+      Math.abs(aCenterX - bCenterX) < tolerance
     ) {
       return 'top';
     }
 
     // A is BELOW B (A's top edge touches B's bottom edge)
     if (
-      Math.abs(pieceA.y - (pieceB.y + PIECE_HEIGHT)) < tolerance &&
-      Math.abs((pieceA.x + PIECE_WIDTH / 2) - (pieceB.x + PIECE_WIDTH / 2)) < tolerance
+      Math.abs(a.y - (b.y + b.height)) < tolerance &&
+      Math.abs(aCenterX - bCenterX) < tolerance
     ) {
       return 'bottom';
     }
