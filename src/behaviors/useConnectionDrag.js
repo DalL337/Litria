@@ -10,7 +10,7 @@
 // 6. Dropping on empty space cancels
 
 import { useState, useCallback } from 'react';
-import { PIECE_WIDTH, PIECE_HEIGHT } from '../components/PuzzlePiece';
+import { pieceSize } from '../utils/spatialGeometry2d.js';
 
 // ============================================
 // EDGE DETECTION CONFIG
@@ -60,18 +60,19 @@ function useConnectionDrag() {
     // Get cursor position relative to the piece's top-left corner
     const relativeX = cursorX - piece.x;
     const relativeY = cursorY - piece.y;
+    const { width, height } = pieceSize(piece);
 
     // Check if cursor is even inside the piece bounds
-    if (relativeX < 0 || relativeX > PIECE_WIDTH || 
-        relativeY < 0 || relativeY > PIECE_HEIGHT) {
+    if (relativeX < 0 || relativeX > width ||
+        relativeY < 0 || relativeY > height) {
       return null;
     }
 
     // Calculate edge zone thresholds
-    const leftThreshold = PIECE_WIDTH * EDGE_ZONE_RATIO;
-    const rightThreshold = PIECE_WIDTH * (1 - EDGE_ZONE_RATIO);
-    const topThreshold = PIECE_HEIGHT * EDGE_ZONE_RATIO;
-    const bottomThreshold = PIECE_HEIGHT * (1 - EDGE_ZONE_RATIO);
+    const leftThreshold = width * EDGE_ZONE_RATIO;
+    const rightThreshold = width * (1 - EDGE_ZONE_RATIO);
+    const topThreshold = height * EDGE_ZONE_RATIO;
+    const bottomThreshold = height * (1 - EDGE_ZONE_RATIO);
 
     // Determine which zone(s) the cursor is in
     const inLeftZone = relativeX < leftThreshold;
@@ -82,9 +83,9 @@ function useConnectionDrag() {
     // Handle corners - pick the edge the cursor is closest to
     if ((inLeftZone || inRightZone) && (inTopZone || inBottomZone)) {
       const distToLeft = relativeX;
-      const distToRight = PIECE_WIDTH - relativeX;
+      const distToRight = width - relativeX;
       const distToTop = relativeY;
-      const distToBottom = PIECE_HEIGHT - relativeY;
+      const distToBottom = height - relativeY;
 
       const horizontalDist = inLeftZone ? distToLeft : distToRight;
       const verticalDist = inTopZone ? distToTop : distToBottom;
@@ -130,18 +131,19 @@ function useConnectionDrag() {
 
   // Get the edge point of a piece for a given side (for drawing the line)
   const getEdgePoint = useCallback((piece, side) => {
-    const centerX = piece.x + PIECE_WIDTH / 2;
-    const centerY = piece.y + PIECE_HEIGHT / 2;
+    const { width, height } = pieceSize(piece);
+    const centerX = piece.x + width / 2;
+    const centerY = piece.y + height / 2;
 
     switch (side) {
       case 'right':
-        return { x: piece.x + PIECE_WIDTH, y: centerY };
+        return { x: piece.x + width, y: centerY };
       case 'left':
         return { x: piece.x, y: centerY };
       case 'top':
         return { x: centerX, y: piece.y };
       case 'bottom':
-        return { x: centerX, y: piece.y + PIECE_HEIGHT };
+        return { x: centerX, y: piece.y + height };
       default:
         return { x: centerX, y: centerY };
     }
@@ -160,11 +162,12 @@ function useConnectionDrag() {
 
   // Check if a point is inside a piece
   const isPointInPiece = useCallback((x, y, piece) => {
+    const { width, height } = pieceSize(piece);
     return (
       x >= piece.x &&
-      x <= piece.x + PIECE_WIDTH &&
+      x <= piece.x + width &&
       y >= piece.y &&
-      y <= piece.y + PIECE_HEIGHT
+      y <= piece.y + height
     );
   }, []);
 
@@ -187,8 +190,9 @@ function useConnectionDrag() {
 
   // Start a connection drag
   const startDrag = useCallback((piece, mouseX, mouseY) => {
-    const centerX = piece.x + PIECE_WIDTH / 2;
-    const centerY = piece.y + PIECE_HEIGHT / 2;
+    const { width, height } = pieceSize(piece);
+    const centerX = piece.x + width / 2;
+    const centerY = piece.y + height / 2;
 
     setIsDragging(true);
     setDragState({
@@ -292,8 +296,9 @@ function useConnectionDrag() {
 
   // Fallback: if cursor is in center, pick closest edge (old behavior)
   const getFallbackSide = useCallback((mouseX, mouseY, piece) => {
-    const centerX = piece.x + PIECE_WIDTH / 2;
-    const centerY = piece.y + PIECE_HEIGHT / 2;
+    const { width, height } = pieceSize(piece);
+    const centerX = piece.x + width / 2;
+    const centerY = piece.y + height / 2;
     
     const deltaX = mouseX - centerX;
     const deltaY = mouseY - centerY;

@@ -1,4 +1,5 @@
 import { chooseFacingSides } from '../connectionAnchoring.js';
+import { pieceSize } from '../../utils/spatialGeometry2d.js';
 
 export function buildPiecesById(pieces) {
   const map = new Map();
@@ -513,11 +514,12 @@ export function buildRenderableWires({
       groupId: group.id,
     };
   };
+  // A piece anchor carries the piece's scaled size, so terminals, sides and
+  // corridors read the body the user actually sees.
   const pieceAnchor = (piece) => ({
     x: piece.x,
     y: piece.y,
-    width: pieceWidth,
-    height: pieceHeight,
+    ...pieceSize(piece, pieceWidth, pieceHeight),
     kind: 'piece',
     pieceId: piece.id,
     status: piece.status,

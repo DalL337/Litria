@@ -68,7 +68,7 @@ App.jsx-touching PRs should apply the four-rule test by hand.
 
 One entry per domain: module, wiring, ownership, dependencies. All `*Domain.js` files under
 `src/app`, `src/terminal`, `src/scaffold`, and `src/project` are contract-checked by
-`domain-contract-guard.mjs` (13 domains at last count). Domains outside that pattern are
+`domain-contract-guard.mjs` (16 domains at last count, 2026-09-27). Domains outside that pattern are
 marked below.
 
 ## 2.1 Canvas / Workspace Domains
@@ -107,6 +107,19 @@ marked below.
 - Module: `src/history/undoManager.js` — wired via `createUndoManager` in App.jsx.
   (Predates the `*Domain.js` naming; not scanned by the contract guard.)
 - Owns: command stack, transactions, undo/redo orchestration, delete journal.
+
+8. `GridDomain`
+- Module: `src/app/gridDomain.js` — `createGridDomain` (ADR-030, accepted
+  2026-09-27 with the structural grid's Slice 1). Wired through the grid
+  orchestration hook when persistence lands (the brief's Slice 2).
+- Owns: the workspace's applied grid definition (major step per axis, minor
+  and sub division counts), its validation and hydration, explicit structural
+  changes, and the geometry revision caches key on.
+- Does not own: piece coordinates (`PieceDomain`), grid paint (themes), the
+  Strict/Flex choice (preferences) or the camera.
+- Pure geometry lives beside it in `src/utils/gridGeometry.js` (lattice,
+  rounding, candidates) and `src/utils/spatialGeometry2d.js` (scaled node
+  rectangles, the explicit 2D contract every placement path reads).
 
 ## 2.2 Project / Filesystem Domains
 

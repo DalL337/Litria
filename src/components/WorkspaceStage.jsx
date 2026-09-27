@@ -11,6 +11,7 @@ import GridChevrons from './GridChevrons';
 import { computeGridLayout, getTierCapacity, getMaxTier } from '../utils/gridLayout';
 import { resolveNodeEdgeColor, GROUP_OUTLINE_PAD, GROUP_NEST_PAD } from '../app/selectors/workspaceSelectors';
 import { worstSyntaxStatus } from '../utils/wireStatus';
+import { pieceSize } from '../utils/spatialGeometry2d';
 
 const GROUP_LED_COLORS = {
   empty: 'rgba(180, 180, 190, 0.5)',
@@ -629,7 +630,15 @@ function WorkspaceStage({
             })}
 
           <LassoBox box={lassoSelectionBox} />
-          {hoverTarget && <EdgeGlow piece={hoverTarget.piece} edge={hoverTarget.edge} glowColor={edgeGlowColor} />}
+          {hoverTarget && (
+            <EdgeGlow
+              piece={hoverTarget.piece}
+              edge={hoverTarget.edge}
+              glowColor={edgeGlowColor}
+              pieceWidth={pieceSize(hoverTarget.piece).width}
+              pieceHeight={pieceSize(hoverTarget.piece).height}
+            />
+          )}
 
           {dragLine && (
             <Line

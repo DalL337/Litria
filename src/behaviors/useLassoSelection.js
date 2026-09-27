@@ -3,7 +3,7 @@
 // Pure logic - no visual rendering
 
 import { useState, useCallback, useEffect } from 'react';
-import { PIECE_WIDTH, PIECE_HEIGHT } from '../components/PuzzlePiece';
+import { pieceSize } from '../utils/spatialGeometry2d.js';
 
 function useLassoSelection() {
   const [selectionBox, setSelectionBox] = useState(null);
@@ -81,19 +81,22 @@ function useLassoSelection() {
   }, [isSelecting, cancelLasso]);
 
   // Helper: Find items within the selection box
-  // Pass in array of items with {id, x, y}
-  // Optional overrides for item dimensions if needed
-  const getItemsInBox = useCallback((items, itemWidth = PIECE_WIDTH, itemHeight = PIECE_HEIGHT) => {
+  // Pass in array of items with {id, x, y, scale?}; each item's scaled body
+  // size applies unless explicit dimensions are passed.
+  const getItemsInBox = useCallback((items, itemWidth = null, itemHeight = null) => {
     if (!selectionBox || selectionBox.width < 5 || selectionBox.height < 5) {
       return [];
     }
 
     return items.filter(item => {
+      const size = pieceSize(item);
+      const width = itemWidth ?? size.width;
+      const height = itemHeight ?? size.height;
       return (
         item.x >= selectionBox.x &&
-        item.x + itemWidth <= selectionBox.x + selectionBox.width &&
+        item.x + width <= selectionBox.x + selectionBox.width &&
         item.y >= selectionBox.y &&
-        item.y + itemHeight <= selectionBox.y + selectionBox.height
+        item.y + height <= selectionBox.y + selectionBox.height
       );
     });
   }, [selectionBox]);

@@ -33,6 +33,7 @@ import {
 } from '../../utils/orthogonalRouter.js';
 import { distributeTerminals, separateCorridors } from '../../utils/wireSpacing.js';
 import { computeWireHops } from '../../utils/wireCrossings.js';
+import { pieceSize } from '../../utils/spatialGeometry2d.js';
 import {
   COLLAPSED_STUB_HEIGHT,
   GROUP_OUTLINE_PAD,
@@ -71,11 +72,11 @@ export function buildWireObstacles({
     if (!Number.isFinite(piece.x) || !Number.isFinite(piece.y)) continue;
     if (hiddenPieceIds?.has(piece.id)) continue;
     if (piece.filename && isPathHidden?.(piece.filename)) continue;
+    // The obstacle is the piece's scaled body, matching its anchor.
     obstacles.push({
       x: piece.x,
       y: piece.y,
-      width: pieceWidth,
-      height: pieceHeight,
+      ...pieceSize(piece, pieceWidth, pieceHeight),
       kind: 'piece',
       pieceId: piece.id,
     });

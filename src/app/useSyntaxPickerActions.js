@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { pieceScale } from '../utils/spatialGeometry2d.js';
 
 /**
  * useSyntaxPickerActions — owns the syntax symbol picker and the wire action
@@ -171,8 +172,9 @@ export function useSyntaxPickerActions({
     const s = piecesById.get(conn.sourceId);
     const t = piecesById.get(conn.targetId);
     if (!s || !t) return null;
-    const midCanvasX = ((s.x ?? 0) + (t.x ?? 0)) / 2 + PIECE_WIDTH / 2;
-    const midCanvasY = ((s.y ?? 0) + (t.y ?? 0)) / 2 + PIECE_HEIGHT / 2;
+    // Midpoint of the two bodies' centers, each at its own scale.
+    const midCanvasX = ((s.x ?? 0) + (t.x ?? 0) + PIECE_WIDTH * (pieceScale(s) + pieceScale(t)) / 2) / 2;
+    const midCanvasY = ((s.y ?? 0) + (t.y ?? 0) + PIECE_HEIGHT * (pieceScale(s) + pieceScale(t)) / 2) / 2;
     return { connectionId: selectedConnectionId, style: toScreenAnchor(midCanvasX, midCanvasY) };
   }, [selectedConnectionId, connections, piecesById, toScreenAnchor, PIECE_WIDTH, PIECE_HEIGHT]);
 
