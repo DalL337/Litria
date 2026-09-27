@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { dbLoadPreferences, dbSavePreference } from '../project/dbStorage.js';
 import { isEditableTarget } from './interactionDomain.js';
+import { roundToStep } from '../utils/gridGeometry.js';
 import {
   HUD_WIDGETS,
   HUD_PREF_KEY,
@@ -36,6 +37,9 @@ export function useCanvasHud({
   pieceHeight,
   isCreatePieceModalOpen,
   onCommitGroupCreate,
+  // Structural grid (ADR-030): a new group's box lands with its corner on a
+  // major intersection, like a new node.
+  getGridPlacement = null,
 }) {
   const [hudPosition, setHudPosition] = useState(HUD_DEFAULT_POSITION);
   const [hudVisibleIds, setHudVisibleIds] = useState(() => getDefaultVisibleIds());
@@ -210,14 +214,17 @@ export function useCanvasHud({
   const startGroupCreate = useCallback(() => {
     if (typeof onCommitGroupCreate !== 'function' || !viewport) return;
     const b = viewport.getVisibleBounds();
+    const steps = getGridPlacement?.()?.steps ?? null;
+    const centerX = b.x + b.width / 2 - GROUP_SEED_WIDTH / 2;
+    const centerY = b.y + b.height / 2 - GROUP_SEED_HEIGHT / 2;
     const seedBounds = {
-      x: b.x + b.width / 2 - GROUP_SEED_WIDTH / 2,
-      y: b.y + b.height / 2 - GROUP_SEED_HEIGHT / 2,
+      x: steps ? roundToStep(centerX, steps.majorX) : centerX,
+      y: steps ? roundToStep(centerY, steps.majorY) : centerY,
       width: GROUP_SEED_WIDTH,
       height: GROUP_SEED_HEIGHT,
     };
     setPendingGroupName({ seedBounds });
-  }, [onCommitGroupCreate, viewport]);
+  }, [getGridPlacement, onCommitGroupCreate, viewport]);
 
   const commitGroupName = useCallback(async (value) => {
     const pending = pendingGroupName;
