@@ -141,13 +141,38 @@
 .hud-section {
   padding: 9px 11px;
 }
+/* Every widget folds to its title row; the HUD shortens by what is folded. */
 .hud-section-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  margin-bottom: 7px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+  text-align: left;
   color: rgba(160, 165, 180, 0.75);
-  margin-bottom: 7px;
+}
+.hud-section-title:hover {
+  color: #f3f6ff;
+}
+.hud-section-title:focus-visible {
+  outline: 1px solid #7986cb;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.hud-section.is-collapsed > .hud-section-title {
+  margin-bottom: 0;
+}
+.hud-section-name {
+  flex: 1;
 }
 
 /* Create section — cm-hover-card glass finish, electric-blue accent hover */
@@ -360,18 +385,8 @@
 }
 
 /* ── Help widget (ADR-018 Phase C) — gestures-first quick reference ── */
-.hud-help-sub {
-  margin-bottom: 8px;
-}
-.hud-help-sub:last-child {
-  margin-bottom: 0;
-}
-.hud-help-sub-title {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--cm-indigo-light);
-  margin-bottom: 3px;
+.hud-help .hud-sub-body {
+  gap: 0;
 }
 .hud-help-row {
   display: flex;
@@ -402,22 +417,14 @@
   z-index: 25; /* above the stage, below the minimap and HUD */
 }
 
-/* ── Grid widget (ADR-030 playground-review ruling) ──
-   The playground's panel as a HUD section: collapsible subsections that keep
-   their value in a chip when folded. Same glass button language as Create. */
-.hud-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-  color: #f3f6ff;
-}
-
-.hud-grid-sub + .hud-grid-sub {
+/* ── Foldable subsections (HudSubsection: the Grid widget's, Help's) ──
+   A folded subsection keeps its value in a chip; the chevron and chip are
+   shared with the widget title rows. */
+.hud-sub + .hud-sub {
   border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
-.hud-grid-sub-title {
+.hud-sub-title {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -435,17 +442,17 @@
   text-align: left;
 }
 
-.hud-grid-sub-title:hover {
+.hud-sub-title:hover {
   color: #f3f6ff;
 }
 
-.hud-grid-sub-title:focus-visible {
+.hud-sub-title:focus-visible {
   outline: 1px solid #7986cb;
   outline-offset: 2px;
   border-radius: 4px;
 }
 
-.hud-grid-chev {
+.hud-chev {
   width: 5px;
   height: 5px;
   flex: none;
@@ -455,15 +462,16 @@
   transition: transform 120ms ease;
 }
 
-.hud-grid-sub.is-collapsed .hud-grid-chev {
+.hud-sub.is-collapsed > .hud-sub-title .hud-chev,
+.hud-section.is-collapsed > .hud-section-title .hud-chev {
   transform: translateY(1px) rotate(-45deg);
 }
 
-.hud-grid-sub-name {
+.hud-sub-name {
   flex: 1;
 }
 
-.hud-grid-chip {
+.hud-chip {
   max-width: 116px;
   padding: 0 7px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -479,11 +487,22 @@
   text-overflow: ellipsis;
 }
 
-.hud-grid-sub-body {
+.hud-sub-body {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 0 0 8px;
+}
+
+/* ── Grid widget (ADR-030 playground-review ruling) ──
+   The playground's panel as a HUD section. Same glass button language as
+   Create. */
+.hud-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #f3f6ff;
 }
 
 .hud-grid-seg,
@@ -658,7 +677,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hud-grid-chev {
+  .hud-chev {
     transition: none;
   }
 }

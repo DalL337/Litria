@@ -9,18 +9,20 @@ import { gridStrokeStyle } from '../theme/gridPaint';
  *
  * GridGuides — smart guides while dragging: thin translucent lines in the
  * theme's selection color, one device pixel wide, at most one per axis. They
- * sit on a layer UNDER the nodes, so they read in the gaps and never cross a
- * node body.
+ * draw ABOVE the nodes, as in Illustrator: under the nodes, a guide along two
+ * docked nodes' shared edges was hidden entirely, and a guide in a gap was
+ * lost among grid lines of a similar hue (owner smoke test, 2026-09-27).
  *
  * GridMarks — the dashed landing outline for the dragged set, and the
  * origin marker at (0, 0) in the grid's ink. No reticle and no label: the
  * landing coordinate is in the status bar.
  */
 
-// Guide opacity and overshoot past the aligned nodes (screen px), as in the
-// owner-accepted playground.
-const GUIDE_ALPHA = 0.6;
-const GUIDE_OVERSHOOT_PX = 8;
+// Guide opacity and overshoot past the aligned nodes (screen px). The
+// playground's 0.6 read in its empty canvas but not over the app's grid
+// and group boxes.
+const GUIDE_ALPHA = 0.85;
+const GUIDE_OVERSHOOT_PX = 12;
 
 function GridGuidesImpl({ lines, color, viewportScale = 1, viewportOffsetX = 0, viewportOffsetY = 0 }) {
   const sceneFunc = useCallback((context, shape) => {

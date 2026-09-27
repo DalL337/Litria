@@ -20,24 +20,38 @@ export const HUD_WIDGETS = [
   { id: 'help', title: 'Help — Shortcuts', defaultVisible: true },
 ];
 
-// The Grid widget's collapsible subsections, in display order, and which
-// start folded (the playground's starting state).
+// Every widget folds to its title row (owner smoke test, 2026-09-27), and
+// the HUD shortens by what is folded. Widgets start open.
+//
+// Subsections fold too. The Grid widget's, in display order, and which start
+// folded (the playground's starting state); then Help's, which start open.
 export const GRID_SECTION_IDS = Object.freeze(['placement', 'spacing', 'settle', 'node', 'look']);
+export const HELP_SECTION_IDS = Object.freeze(['help-drag', 'help-mouse', 'help-keys']);
+export const HUD_SECTION_IDS = Object.freeze([...GRID_SECTION_IDS, ...HELP_SECTION_IDS]);
 export const HUD_DEFAULT_COLLAPSED = Object.freeze({
   placement: false,
   spacing: false,
   settle: true,
   node: true,
   look: true,
+  'help-drag': false,
+  'help-mouse': false,
+  'help-keys': false,
 });
 
 /** Known subsection ids → booleans; unknown keys dropped, gaps defaulted. */
 export function normalizeCollapsed(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
-  return Object.fromEntries(GRID_SECTION_IDS.map((id) => [
+  return Object.fromEntries(HUD_SECTION_IDS.map((id) => [
     id,
     typeof source[id] === 'boolean' ? source[id] : HUD_DEFAULT_COLLAPSED[id],
   ]));
+}
+
+/** Folded widget ids: known ids only, each once, in registry order. */
+export function normalizeCollapsedWidgets(raw, widgets = HUD_WIDGETS) {
+  const folded = new Set(Array.isArray(raw) ? raw : []);
+  return widgets.filter((w) => folded.has(w.id)).map((w) => w.id);
 }
 
 // Registry ids that existed before persisted state carried `knownIds`.
@@ -54,7 +68,7 @@ export function getDefaultVisibleIds(widgets = HUD_WIDGETS) {
   return widgets.filter((w) => w.defaultVisible).map((w) => w.id);
 }
 
-/** Toggle one widget id in the visible set. Returns a new array. */
+/** Toggle one widget id in a set of ids (visible, or folded). Returns a new array. */
 export function toggleVisibleId(visibleIds, id) {
   const ids = Array.isArray(visibleIds) ? visibleIds : [];
   return ids.includes(id) ? ids.filter((v) => v !== id) : [...ids, id];
@@ -91,6 +105,7 @@ export function normalizeHudState(raw, widgets = HUD_WIDGETS) {
       visibleIds: fallbackVisible,
       hidden: false,
       collapsed: normalizeCollapsed(null),
+      collapsedWidgets: [],
     };
   }
   // A widget introduced AFTER this state was saved should appear with its
@@ -115,6 +130,7 @@ export function normalizeHudState(raw, widgets = HUD_WIDGETS) {
     visibleIds: withNewDefaults,
     hidden: raw.hidden === true,
     collapsed: normalizeCollapsed(raw.collapsed),
+    collapsedWidgets: normalizeCollapsedWidgets(raw.collapsedWidgets, widgets),
   };
 }
 
@@ -128,13 +144,14 @@ export function parseHudState(json, widgets = HUD_WIDGETS) {
   }
 }
 
-export function serializeHudState({ x, y, visibleIds, hidden, collapsed }, widgets = HUD_WIDGETS) {
+export function serializeHudState({ x, y, visibleIds, hidden, collapsed, collapsedWidgets }, widgets = HUD_WIDGETS) {
   return JSON.stringify({
     x,
     y,
     visibleIds,
     hidden: Boolean(hidden),
     collapsed: normalizeCollapsed(collapsed),
+    collapsedWidgets: normalizeCollapsedWidgets(collapsedWidgets, widgets),
     // Registry snapshot: lets a future load distinguish "user unchecked
     // this widget" from "this widget didn't exist when they last saved".
     knownIds: widgets.map((w) => w.id),
