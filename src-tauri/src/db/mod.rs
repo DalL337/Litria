@@ -253,12 +253,17 @@ pub(crate) fn open_workspace_db(project_root: &Path) -> Result<(bool, String), D
         .map_err(DbError::sqlite("Failed to set database pragmas"))?;
     quick_check(&conn)?;
 
-    schema::initialize_workspace_schema(&conn)?;
-    schema::migrate_workspace_schema(&conn)?;
-
+    // Probe writability BEFORE any schema work. A read-only file opens for
+    // viewing exactly as it is (ADR-026 decision 3; brief-structural-grid
+    // §7): initializing or migrating would write, and the write would fail
+    // the whole open. Its missing newer tables read as absent.
     let read_only = conn
         .is_readonly(DatabaseName::Main)
         .map_err(DbError::sqlite("Failed to probe workspace writability"))?;
+    if !read_only {
+        schema::initialize_workspace_schema(&conn)?;
+        schema::migrate_workspace_schema(&conn)?;
+    }
 
     // The epoch is minted and published under the SAME lock that installs the
     // connection, so no request can observe a connection without its identity.
@@ -583,6 +588,41 @@ mod tests {
         })
         .expect_err("writes to a read-only workspace must fail");
         assert_eq!(command_error(err).code(), CODE_READ_ONLY);
+        close_workspace_db().unwrap();
+
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        fs::set_permissions(&path, perms).unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// A read-only workspace saved before the grid (schema v3, no
+    /// `workspace_grid` table) still opens for viewing: no migration is
+    /// attempted and its grid reads as absent (brief-structural-grid §7).
+    #[test]
+    fn a_read_only_pre_grid_workspace_opens_without_migrating() {
+        let _serial = serial_guard();
+        let root = temp_dir("read-only-v3");
+        create_and_close(&root);
+        let path = db_path(&root);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("DROP TABLE workspace_grid; UPDATE schema_version SET version = 3;")
+                .unwrap();
+        }
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&path, perms).unwrap();
+
+        let (read_only, epoch) = open_workspace_db(&root).expect("a read-only v3 file still opens");
+        assert!(read_only);
+        let (version, grid) = with_workspace_db(&epoch, |conn| {
+            Ok((schema::get_schema_version(conn)?, grid::load_grid(conn)?))
+        })
+        .unwrap();
+        assert_eq!(version, 3, "no migration was attempted");
+        assert_eq!(grid, grid::StoredGrid::Absent);
         close_workspace_db().unwrap();
 
         let mut perms = fs::metadata(&path).unwrap().permissions();
