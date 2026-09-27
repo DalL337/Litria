@@ -9,6 +9,11 @@
   themes paint the grid while spacing belongs to the workspace; node scale
   returns as a feature. Details are in the brief's §2 rulings. Numerical
   defaults remain open, pending a playground prototype.)
+- Extended — 2026-09-27, playground review (owner decisions: the
+  playground's panel ships as a Grid widget in the canvas HUD; the default
+  spacing is 100 · 20 · 10; drags show smart guides instead of a reticle; grid
+  lines take the theme's color. Details are in the brief's §2 "Owner rulings —
+  2026-09-27, playground review".)
 - Proposed implementation detail — 2026-09-17 (the accompanying brief proposes
   ownership, storage, candidate arbitration, and delivery slices; numerical
   defaults and remaining interaction choices are not ratified by this record).
@@ -77,6 +82,11 @@ helper execution order.
 > win and a drop never docks flush against a neighbor. Flex keeps the existing
 > docking behavior. The rationale and cost are in the brief's §2 rulings.
 
+> **Addendum (2026-09-27, playground review, owner decision):** smart guides
+> join placement. In Flex, a drag grabs the nearest aligned face of another
+> node after docking and before the lattice. In Strict, guides are shown but
+> never move the target.
+
 ### 4. Routing accommodation follows placement and may override grid alignment
 
 Preserve ADR-025's wire corridor and adjacency accommodation behavior. Once an
@@ -124,6 +134,11 @@ between theme definitions, preference choices, and workspace state.
 > **Addendum (2026-09-27, owner decision):** in v1, themes paint the grid
 > only. Spacing is a workspace setting, changed through an explicit, undoable
 > apply. Theme-carried structural presets are deferred.
+
+> **Addendum (2026-09-27, playground review, owner decision):** the grid's
+> controls ship as a Grid widget in the canvas HUD (ADR-018). It is a window
+> onto the options' owners under ADR-019, not a second owner. Grid lines take
+> the theme's color, and the default spacing is 100 · 20 · 10.
 
 ### 7. Build 2D with a boundary for a future inhabitable workspace
 

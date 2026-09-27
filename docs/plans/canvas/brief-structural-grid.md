@@ -89,6 +89,9 @@ owner may revisit the tuning after live use.
 | Node scale anchor | **Scale about each node's top-left corner**, the grid anchor (ADR-030 §2), replacing today's scaling about the selection's center. A Strict node keeps its intersection and grows right and down. In a multi-selection each node scales about its own corner, so every member stays on the lattice. Growth into a neighbor resolves through the common settlement path (§5): seams and one undo action. |
 | Exact intervals, Flex feel, motion | **Decide in a playground prototype** before freezing defaults. The starting positions in the table above stand until then. |
 
+> **Later the same day:** the playground review below sets the defaults and
+> moves the "Node" HUD widget into the Grid widget's Node subsection.
+
 **Node scale scope, checked 2026-09-27.**
 
 - Scale changes do not persist today. The position outbox saves only x and
@@ -123,6 +126,75 @@ source constants):
   grid never conflict in Flex.
 - At a major step of 100, Strict's tightest packing leaves gaps of 20
   horizontally and 90 vertically. At 50 it leaves 20 and 40.
+
+### Owner rulings — 2026-09-27, playground review
+
+The owner reviewed the playground (`docs/prototypes/prototype-structural-grid.html`,
+05d463c) and ruled that its panel ships as the grid's controls, as is. These
+rulings supersede the "Exact intervals, Flex feel, motion" row and the HUD
+surface in the "Node scale controls" row above, and amend §5 "Drag behavior"
+and §6 "Theme and preference editing" where noted there.
+
+| Question | Ruling |
+|---|---|
+| Where grid controls live | **The playground panel becomes a "Grid" widget in the canvas HUD** (ADR-018), keeping its collapsible subsections and options: Placement, Grid spacing, Settle, Node and Look. It is a fourth entry in `HUD_WIDGETS`. Like Help's subsections, the Grid subsections are internal content, so the container contract does not change. A folded subsection shows its current value in a chip. |
+| Exact intervals | **100 · 20 · 10 is the default**: major step 100, 5 minor divisions (20) and 2 sub divisions (10), square. The other presets (100 · 20 · 5, 50 · 10 · 5), the editable fields and the rectangular option stay in the Grid spacing subsection. |
+| Node scale HUD surface | **The Grid widget's Node subsection** replaces the separate "Node" HUD widget. The Edit-menu submenu and the status-bar readout stand as ruled. |
+| Drag feedback | **No reticle.** The owner found the crosshair and coordinate label too busy. A drag shows the dashed landing outline and smart guides. The landing coordinate moves to the status bar as the separate node-target readout §6 already allows. `StatusBar.jsx` is protected, so this readout has the same constraints as the scale readout. |
+| Smart guides | **Added**, Illustrator-style. While dragging, a thin translucent line (one device pixel, the theme's selection color at 60%) marks alignment with another node's edge or center. At most one line per axis appears, spanning every node on that line and drawn under node bodies. Flex grabs the nearest face within 6 screen pixels, after docking and before the lattice. Strict shows the lines, but the grid always wins. "Nearest" is measured along the axis, not by the other node's distance. Staircase alignment counts: one node's left edge on another's right edge, in a different row. With mixed node scales, an aligned Flex drop can land off the lattice, as docking already can. Guides can be turned off in Placement; any key binding follows the shortcut-registry rules. |
+| Grid ink | **Grid lines take the theme's color.** A proposed token `canvasGridColor` defaults to the theme's `connectionStroke`, so custom themes inherit it. Line alpha is scaled by the luma ratio against the canvas background, so tinted lines stay exactly as visible as today's white ones. A Neutral option keeps white, and the origin marker takes the grid ink. |
+| Spacing edits | Following the playground as is, **each edit applies at once** to this workspace's grid as one undoable step. There is no separate Apply button, and nodes never move. This refines the "explicit, undoable apply" above: the edit itself is the explicit act. |
+
+**Other defaults.** These come from the playground's starting state. The owner
+ruled only the spacing default explicitly, so they remain tunable:
+
+- Flex mode, with smart guides on.
+- Settle at 150 ms with a cubic ease-out; reduced motion follows the OS
+  setting.
+- Theme ink, with all three levels and the origin marker shown. The sub level
+  is drawn at 0.6 × the minor opacity.
+- Placement and Grid spacing start open; Settle, Node and Look start folded.
+
+**Who owns each option.** ADR-019 applies: surfaces select and preview, and only
+Preferences defines and defaults.
+
+- The preference-backed options become registry entries whose `place` includes
+  the Grid widget. They are snap mode, smart guides, settle duration and
+  easing, reduced motion, grid ink, level visibility and the origin marker.
+  The theme and Live/Calm choices are mirrored the same way. Preferences stays
+  their exhaustive home; the widget is a window onto it, never a second owner.
+- Spacing lives in the workspace grid record. The Grid spacing subsection edits
+  it through the undoable apply.
+- Node scale calls the single scale command, `scaleSelectedPieces`.
+- **The per-level paint sliders are a personal override** on top of the
+  theme's values, with Reset to theme. Themes still define the paint; the
+  override is a preference. The alternative, writing edits into the theme
+  itself, would make a built-in theme fork a custom copy on its first edit.
+
+> **Go-ahead (2026-09-27, owner: "lets build it. full send"):** the build
+> proceeds on the recommendations recorded here: the slider override above,
+> edits that apply at once, and the playground's starting state as the other
+> defaults.
+
+**Playground-only; not shipped.** These are sample-layout or analysis tools,
+not options:
+
+- Reset and Scatter.
+- The Wires toggle.
+- Home and Fit, which already live in the Pan & Zoom widget and the View menu.
+- The Inspector and the Keys & notes card.
+
+The derived gap readout and the interval warnings in Grid spacing do ship.
+
+**Slice mapping.**
+
+- Slice 4 delivers the widget and its controls, as the brief already places
+  controls there.
+- The Grid spacing subsection depends on Slice 2's persistence and apply
+  boundary.
+- Smart-guide candidates join placement arbitration in Slice 3.
+- Guide drawing lands in Slice 4, on a layer between the glass-sampled
+  background and the nodes, so glass never samples a guide.
 
 ## 3. What the code actually does today
 
@@ -231,6 +303,11 @@ the intended target, resolved positions/deltas, all affected IDs, and a reason
 when placement cannot proceed. History, saving, and animation remain outside it.
 
 ### Drag behavior
+
+> **Amended (2026-09-27, owner decision):** the destination preview is the
+> dashed landing outline plus smart guides. There is no reticle, and the
+> world coordinate appears in the status bar. See §2 "Owner rulings —
+> 2026-09-27, playground review".
 
 - Pointer movement stays responsive. Preview one clearly identified destination
   with local guides and world coordinates; do not run the full router per frame.
@@ -373,6 +450,12 @@ mirror it; it must not create a second state owner. Keep it independent of the
 existing default/edit interaction mode and additive/subtractive submodes.
 Definition editing belongs in the theme library; contextual Settings provides a
 window onto it, respecting ADR-019's exhaustive Preferences home.
+
+> **Amended (2026-09-27, owner decision):** the grid's controls ship as a
+> Grid widget in the canvas HUD. It is the compact canvas control above,
+> grown to the playground's full panel and still a window rather than a
+> second owner. Themes paint only; spacing is a workspace edit. See §2
+> "Owner rulings — 2026-09-27, playground review".
 
 ## 7. Persistence and compatibility
 
