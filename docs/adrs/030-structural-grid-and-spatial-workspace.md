@@ -14,6 +14,10 @@
   spacing is 100 · 20 · 10; drags show smart guides instead of a reticle; grid
   lines take the theme's color. Details are in the brief's §2 "Owner rulings —
   2026-09-27, playground review".)
+- Implemented — 2026-09-27 (all five slices, as stacked PRs #76–#80 for the
+  owner to merge; measured Slice 5 finding: the route search stays unchanged.
+  What shipped, the decisions made while building, and the live pass still
+  owed are in the brief's §12.)
 - Proposed implementation detail — 2026-09-17 (the accompanying brief proposes
   ownership, storage, candidate arbitration, and delivery slices; numerical
   defaults and remaining interaction choices are not ratified by this record).

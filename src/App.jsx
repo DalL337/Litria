@@ -932,7 +932,8 @@ function App() {
     pieceHeight: PIECE_HEIGHT,
     isCreatePieceModalOpen,
     // Name-first, disk-first creation (brief-group-physicality W2).
-    onCommitGroupCreate: handleCommitGroupCreate
+    onCommitGroupCreate: handleCommitGroupCreate,
+    getGridPlacement,
   });
 
   // Drop-on-pill picker (brief-cross-group-wires S4): wire drags dropped on a
