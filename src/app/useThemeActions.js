@@ -184,7 +184,9 @@ export function useThemeActions({ projectInstance, pieceDomain, groupDomain, tar
 
   const handleUpdateThemeToken = useCallback((key, value) => {
     if (!projectInstance?.rootPath || typeof key !== 'string') return;
-    const patch = { [key]: typeof value === 'string' ? value : String(value) };
+    // null removes the token (the theme falls back to its default, e.g. the
+    // grid color back to the wire color); anything else is stored as a string.
+    const patch = { [key]: value == null ? null : (typeof value === 'string' ? value : String(value)) };
     persistAppearance(themeDomain.commands.updateThemeTokens({ themeId: activeThemeId, patch }));
   }, [activeThemeId, persistAppearance, projectInstance?.rootPath, themeDomain]);
 

@@ -306,3 +306,14 @@ test('scaling that seals a wired face opens a seam in the same undo step', () =>
   assert.equal(h.pieces.find((p) => p.id === 'A').scale, 1);
   h.unmount();
 });
+
+test('scaling into an unwired neighbor parts it onto the lattice, in the same undo step', () => {
+  const h = mount({ pieces: [piece('A', 0, 0), piece('B', 200, 0)], selected: ['A'] });
+  h.run((c) => c.scaleSelectedPieces(1.25));
+  assert.deepEqual(h.at('A'), { x: 0, y: 0 });
+  assert.deepEqual(h.at('B'), { x: 300, y: 0 }, 'parted to the next major line');
+  h.run(() => h.history.undo());
+  assert.deepEqual(h.at('B'), { x: 200, y: 0 });
+  assert.equal(h.pieces.find((p) => p.id === 'A').scale, 1);
+  h.unmount();
+});

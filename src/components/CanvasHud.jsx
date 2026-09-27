@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import HudGridWidget from './HudGridWidget';
 
 // Canvas quick-action HUD (ADR-018 Phase A): screen-anchored glass cluster
 // floating over the canvas. The pill is permanent chrome (drag grip + menu
@@ -115,6 +116,7 @@ const HELP_SUBSECTIONS = [
     ['Ctrl (tap)', 'Additive sub-mode'],
     ['Alt (tap)', 'Subtractive sub-mode'],
     ['← ↑ → ↓', 'Pan the view'],
+    ['Esc (dragging)', 'Cancel the drag'],
     ['H', 'Show / hide HUD'],
   ] },
 ];
@@ -141,6 +143,7 @@ const WIDGET_RENDERERS = {
   create: CreateSection,
   panzoom: PanZoomSection,
   help: HelpSection,
+  grid: HudGridWidget,
 };
 
 export default function CanvasHud({
@@ -164,6 +167,8 @@ export default function CanvasHud({
   onFitContent,
   resetZoom,
   viewportScale,
+  gridWidget = null,
+  sectionsMaxHeight = null,
 }) {
   const rootRef = useRef(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -177,7 +182,7 @@ export default function CanvasHud({
 
   const handlePointerDown = useCallback((e) => {
     // Any non-interactive glass drags; buttons/inputs/menu stay clickable.
-    if (e.target.closest('button, input, label, .hud-menu')) return;
+    if (e.target.closest('button, input, select, label, .hud-menu')) return;
     e.preventDefault();
     const el = rootRef.current;
     if (!el) return;
@@ -314,26 +319,31 @@ export default function CanvasHud({
               </div>
             )}
           </div>
-          {widgets.map((widget) => {
-            if (!hudVisibleIds.includes(widget.id)) return null;
-            const Renderer = WIDGET_RENDERERS[widget.id];
-            if (!Renderer) return null;
-            return (
-              <div key={widget.id} className="hud-section">
-                <div className="hud-section-title">{widget.title}</div>
-                <Renderer
-                  onNewNode={onNewNode}
-                  onNewGroup={onNewGroup}
-                  panBy={panBy}
-                  zoomIn={zoomIn}
-                  zoomOut={zoomOut}
-                  onFitContent={onFitContent}
-                  resetZoom={resetZoom}
-                  viewportScale={viewportScale}
-                />
-              </div>
-            );
-          })}
+          {/* The sections scroll when they outgrow the canvas; the pill (and its
+              dropdown) stays outside the scroll area so nothing clips it. */}
+          <div className="hud-sections" style={sectionsMaxHeight ? { maxHeight: sectionsMaxHeight } : undefined}>
+            {widgets.map((widget) => {
+              if (!hudVisibleIds.includes(widget.id)) return null;
+              const Renderer = WIDGET_RENDERERS[widget.id];
+              if (!Renderer) return null;
+              return (
+                <div key={widget.id} className="hud-section">
+                  <div className="hud-section-title">{widget.title}</div>
+                  <Renderer
+                    onNewNode={onNewNode}
+                    onNewGroup={onNewGroup}
+                    panBy={panBy}
+                    zoomIn={zoomIn}
+                    zoomOut={zoomOut}
+                    onFitContent={onFitContent}
+                    resetZoom={resetZoom}
+                    viewportScale={viewportScale}
+                    gridWidget={gridWidget}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </>

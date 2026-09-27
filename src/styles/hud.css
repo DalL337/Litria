@@ -18,6 +18,17 @@
   pointer-events: auto;
 }
 
+/* Sections scroll when the stack outgrows the canvas (four widgets with the
+   Grid section, ADR-030); the pill stays outside so its menu never clips. */
+.hud-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
 /* Canvas drags pass through overlays (same rule as minimap/status bar). */
 .app-dragging .canvas-hud {
   pointer-events: none;
@@ -389,4 +400,265 @@
   background: rgba(41, 121, 255, 0.06);
   pointer-events: none;
   z-index: 25; /* above the stage, below the minimap and HUD */
+}
+
+/* ── Grid widget (ADR-030 playground-review ruling) ──
+   The playground's panel as a HUD section: collapsible subsections that keep
+   their value in a chip when folded. Same glass button language as Create. */
+.hud-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #f3f6ff;
+}
+
+.hud-grid-sub + .hud-grid-sub {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.hud-grid-sub-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: rgba(160, 165, 180, 0.75);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.hud-grid-sub-title:hover {
+  color: #f3f6ff;
+}
+
+.hud-grid-sub-title:focus-visible {
+  outline: 1px solid #7986cb;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.hud-grid-chev {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.hud-grid-sub.is-collapsed .hud-grid-chev {
+  transform: translateY(1px) rotate(-45deg);
+}
+
+.hud-grid-sub-name {
+  flex: 1;
+}
+
+.hud-grid-chip {
+  max-width: 116px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: #f3f6ff;
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-grid-sub-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 8px;
+}
+
+.hud-grid-seg,
+.hud-grid-presets,
+.hud-grid-scale,
+.hud-grid-row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.hud-grid-seg button,
+.hud-grid-presets button,
+.hud-grid-scale button {
+  flex: 1;
+  padding: 5px 6px;
+  border-radius: 9px;
+  border: 1.5px solid rgba(121, 134, 203, 0.45);
+  background: linear-gradient(160deg, rgba(46, 52, 70, 0.9) 0%, rgba(22, 26, 38, 0.9) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: #f3f6ff;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hud-grid-presets button {
+  padding: 4px 2px;
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.hud-grid-seg button:hover,
+.hud-grid-presets button:hover:not(:disabled),
+.hud-grid-scale button:hover:not(:disabled) {
+  background: linear-gradient(160deg, rgba(92, 107, 192, 0.34) 0%, rgba(92, 107, 192, 0.12) 100%);
+}
+
+.hud-grid-seg button.is-active,
+.hud-grid-presets button.is-active {
+  border-color: rgba(41, 121, 255, 0.85);
+  background: linear-gradient(160deg, rgba(41, 121, 255, 0.3) 0%, rgba(41, 121, 255, 0.1) 100%);
+  box-shadow: 0 0 6px 0 rgba(41, 121, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.hud-grid button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hud-grid-hint {
+  margin: 0;
+  color: rgba(160, 165, 180, 0.75);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.hud-grid-warn {
+  margin: 0;
+  color: #ffc107;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.hud-grid-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+
+.hud-grid-check input {
+  accent-color: #5c6bc0;
+}
+
+.hud-grid-checks {
+  display: flex;
+  gap: 12px;
+}
+
+.hud-grid-fields {
+  display: grid;
+  grid-template-columns: 1fr 58px;
+  gap: 4px 8px;
+  align-items: center;
+  font-size: 11.5px;
+}
+
+.hud-grid-fields input,
+.hud-grid-select {
+  width: 100%;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(20, 24, 36, 0.9);
+  color: #f3f6ff;
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  outline: none;
+}
+
+.hud-grid-fields input:focus,
+.hud-grid-select:focus {
+  border-color: #7986cb;
+}
+
+.hud-grid-fields input:disabled {
+  opacity: 0.4;
+}
+
+.hud-grid-readout {
+  color: rgba(160, 165, 180, 0.75);
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.hud-grid-readout b {
+  color: #f3f6ff;
+  font-weight: 500;
+}
+
+.hud-grid-sliders {
+  display: grid;
+  grid-template-columns: 38px 1fr 44px;
+  gap: 4px 6px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.hud-grid-sliders input[type='range'] {
+  width: 100%;
+  accent-color: #2979ff;
+}
+
+.hud-grid-num {
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: rgba(160, 165, 180, 0.9);
+  text-align: right;
+}
+
+.hud-grid-scale-value {
+  flex: 1.2;
+  text-align: center;
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+.hud-grid-scale.is-disabled .hud-grid-scale-value {
+  opacity: 0.4;
+}
+
+.hud-grid-row {
+  justify-content: space-between;
+}
+
+.hud-grid-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #7986cb;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.hud-grid-link:hover:not(:disabled) {
+  color: #f3f6ff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-grid-chev {
+    transition: none;
+  }
 }

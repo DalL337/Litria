@@ -74,6 +74,7 @@ test('normalizeHudState defaults on null/garbage input', () => {
       y: HUD_DEFAULT_POSITION.y,
       visibleIds: ['create'],
       hidden: false,
+      collapsed: { placement: false, spacing: false, settle: true, node: true, look: true },
     });
   }
 });
@@ -101,9 +102,26 @@ test('parseHudState survives corrupt JSON', () => {
 });
 
 test('serialize -> parse round-trips state exactly', () => {
-  const original = { x: 120, y: 44, visibleIds: ['create'], hidden: true };
+  const original = {
+    x: 120,
+    y: 44,
+    visibleIds: ['create'],
+    hidden: true,
+    collapsed: { placement: true, spacing: false, settle: false, node: true, look: false },
+  };
   const restored = parseHudState(serializeHudState(original), TEST_WIDGETS);
   assert.deepEqual(restored, original);
+});
+
+test('Grid subsection folds: unknown keys drop, missing ones take the defaults', () => {
+  const s = normalizeHudState({ collapsed: { look: false, bogus: true, settle: 'yes' } }, TEST_WIDGETS);
+  assert.deepEqual(s.collapsed, { placement: false, spacing: false, settle: true, node: true, look: false });
+});
+
+test('the Grid widget is registered and shows by default for existing users', () => {
+  assert.ok(HUD_WIDGETS.some((w) => w.id === 'grid' && w.defaultVisible));
+  const legacy = { x: 0, y: 0, visibleIds: ['create'], hidden: false, knownIds: ['create', 'panzoom', 'help'] };
+  assert.ok(normalizeHudState(legacy, HUD_WIDGETS).visibleIds.includes('grid'));
 });
 
 /* ── New-widget introduction (knownIds migration) ── */

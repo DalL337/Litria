@@ -6,7 +6,7 @@ import {
 } from '../app/interactionHelpers';
 import { findInnermostGroupAt, hasCollapsedAncestor, collectSubtreePieceIds } from '../app/selectors/workspaceSelectors';
 import { computeWireSeams } from '../utils/wireNudge';
-import { guideLinesFor, resolvePlacement, staticObstacles } from '../app/placementResolution';
+import { guideLinesFor, partOverlappedNeighbors, resolvePlacement, staticObstacles } from '../app/placementResolution';
 import { boundsOfRects, pieceRect } from '../utils/spatialGeometry2d';
 import { roundToStep } from '../utils/gridGeometry';
 
@@ -74,6 +74,10 @@ export function useCanvasInteractionController({
   getGridPlacement = null,
   // Current zoom, to turn the screen-space guide tolerance into world units.
   getViewportScale = () => 1,
+  // Told { from, to } (id → corner) after a grid drop commits, so the canvas
+  // can slide nodes from where they were released to where they settled.
+  // Presentation only: state is already final (brief §5).
+  onPlacementSettled = null,
 }) {
   const dragStartRef = useRef(new Map());
   const groupDragStartRef = useRef(null);
@@ -666,6 +670,28 @@ export function useCanvasInteractionController({
     });
 
     executeInteractionHistoryAction(history, { label: 'Move pieces', action: moveAction });
+    if (gridPlacement && onPlacementSettled) {
+      // Dragged nodes slide from the release point; seam-parted neighbors
+      // from where they stood.
+      const releasedAt = new Map(dragIds.map((pid) => {
+        const start = dragStartRef.current.get(pid);
+        const lead = dragStartRef.current.get(id);
+        return [pid, pid === id || !start || !lead
+          ? { x, y }
+          : { x: start.x + (x - lead.x), y: start.y + (y - lead.y) }];
+      }));
+      const from = new Map();
+      const to = new Map();
+      const settledById = new Map(settledPieces.map((p) => [p.id, p]));
+      for (const pid of movedIds) {
+        const drawn = releasedAt.get(pid) ?? piecesById.get(pid);
+        const settled = settledById.get(pid);
+        if (!drawn || !settled) continue;
+        from.set(pid, { x: drawn.x, y: drawn.y });
+        to.set(pid, { x: settled.x, y: settled.y });
+      }
+      onPlacementSettled({ from, to });
+    }
 
     // Structural group changes only happen in edit mode (ADR-013 Phase 3).
     // Default mode drag is always a pure spatial move — no auto-merge-on-drop,
@@ -705,6 +731,7 @@ export function useCanvasInteractionController({
     dockAnchorFor,
     getGroupBounds,
     getGroupSnapDelta,
+    onPlacementSettled,
     resolveMovingSet,
     groupByPieceId,
     groupDrag,
@@ -989,6 +1016,19 @@ export function useCanvasInteractionController({
         action: moveAction,
         skipDo: true
       });
+      if (gridPlacement && onPlacementSettled) {
+        const from = new Map();
+        const to = new Map();
+        const settledById = new Map(nextPieces.map((p) => [p.id, p]));
+        for (const pid of movedIds) {
+          const drawn = piecesById.get(pid);
+          const settled = settledById.get(pid);
+          if (!drawn || !settled) continue;
+          from.set(pid, { x: drawn.x, y: drawn.y });
+          to.set(pid, { x: settled.x, y: settled.y });
+        }
+        onPlacementSettled({ from, to });
+      }
     }
 
     // Structural group changes are mode-gated exactly like piece drops
@@ -1014,7 +1054,7 @@ export function useCanvasInteractionController({
     updateSubtractiveSource(null);
     clearDragOverGroup();
     groupDragStartRef.current = null;
-  }, [activeActionToken, adjacency, adjacencyMode, clearDragOverGroup, connectionDomain, dockAnchorFor, getGroupSnapDelta, groupByPieceId, groups, hiddenPieceIds, history, isEditMode, movePiecesAction, onGroupSeedTranslate, onGroupStructureDrop, pieceDomain, pieceHeight, pieceWidth, pieces, piecesById, placement, resolveMovingSet, updateSubtractiveSource]);
+  }, [activeActionToken, adjacency, adjacencyMode, clearDragOverGroup, connectionDomain, dockAnchorFor, getGroupSnapDelta, groupByPieceId, groups, hiddenPieceIds, history, isEditMode, movePiecesAction, onGroupSeedTranslate, onGroupStructureDrop, onPlacementSettled, pieceDomain, pieceHeight, pieceWidth, pieces, piecesById, placement, resolveMovingSet, updateSubtractiveSource]);
 
   // Node scale (owner rulings 2026-09-27): each selected node grows or
   // shrinks from its own top-left corner — the grid anchor — so a node on an
@@ -1037,9 +1077,28 @@ export function useCanvasInteractionController({
     });
     if (scaledPieces.every((piece, index) => piece === pieces[index])) return;
 
+    // Growth into a neighbor parts it onto the lattice (same undo step).
+    const gridPlacement = capturePlacement();
+    const partMoves = gridPlacement ? partOverlappedNeighbors({
+      pieces: scaledPieces,
+      pusherIds: ids,
+      hiddenPieceIds,
+      steps: gridPlacement.steps,
+      mode: gridPlacement.mode,
+      baseWidth: pieceWidth,
+      baseHeight: pieceHeight,
+    }) : null;
+    const partById = partMoves ? new Map(partMoves.map((m) => [m.id, m])) : null;
+    const partedPieces = partById
+      ? scaledPieces.map((p) => {
+          const d = partById.get(p.id);
+          return d ? { ...p, x: p.x + d.dx, y: p.y + d.dy } : p;
+        })
+      : scaledPieces;
+
     const seamMoves = computeWireSeams({
       wires: connectionDomain.selectors.getAllConnections(),
-      pieces: scaledPieces,
+      pieces: partedPieces,
       hiddenPieceIds,
       groupByPieceId,
       pieceWidth,
@@ -1047,14 +1106,16 @@ export function useCanvasInteractionController({
     });
     const seamById = seamMoves ? new Map(seamMoves.map((m) => [m.id, m])) : null;
     const nextPieces = seamById
-      ? scaledPieces.map((p) => {
+      ? partedPieces.map((p) => {
           const d = seamById.get(p.id);
           return d ? { ...p, x: p.x + d.dx, y: p.y + d.dy } : p;
         })
-      : scaledPieces;
-    const movedIds = seamMoves
-      ? [...new Set([...ids, ...seamMoves.map((m) => m.id)])]
-      : ids;
+      : partedPieces;
+    const movedIds = [...new Set([
+      ...ids,
+      ...(partMoves ?? []).map((m) => m.id),
+      ...(seamMoves ?? []).map((m) => m.id),
+    ])];
 
     const moveAction = movePiecesAction({
       beforePieces: pieces,
@@ -1074,6 +1135,7 @@ export function useCanvasInteractionController({
   }, [
     adjacency,
     adjacencyMode,
+    capturePlacement,
     clamp,
     connectionDomain,
     groupByPieceId,

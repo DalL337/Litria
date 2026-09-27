@@ -136,6 +136,10 @@ const SHELL_COMPOSITION_MANIFEST = new Set([
   // grid's personal settings; pure logic in app/gridDomain.js,
   // app/gridPreferences.js and utils/gridGeometry.js (node-tested).
   './app/useGridActions',
+  // The canvas HUD Grid widget's prop bag (ADR-030) — mirrors the
+  // useWorkspaceStageBindings pattern; words and numbers live in
+  // app/gridWidgetModel.js (node-tested).
+  './app/useGridWidget',
   // Preferences panel open-state (ADR-019 Slice 2) — File menu surface.
   './app/usePreferencesSurface',
   // Splash gating on the splashScreen preference (ADR-024) — mounts the

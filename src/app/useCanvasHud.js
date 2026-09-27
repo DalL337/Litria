@@ -7,6 +7,7 @@ import {
   HUD_PREF_KEY,
   HUD_DEFAULT_POSITION,
   getDefaultVisibleIds,
+  normalizeCollapsed,
   toggleVisibleId,
   clampHudPosition,
   parseHudState,
@@ -39,10 +40,12 @@ export function useCanvasHud({
   const [hudPosition, setHudPosition] = useState(HUD_DEFAULT_POSITION);
   const [hudVisibleIds, setHudVisibleIds] = useState(() => getDefaultVisibleIds());
   const [isHudHidden, setIsHudHidden] = useState(false);
+  // Which Grid widget subsections are folded (persisted with the HUD).
+  const [hudCollapsed, setHudCollapsed] = useState(() => normalizeCollapsed(null));
   const hasRestoredRef = useRef(false);
 
-  const stateRef = useRef({ x: hudPosition.x, y: hudPosition.y, visibleIds: hudVisibleIds, hidden: isHudHidden });
-  stateRef.current = { x: hudPosition.x, y: hudPosition.y, visibleIds: hudVisibleIds, hidden: isHudHidden };
+  const stateRef = useRef({ x: hudPosition.x, y: hudPosition.y, visibleIds: hudVisibleIds, hidden: isHudHidden, collapsed: hudCollapsed });
+  stateRef.current = { x: hudPosition.x, y: hudPosition.y, visibleIds: hudVisibleIds, hidden: isHudHidden, collapsed: hudCollapsed };
 
   const persist = useCallback(() => {
     if (!hasRestoredRef.current) return;
@@ -61,6 +64,7 @@ export function useCanvasHud({
         setHudPosition({ x: restored.x, y: restored.y });
         setHudVisibleIds(restored.visibleIds);
         setIsHudHidden(restored.hidden);
+        setHudCollapsed(restored.collapsed);
       } catch {
         // No prefs available — defaults stand.
       } finally {
@@ -84,6 +88,16 @@ export function useCanvasHud({
     setHudVisibleIds((prev) => {
       const next = toggleVisibleId(prev, id);
       stateRef.current = { ...stateRef.current, visibleIds: next };
+      persist();
+      return next;
+    });
+  }, [persist]);
+
+  /** Fold or open Grid widget subsections: `{ look: false, ... }`. */
+  const setHudSectionsCollapsed = useCallback((changes) => {
+    setHudCollapsed((prev) => {
+      const next = normalizeCollapsed({ ...prev, ...changes });
+      stateRef.current = { ...stateRef.current, collapsed: next };
       persist();
       return next;
     });
@@ -262,8 +276,13 @@ export function useCanvasHud({
     }));
   }, [deskWidth, deskHeight]);
 
+  // Room below the pill for the sections before they scroll (pill ≈ 40 px,
+  // plus the clamp margin).
+  const sectionsMaxHeight = deskHeight ? Math.max(160, deskHeight - hudPosition.y - 56) : null;
+
   return {
     widgets: HUD_WIDGETS,
+    sectionsMaxHeight,
     hudPosition,
     hudVisibleIds,
     isHudHidden,
@@ -271,6 +290,8 @@ export function useCanvasHud({
     commitHudPosition,
     toggleHudWidget,
     toggleHudHidden,
+    hudCollapsed,
+    setHudSectionsCollapsed,
     clampPosition,
     spawnGhost,
     panBy,

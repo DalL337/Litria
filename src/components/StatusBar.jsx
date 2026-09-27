@@ -3,34 +3,37 @@ import { Check, Crosshair, Map, Braces } from 'lucide-react';
 import { useLongPress } from '../behaviors';
 import NodeSearchPanel from './NodeSearchPanel';
 import StatusBarPopover from './StatusBarPopover';
+import { NODE_SCALE_PRESETS } from '../app/gridWidgetModel';
 
 // --- Zoom step presets ---
 const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
 
-function nearestStep(value) {
-  let best = ZOOM_STEPS[0];
+// Step helpers take their step list, so the zoom slider and the node-scale
+// slider (ADR-030 scale readout) share one implementation.
+function nearestStep(value, steps = ZOOM_STEPS) {
+  let best = steps[0];
   let bestDist = Math.abs(value - best);
-  for (let i = 1; i < ZOOM_STEPS.length; i++) {
-    const dist = Math.abs(value - ZOOM_STEPS[i]);
+  for (let i = 1; i < steps.length; i++) {
+    const dist = Math.abs(value - steps[i]);
     if (dist < bestDist) {
-      best = ZOOM_STEPS[i];
+      best = steps[i];
       bestDist = dist;
     }
   }
   return best;
 }
 
-function stepFraction(value) {
-  const min = ZOOM_STEPS[0];
-  const max = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+function stepFraction(value, steps = ZOOM_STEPS) {
+  const min = steps[0];
+  const max = steps[steps.length - 1];
   return (value - min) / (max - min);
 }
 
-function fractionToStep(fraction) {
-  const min = ZOOM_STEPS[0];
-  const max = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+function fractionToStep(fraction, steps = ZOOM_STEPS) {
+  const min = steps[0];
+  const max = steps[steps.length - 1];
   const raw = min + fraction * (max - min);
-  return nearestStep(raw);
+  return nearestStep(raw, steps);
 }
 
 // --- Zero-pad helper ---
@@ -84,15 +87,16 @@ function ViewportCoords({ viewportStateRef, deskWidth, deskHeight }) {
 }
 
 // --- Zoom slider content (rendered inside PopoverContent) ---
-function ZoomSlider({ scale, onZoomChange }) {
+// Also the node-scale slider: `steps` swaps the stops (ADR-030).
+function ZoomSlider({ scale, onZoomChange, steps = ZOOM_STEPS }) {
   const trackRef = useRef(null);
 
   const handleTrackClick = useCallback((e) => {
     if (!trackRef.current) return;
     const rect = trackRef.current.getBoundingClientRect();
     const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onZoomChange(fractionToStep(fraction));
-  }, [onZoomChange]);
+    onZoomChange(fractionToStep(fraction, steps));
+  }, [onZoomChange, steps]);
 
   const handleMouseDown = useCallback((e) => {
     e.preventDefault();
@@ -100,7 +104,7 @@ function ZoomSlider({ scale, onZoomChange }) {
       if (!trackRef.current) return;
       const rect = trackRef.current.getBoundingClientRect();
       const fraction = Math.max(0, Math.min(1, (me.clientX - rect.left) / rect.width));
-      onZoomChange(fractionToStep(fraction));
+      onZoomChange(fractionToStep(fraction, steps));
     };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
@@ -109,9 +113,9 @@ function ZoomSlider({ scale, onZoomChange }) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     handleTrackClick(e);
-  }, [onZoomChange, handleTrackClick]);
+  }, [onZoomChange, handleTrackClick, steps]);
 
-  const frac = stepFraction(nearestStep(scale));
+  const frac = stepFraction(nearestStep(scale, steps), steps);
 
   return (
     <div
@@ -195,9 +199,17 @@ function StatusBar({
   onNavigateHome,
   interactionModeLabel = null,
   energyLevel = 'live',
-  onToggleEnergy
+  onToggleEnergy,
+  // Node scale (owner rulings 2026-09-27): shown only with a selection;
+  // 'Mixed' for a mixed selection. Opens the same slider as zoom.
+  nodeScaleText = null,
+  nodeScale = null,
+  onNodeScaleChange = null,
+  // Where a drag will land (ADR-030: the reticle's coordinate lives here).
+  landingReadout = null
 }) {
   const [zoomPopoverOpen, setZoomPopoverOpen] = useState(false);
+  const [scalePopoverOpen, setScalePopoverOpen] = useState(false);
   const [dirtyPopoverOpen, setDirtyPopoverOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -290,6 +302,44 @@ function StatusBar({
             onZoomChange={onZoomChange}
           />
         </StatusBarPopover>
+        {nodeScaleText && (
+          <>
+            <span className="status-bar-separator" />
+            <StatusBarPopover
+              open={scalePopoverOpen}
+              onOpenChange={(open) => {
+                setScalePopoverOpen(open);
+                if (open) setZoomPopoverOpen(false);
+              }}
+              className="status-bar-zoom-popover"
+              trigger={
+                <button
+                  className="status-bar-zoom-btn status-bar-scale-btn"
+                  type="button"
+                  onDoubleClick={() => {
+                    onNodeScaleChange?.(1);
+                    setScalePopoverOpen(false);
+                  }}
+                  title="Node scale (double-click to reset to 100%)"
+                >
+                  Node {nodeScaleText}
+                </button>
+              }
+            >
+              <ZoomSlider
+                scale={nodeScale ?? 1}
+                onZoomChange={(value) => onNodeScaleChange?.(value)}
+                steps={NODE_SCALE_PRESETS}
+              />
+            </StatusBarPopover>
+          </>
+        )}
+        {landingReadout && (
+          <>
+            <span className="status-bar-separator" />
+            <span className="status-bar-landing">{landingReadout}</span>
+          </>
+        )}
       </div>
 
       {/* Center Zone: Project Name + Save State */}

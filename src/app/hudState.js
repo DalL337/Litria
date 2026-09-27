@@ -10,11 +10,35 @@
 export const HUD_WIDGETS = [
   { id: 'create', title: 'Create', defaultVisible: true },
   { id: 'panzoom', title: 'Pan & Zoom', defaultVisible: true },
+  // Structural grid (ADR-030 playground-review ruling): the playground's
+  // panel as a major section, above the Help reference. Its subsections are
+  // internal content, like Help's, so the container contract is unchanged.
+  { id: 'grid', title: 'Grid', defaultVisible: true },
   // defaultVisible resolves the ADR-018 open question: checked on first
   // sight (the knownIds migration auto-checks it for existing prefs),
   // persisted off forever once the user clears it.
   { id: 'help', title: 'Help — Shortcuts', defaultVisible: true },
 ];
+
+// The Grid widget's collapsible subsections, in display order, and which
+// start folded (the playground's starting state).
+export const GRID_SECTION_IDS = Object.freeze(['placement', 'spacing', 'settle', 'node', 'look']);
+export const HUD_DEFAULT_COLLAPSED = Object.freeze({
+  placement: false,
+  spacing: false,
+  settle: true,
+  node: true,
+  look: true,
+});
+
+/** Known subsection ids → booleans; unknown keys dropped, gaps defaulted. */
+export function normalizeCollapsed(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return Object.fromEntries(GRID_SECTION_IDS.map((id) => [
+    id,
+    typeof source[id] === 'boolean' ? source[id] : HUD_DEFAULT_COLLAPSED[id],
+  ]));
+}
 
 // Registry ids that existed before persisted state carried `knownIds`.
 // A legacy pref (Phase A) can't tell "user unchecked it" from "it didn't
@@ -66,6 +90,7 @@ export function normalizeHudState(raw, widgets = HUD_WIDGETS) {
       y: HUD_DEFAULT_POSITION.y,
       visibleIds: fallbackVisible,
       hidden: false,
+      collapsed: normalizeCollapsed(null),
     };
   }
   // A widget introduced AFTER this state was saved should appear with its
@@ -89,6 +114,7 @@ export function normalizeHudState(raw, widgets = HUD_WIDGETS) {
     y: Number.isFinite(raw.y) ? raw.y : HUD_DEFAULT_POSITION.y,
     visibleIds: withNewDefaults,
     hidden: raw.hidden === true,
+    collapsed: normalizeCollapsed(raw.collapsed),
   };
 }
 
@@ -102,12 +128,13 @@ export function parseHudState(json, widgets = HUD_WIDGETS) {
   }
 }
 
-export function serializeHudState({ x, y, visibleIds, hidden }, widgets = HUD_WIDGETS) {
+export function serializeHudState({ x, y, visibleIds, hidden, collapsed }, widgets = HUD_WIDGETS) {
   return JSON.stringify({
     x,
     y,
     visibleIds,
     hidden: Boolean(hidden),
+    collapsed: normalizeCollapsed(collapsed),
     // Registry snapshot: lets a future load distinguish "user unchecked
     // this widget" from "this widget didn't exist when they last saved".
     knownIds: widgets.map((w) => w.id),

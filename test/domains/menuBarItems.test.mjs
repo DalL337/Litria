@@ -197,7 +197,7 @@ test('Edit menu shows platform accelerator labels', () => {
 
 test('Edit selection actions gate on selection state', () => {
   const items = buildEditMenu(baseCtx);
-  assert.deepEqual(labelsOf(items), ['Undo', 'Redo', 'Select All', 'Deselect All', 'Delete']);
+  assert.deepEqual(labelsOf(items), ['Undo', 'Redo', 'Select All', 'Deselect All', 'Delete', 'Scale Node']);
 
   const empty = buildEditMenu({
     ...baseCtx, canDelete: false, canDeselect: false, canSelectAll: false
@@ -205,6 +205,31 @@ test('Edit selection actions gate on selection state', () => {
   assert.equal(empty.find((i) => i.label === 'Delete').disabled, true);
   assert.equal(empty.find((i) => i.label === 'Deselect All').disabled, true);
   assert.equal(empty.find((i) => i.label === 'Select All').disabled, true);
+});
+
+test('Scale Node: visible but disabled without a selection; presets and reset call the scale command', () => {
+  const calls = [];
+  const none = buildEditMenu({ ...baseCtx, canScaleNode: false });
+  assert.equal(none.find((i) => i.label === 'Scale Node').disabled, true);
+
+  const items = buildEditMenu({
+    ...baseCtx,
+    canScaleNode: true,
+    nodeScale: 1.25,
+    nodeScalePresets: [0.25, 0.5, 0.75, 1, 1.25, 1.5],
+    onScaleNode: (value) => calls.push(value),
+  });
+  const scale = items.find((i) => i.label === 'Scale Node');
+  assert.equal(scale.disabled, false);
+  const radio = scale.items.find((i) => i.type === 'radioGroup');
+  assert.equal(radio.value, '1.25');
+  assert.deepEqual(radio.options.map((o) => o.label), ['25%', '50%', '75%', '100%', '125%', '150%']);
+  radio.onValueChange('0.5');
+  scale.items.find((i) => i.label === 'Reset to 100%').onClick();
+  assert.deepEqual(calls, [0.5, 1]);
+
+  const mixed = buildEditMenu({ ...baseCtx, canScaleNode: true, nodeScale: null, nodeScalePresets: [1], onScaleNode: () => {} });
+  assert.equal(mixed.find((i) => i.label === 'Scale Node').items[0].value, '', 'a mixed selection checks no preset');
 });
 
 test('View menu has fit actions with accelerators', () => {

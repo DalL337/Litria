@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { clamp } from '../utils/math';
+import { NODE_SCALE_PRESETS } from './gridWidgetModel.js';
 
 const ZOOM_STEP = 1.25;
 // Float guard so the zoom items disable exactly at the clamp bounds.
@@ -37,6 +38,10 @@ export function useMenuBarBindings({
   handleClearConnectionSelection,
   selectedConnectionId,
   selectedCount,
+  // Node scale (ADR-030): the selection's shared scale (null when mixed) and
+  // the scale command.
+  nodeScale = null,
+  onScaleNode = null,
   targetGroupId,
   selectionDomain,
   allVisiblePieces,
@@ -190,6 +195,10 @@ export function useMenuBarBindings({
     canDelete,
     onDeselectAll,
     canDeselect: canDelete,
+    canScaleNode: selectedCount > 0 && typeof onScaleNode === 'function',
+    nodeScale,
+    nodeScalePresets: NODE_SCALE_PRESETS,
+    onScaleNode,
     onSelectAll,
     canSelectAll,
     // View

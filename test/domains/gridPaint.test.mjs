@@ -93,3 +93,12 @@ test('a malformed override is ignored', () => {
 test('stroke style carries the ink and opacity', () => {
   assert.equal(gridStrokeStyle({ r: 1, g: 2, b: 3 }, 0.5), 'rgba(1, 2, 3, 0.5)');
 });
+
+test('grid theme parameters name real grid tokens; the sub level shows its derived default', async () => {
+  const { GRID_PARAMETERS, GRID_COLOR_TOKEN } = await import('../../src/theme/gridParams.js');
+  const tokens = GRID_PARAMETERS.map((p) => p.token);
+  assert.deepEqual(tokens, ['canvasGridAccentOpacity', 'canvasGridOpacity', 'canvasGridSubOpacity']);
+  assert.equal(GRID_COLOR_TOKEN, 'canvasGridColor');
+  const sub = GRID_PARAMETERS.find((p) => p.token === 'canvasGridSubOpacity');
+  assert.ok(Math.abs(sub.fallbackValue({ canvasGridOpacity: '0.05' }) - 0.03) < 1e-12);
+});

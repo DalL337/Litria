@@ -148,10 +148,14 @@ export function useGridActions({ projectInstance, history }) {
     [storedPrefs, systemReducedMotion],
   );
 
-  /** Save one grid setting; the value shows at once and the save follows. */
-  const setGridPreference = useCallback((key, value) => {
+  /**
+   * Set one grid setting; it shows at once. `persist: false` holds the save
+   * (a slider mid-drag); the release calls again with the final value.
+   */
+  const setGridPreference = useCallback((key, value, { persist = true } = {}) => {
     if (!GRID_PREF_KEYS.has(key)) return;
     setStoredPrefs((prev) => ({ ...prev, [key]: value }));
+    if (!persist) return;
     prefsSaveGlobal(key, value).catch((error) => {
       console.warn(`[grid] saving the ${key} setting failed:`, error);
     });
@@ -167,13 +171,16 @@ export function useGridActions({ projectInstance, history }) {
     revision: gridState.revision,
     guides: gridPreferences.smartGuides,
     guideTolerancePx: GRID_GUIDE_CAPTURE_PX,
+    settleMs: gridPreferences.settleMs,
+    settleEasing: gridPreferences.settleEasing,
+    reduceMotion: gridPreferences.reduceMotion,
   };
   const getGridPlacement = useCallback(() => placementRef.current, []);
 
   /** Set this theme/energy/ink's line opacities, or clear them with null. */
-  const setGridPaintOverride = useCallback((context, levels) => {
+  const setGridPaintOverride = useCallback((context, levels, options) => {
     const next = withPaintOverride(gridPreferences.paintOverrides, context, levels);
-    setGridPreference(PREF_KEYS.gridPaintOverrides, next);
+    setGridPreference(PREF_KEYS.gridPaintOverrides, next, options);
   }, [gridPreferences.paintOverrides, setGridPreference]);
 
   return {

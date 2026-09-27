@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { NODE_MATERIALS, resolveMaterialId, parametersForMaterial } from '../theme/materialParams.js';
+import { GRID_COLOR_TOKEN, GRID_PARAMETERS } from '../theme/gridParams.js';
 
 /**
  * DrawerContentSettings — the Settings drawer after the ADR-019 Slice 3
@@ -86,7 +87,7 @@ function DrawerContentSettings({
         </div>
       );
     }
-    const value = Number(tokens[param.token] ?? param.min);
+    const value = Number(tokens[param.token] ?? param.fallbackValue?.(tokens) ?? param.min);
     return (
       <div key={param.token}>
         <label className="drawer-label">
@@ -116,7 +117,40 @@ function DrawerContentSettings({
         {renderPill('theme', 'Theme', activeThemeName || 'Glass')}
         {renderPill('accent', 'Accent', '')}
         {renderPill('material', 'Material', materialLabel)}
+        {renderPill('grid', 'Grid', tokens[GRID_COLOR_TOKEN] ? 'Custom' : 'Wire color')}
       </div>
+
+      {openPill === 'grid' && (
+        // Grid paint (ADR-030: themes paint the grid). Spacing is a
+        // workspace setting in the canvas HUD's Grid widget, not a theme's.
+        <PillPanel>
+          {GRID_PARAMETERS.map(renderParameter)}
+          <label className="drawer-label">Grid color</label>
+          <div className="drawer-swatch-grid" role="list" aria-label="Grid color swatches">
+            {accentSwatches.map((swatch) => {
+              const isActive = tokens[GRID_COLOR_TOKEN]?.toLowerCase?.() === swatch.toLowerCase();
+              return (
+                <button
+                  key={swatch}
+                  type="button"
+                  className={`drawer-swatch-button ${isActive ? 'is-active' : ''}`}
+                  style={{ backgroundColor: swatch }}
+                  aria-label={`Set grid color ${swatch}`}
+                  aria-pressed={isActive}
+                  onClick={() => onUpdateThemeToken?.(GRID_COLOR_TOKEN, swatch)}
+                />
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            className="drawer-button drawer-button-ghost drawer-pill-option"
+            onClick={() => onUpdateThemeToken?.(GRID_COLOR_TOKEN, null)}
+          >
+            Use the theme's wire color
+          </button>
+        </PillPanel>
+      )}
 
       {openPill === 'theme' && (
         <PillPanel>

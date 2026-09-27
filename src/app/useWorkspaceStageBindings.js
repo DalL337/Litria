@@ -78,8 +78,15 @@ export function useWorkspaceStageBindings({
 
   // Theme + viewport
   activeTheme,
+  energyLevel,
   viewport,
   handleTrackpadPan,
+
+  // Structural grid (ADR-030): the applied lattice, the personal grid
+  // settings, and the landing preview while a drag is in flight.
+  gridSteps,
+  gridPreferences,
+  placementPreview,
 }) {
   return {
     deskWidth,
@@ -133,6 +140,10 @@ export function useWorkspaceStageBindings({
     handleStageMouseUp,
     handleStageMouseLeave,
     theme: activeTheme,
+    energyLevel,
+    gridSteps,
+    gridPreferences,
+    placementPreview,
     viewportScale: viewport.scale,
     viewportOffsetX: viewport.offsetX,
     viewportOffsetY: viewport.offsetY,
