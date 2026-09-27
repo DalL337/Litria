@@ -1,0 +1,1905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Litria — Structural Grid Playground</title>
+<!--
+  Structural grid playground (ADR-030). Companion to
+  docs/plans/canvas/brief-structural-grid.md — its §2 "Owner rulings —
+  2026-09-27" left the spacing numbers, Flex feel and slide timing to be
+  chosen by feel. This page exists to make that choice.
+
+  Encodes the rulings:
+    - One world-space lattice, three levels (major / minor / sub), anchored at
+      (0, 0) with Home; zoom changes presentation, never coordinates.
+    - Nodes anchor by the top-left corner of their 180 x 110 body.
+    - Strict: the grid always wins — major intersections only, never a flush
+      dock. Flex: docking as today, else the finest intersection.
+    - Changing mode, spacing, theme or visibility never moves a node.
+    - A moving selection snaps by the top-left corner of its bounds and keeps
+      its internal offsets.
+    - Final positions are committed once; the slide is presentation only.
+      Reduced motion skips it.
+    - Node scale grows from each node's own top-left corner (Node section).
+    - Themes paint the grid: all four built-in presets + Live/Calm, with token
+      values copied from src/theme/themeDefaults.js and
+      src/app/themeDomain.js (CALM_TOKEN_OVERRIDES).
+
+  Owner refinements, round 2 (2026-09-27):
+    - No drag reticle. The drag preview is the dashed landing outline plus
+      smart guides; the landing coordinate moves to the status bar.
+    - Every panel collapses to its title and a chip with the current value.
+    - Grid ink follows the theme (proposed token canvasGridColor, derived
+      from connectionStroke), luma-matched so tinted lines are exactly as
+      visible as today's white ones. Neutral shows today's white.
+    - Smart guides: thin, translucent alignment lines while dragging; at most
+      one per axis, spanning the nodes on that line. Flex grabs the nearest
+      face within 6 screen px (after docking, before the lattice); Strict
+      shows them but the grid always wins.
+
+  Deliberately NOT simulated: the real orthogonal router, wire seams,
+  neighbor parting, persistence, undo. Wires here are simple elbows so the
+  D1c contact fade (16 -> 28) can be seen across real gaps.
+
+  Geometry constants are observations of the source on 2026-09-27; the code
+  modules remain the authority for their values.
+-->
+<style>
+  :root {
+    --cm-indigo:        #5c6bc0;
+    --cm-indigo-light:  #7986cb;
+    --cm-electric-blue: #2979ff;
+    --cm-text-primary:  #e0e0e0;
+    --cm-text-muted:    #949494;
+    --label:     #f3f6ff;
+    --sublabel:  rgba(160, 165, 180, 0.75);
+    --glass-bg:  rgba(20, 24, 36, 0.55);
+    --glass-rim: rgba(255, 255, 255, 0.14);
+    --mono: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+    --warn: #ffc107;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* The app sets no body font-family, so its chrome renders in the UA
+     default face; this page does the same on purpose. */
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: #0d0f14;
+    color: var(--cm-text-primary);
+  }
+
+  canvas#stage {
+    position: fixed;
+    inset: 0 0 26px 0;
+    width: 100vw;
+    height: calc(100vh - 26px);
+    display: block;
+    touch-action: none;
+    cursor: default;
+  }
+  canvas#stage.is-panning { cursor: grabbing; }
+  canvas#stage.is-dragging { cursor: grabbing; }
+
+  /* ── Glass chrome (hud.css values) ── */
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1.5px solid var(--glass-rim);
+    border-radius: 14px;
+    box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 6px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  .hud {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    width: 236px;
+    max-height: calc(100vh - 58px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 10;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  }
+  .hud.is-hidden { display: none; }
+
+  .hud-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 9px;
+    user-select: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .hud-pill-grip {
+    display: grid;
+    grid-template-columns: repeat(2, 3px);
+    gap: 2.5px;
+    opacity: 0.5;
+  }
+  .hud-pill-grip i {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--sublabel);
+  }
+  .hud-pill-title,
+  .hud-section-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--sublabel);
+  }
+  .hud-pill-title { flex: 1; }
+  .hud-section { padding: 9px 11px; }
+  .hud-section-title { font-size: 10px; margin-bottom: 7px; }
+  .hud-section.is-disabled > :not(.hud-section-title):not(.hint) {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* ── Collapsible sections: the title is the toggle; collapsed shows a chip
+     with the section's current value, like a collapsed group pill. ── */
+  button.hud-section-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    background: none;
+    border: 0;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+  }
+  button.hud-section-title:hover { color: var(--label); }
+  button.hud-section-title:focus-visible,
+  .hud-pill:focus-visible { outline: 1px solid var(--cm-indigo-light); outline-offset: 3px; border-radius: 4px; }
+  .chev {
+    width: 5px;
+    height: 5px;
+    flex: none;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-1px) rotate(45deg);
+    transition: transform 120ms ease;
+  }
+  .hud-section-title .t { flex: 1; }
+  .chip {
+    display: none;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--label);
+    border: 1px solid var(--glass-rim);
+    border-radius: 999px;
+    padding: 0 7px;
+    max-width: 128px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .collapsible.is-collapsed .chip:not(:empty) { display: inline-block; }
+  .collapsible.is-collapsed .chev { transform: translateY(1px) rotate(-45deg); }
+  .collapsible.is-collapsed > :not(.hud-section-title) { display: none; }
+  .collapsible.is-collapsed > .hud-section-title { margin-bottom: 0; }
+
+  button, select, input { font: inherit; }
+
+  .btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    background: linear-gradient(160deg, rgba(46, 52, 70, 0.9) 0%, rgba(22, 26, 38, 0.9) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    color: var(--label);
+    border: 1.5px solid rgba(121, 134, 203, 0.45);
+  }
+  .btn:hover {
+    background: linear-gradient(160deg, rgba(92, 107, 192, 0.34) 0%, rgba(92, 107, 192, 0.12) 100%);
+  }
+  .btn.is-active {
+    border-color: rgba(41, 121, 255, 0.85);
+    background: linear-gradient(160deg, rgba(41, 121, 255, 0.30) 0%, rgba(41, 121, 255, 0.10) 100%);
+    box-shadow: 0 0 6px 0 rgba(41, 121, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+
+  .seg { display: flex; gap: 6px; }
+  .seg .btn { flex: 1; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+  .row .grow { flex: 1; }
+
+  .presets { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .presets .btn { padding: 5px 2px; font-size: 11px; font-family: var(--mono); font-weight: 500; }
+
+  .fields {
+    display: grid;
+    grid-template-columns: 1fr 64px;
+    gap: 5px 8px;
+    align-items: center;
+    margin-top: 9px;
+    font-size: 12px;
+    color: var(--label);
+  }
+  .fields input,
+  select.field {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--label);
+    background: rgba(20, 24, 36, 0.9);
+    border: 1px solid var(--glass-rim);
+    border-radius: 6px;
+    padding: 3px 6px;
+    outline: none;
+  }
+  .fields input:focus,
+  select.field:focus { border-color: var(--cm-indigo-light); }
+  .fields input:disabled { opacity: 0.4; }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--label);
+    cursor: pointer;
+    margin-top: 7px;
+  }
+  .check input { accent-color: var(--cm-indigo); }
+  .checks { display: flex; flex-wrap: wrap; gap: 0 12px; }
+
+  .mono { font-family: var(--mono); }
+  .readout {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    line-height: 1.55;
+    color: var(--sublabel);
+    margin-top: 8px;
+  }
+  .readout b { color: var(--label); font-weight: 500; }
+  .hint { font-size: 11px; color: var(--sublabel); margin-top: 6px; line-height: 1.4; }
+  .warn { font-size: 11px; color: var(--warn); margin-top: 6px; line-height: 1.4; }
+  .warn:empty { display: none; }
+
+  input[type='range'] { flex: 1; accent-color: var(--cm-electric-blue); }
+
+  .scale-row { display: flex; align-items: center; gap: 6px; }
+  .scale-row .btn { min-width: 30px; }
+  .scale-row .val {
+    flex: 1;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--label);
+  }
+
+  /* ── Inspector + legend (top/bottom right) ── */
+  .inspector {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    width: 264px;
+    padding: 9px 11px 10px;
+    z-index: 10;
+  }
+  .gaps {
+    display: grid;
+    grid-template-columns: 16px 1fr;
+    gap: 2px 6px;
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--sublabel);
+  }
+  .gaps span:nth-child(odd) { color: var(--label); }
+  .legend {
+    position: fixed;
+    right: 16px;
+    bottom: 40px;
+    width: 264px;
+    padding: 9px 11px;
+    z-index: 10;
+    font-size: 11px;
+    color: var(--sublabel);
+    line-height: 1.55;
+  }
+  .legend kbd {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--label);
+    border: 1px solid var(--glass-rim);
+    border-radius: 4px;
+    padding: 0 4px;
+  }
+
+  /* ── Status bar ── */
+  .status-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 0 14px;
+    background: rgba(13, 15, 20, 0.96);
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--sublabel);
+    z-index: 11;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .status-bar .sb-center { flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; }
+  .status-bar .sb-node { color: var(--label); }
+  .status-bar .sb-mode {
+    border: 1px solid rgba(92, 107, 192, 0.6);
+    border-radius: 999px;
+    padding: 0 8px;
+    color: var(--label);
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 42px;
+    transform: translateX(-50%);
+    padding: 7px 14px;
+    font-size: 12px;
+    color: var(--label);
+    z-index: 12;
+    opacity: 0;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+  }
+  .toast.is-visible { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .toast, .chev { transition: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div class="hud" id="hud">
+  <button class="hud-pill glass" id="hudPill" title="Collapse or expand every section">
+    <span class="hud-pill-grip"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <span class="hud-pill-title">Grid Playground</span>
+  </button>
+
+  <section class="hud-section glass collapsible" data-section="placement">
+    <button class="hud-section-title"><span class="chev"></span><span class="t">Placement</span><span class="chip"></span></button>
+    <div class="seg" id="modeSeg">
+      <button class="btn" data-mode="strict">Strict</button>
+      <button class="btn" data-mode="flex">Flex</button>
+    </div>
+    <div class="hint" id="modeHint"></div>
+    <label class="check"><input type="checkbox" id="guides" checked> Smart guides</label>
+    <div class="hint" id="guidesHint"></div>
+  </section>
+
+  <section class="hud-section glass collapsible" data-section="spacing">
+    <button class="hud-section-title"><span class="chev"></span><span class="t">Grid spacing</span><span class="chip"></span></button>
+    <div class="presets" id="presets"></div>
+    <div class="fields">
+      <label for="majorX" id="majorXLabel">Major step</label><input id="majorX" type="number" min="10" max="400" step="5">
+      <label for="majorY">Major step Y</label><input id="majorY" type="number" min="10" max="400" step="5">
+      <label for="minorDiv">Minor divisions</label><input id="minorDiv" type="number" min="1" max="10" step="1">
+      <label for="subDiv">Sub divisions</label><input id="subDiv" type="number" min="1" max="10" step="1">
+    </div>
+    <label class="check"><input type="checkbox" id="rect"> Rectangular major step</label>
+    <div class="readout" id="derived"></div>
+    <div class="warn" id="warn"></div>
+  </section>
+
+  <section class="hud-section glass collapsible" data-section="settle">
+    <button class="hud-section-title"><span class="chev"></span><span class="t">Settle</span><span class="chip"></span></button>
+    <div class="row" style="margin-top:0">
+      <input type="range" id="settle" min="0" max="400" step="10">
+      <span class="mono" id="settleVal" style="font-size:11px;min-width:44px;text-align:right"></span>
+    </div>
+    <div class="row">
+      <select class="field grow" id="easing">
+        <option value="cubic">Ease-out (cubic)</option>
+        <option value="quint">Ease-out (quint, snappier)</option>
+        <option value="sine">Ease-out (sine, softer)</option>
+        <option value="linear">Linear</option>
+      </select>
+    </div>
+    <label class="check"><input type="checkbox" id="rm"> Reduce motion</label>
+  </section>
+
+  <section class="hud-section glass collapsible" id="nodeSection" data-section="node">
+    <button class="hud-section-title"><span class="chev"></span><span class="t">Node</span><span class="chip"></span></button>
+    <div class="scale-row">
+      <button class="btn" id="scaleDown" aria-label="Scale down">&minus;</button>
+      <span class="val" id="scaleVal">100%</span>
+      <button class="btn" id="scaleUp" aria-label="Scale up">+</button>
+      <button class="btn" id="scaleReset">Reset</button>
+    </div>
+    <div class="hint" id="nodeHint"></div>
+  </section>
+
+  <section class="hud-section glass collapsible" data-section="look">
+    <button class="hud-section-title"><span class="chev"></span><span class="t">Look</span><span class="chip"></span></button>
+    <select class="field" id="theme" style="width:100%">
+      <option value="glass">Glass</option>
+      <option value="obsidian">Obsidian</option>
+      <option value="parchment">Parchment</option>
+      <option value="terminal">Terminal</option>
+    </select>
+    <div class="seg" id="energySeg" style="margin-top:7px">
+      <button class="btn" data-energy="live">Live</button>
+      <button class="btn" data-energy="calm">Calm</button>
+    </div>
+    <div class="seg" id="inkSeg" style="margin-top:7px">
+      <button class="btn" data-ink="theme">Theme ink</button>
+      <button class="btn" data-ink="neutral">Neutral</button>
+    </div>
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="lvMajor" checked> Major</label>
+      <label class="check"><input type="checkbox" id="lvMinor" checked> Minor</label>
+      <label class="check"><input type="checkbox" id="lvSub" checked> Sub</label>
+    </div>
+    <div class="fields" style="grid-template-columns: 44px 1fr 38px; margin-top: 8px">
+      <span>Major</span><input type="range" id="paintMajor" min="0" max="0.25" step="0.005"><span class="mono" id="paintMajorVal" style="font-size:10.5px"></span>
+      <span>Minor</span><input type="range" id="paintMinor" min="0" max="0.25" step="0.005"><span class="mono" id="paintMinorVal" style="font-size:10.5px"></span>
+      <span>Sub</span><input type="range" id="paintSub" min="0" max="0.25" step="0.005"><span class="mono" id="paintSubVal" style="font-size:10.5px"></span>
+    </div>
+    <div class="hint">Line opacity starts from the theme; the sub level has no token yet (proposed: 0.6 × minor). Theme ink is luma-matched: tinted lines are as visible as today's white.</div>
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="showWires" checked> Wires</label>
+      <label class="check"><input type="checkbox" id="showOrigin" checked> Origin</label>
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:6px">
+      <button class="btn" id="home">Home</button>
+      <button class="btn" id="fit">Fit</button>
+      <button class="btn" id="reset">Reset</button>
+      <button class="btn" id="scatter">Scatter</button>
+    </div>
+  </section>
+</div>
+
+<div class="inspector glass collapsible" id="inspector" data-section="inspector">
+  <button class="hud-section-title"><span class="chev"></span><span class="t">Inspector</span><span class="chip"></span></button>
+  <div class="readout" id="inspect" style="margin-top:0"></div>
+  <div class="gaps" id="gaps"></div>
+</div>
+
+<div class="legend glass collapsible" data-section="keys">
+  <button class="hud-section-title"><span class="chev"></span><span class="t">Keys &amp; notes</span><span class="chip"></span></button>
+  <div>
+    Drag nodes · <kbd>Shift</kbd>+click to multi-select · drag empty canvas to pan ·
+    wheel to zoom · <kbd>S</kbd> Strict · <kbd>F</kbd> Flex · <kbd>G</kbd> smart guides ·
+    <kbd>Home</kbd> origin · <kbd>H</kbd> hide panel · <kbd>Esc</kbd> cancels a drag.<br>
+    Wires are simple elbows; the real router, seams and neighbor parting are not
+    simulated.
+  </div>
+</div>
+
+<div class="status-bar">
+  <span id="sbPointer">X: 0000 Y: 0000</span>
+  <span id="sbZoom">100%</span>
+  <span class="sb-center" id="sbSel">No selection</span>
+  <span class="sb-mode" id="sbMode">FLEX</span>
+</div>
+
+<div class="toast glass" id="toast"></div>
+
+<script>
+'use strict';
+
+// ── Observed geometry (source on 2026-09-27; the modules own the values) ──
+const PIECE_W = 180, PIECE_H = 110;     // src/utils/pieceDimensions.js
+const SEAM = 20;                         // WIRE_SNAP_SEAM / WIRE_NUDGE_SEAM
+const CORRIDOR = 16;                     // WIRE_CORRIDOR_SPACING
+const SNAP_DISTANCE = 40;                // App.jsx snapDistance
+const ADJ_TOL = 5;                       // useAdjacency tolerance
+const FADE_HIDE = 16, FADE_FULL = 28;    // WIRE_FADE_HIDE_PX / WIRE_FADE_FULL_PX
+const MIN_ZOOM = 0.1, MAX_ZOOM = 3;      // useViewport
+const SCALE_MIN = 0.25, SCALE_MAX = 1.5, SCALE_STEP = 0.25; // App.jsx min/maxScale
+const CANVAS_BG = '#0d0f14';             // CanvasGrid background fill
+const CANVAS_BG_RGB = [13, 15, 20];
+const EPS = 1e-6;
+// Smart guides (proposed): capture tolerance is screen space, converted to
+// world units at the current zoom; the line is one device pixel.
+const GUIDE_CAPTURE_PX = 6;
+const GUIDE_ALPHA = 0.6;
+const GUIDE_OVERSHOOT_PX = 8;
+
+// ── Theme tokens, verbatim from src/theme/themeDefaults.js ──
+const TOKEN_DEFAULTS = {
+  nodeMaterial: 'glass',
+  nodeSurfaceAlpha: '0',
+  nodeSurfaceTint: '#141824',
+  nodeCornerRadius: '12',
+  nodeSelectedStroke: '#00BFFF',
+  nodeText: '#f3f6ff',
+  nodeTextShadowBlur: '8',
+  nodeLedSize: '28',
+  ledEmpty: 'rgba(180, 180, 190, 0.5)',
+  ledBlue: 'rgba(60, 140, 255, 0.95)',
+  ledGreen: 'rgba(50, 205, 100, 0.9)',
+  ledAmber: 'rgba(240, 180, 40, 0.9)',
+  ledRed: 'rgba(240, 60, 60, 0.95)',
+  glassBlurRadius: '6',
+  glassRimWidth: '1.5',
+  glassRimColor: 'rgba(255, 255, 255, 0.15)',
+  glassRefractiveIndex: '1.5',
+  matteBorderColor: 'rgba(255, 255, 255, 0.14)',
+  matteBorderWidth: '1.5',
+  canvasGridOpacity: '0.03',
+  canvasGridAccentOpacity: '0.06',
+  connectionStroke: '#42a5f5',
+  connectionNeutral: '#6b7386',
+  selectionGroupOutline: 'rgba(120, 180, 255, 0.7)',
+};
+const THEME_PRESETS = {
+  glass: { name: 'Glass', tokens: {} },
+  obsidian: {
+    name: 'Obsidian',
+    tokens: {
+      nodeMaterial: 'glass', nodeSurfaceTint: '#1b1626', nodeSurfaceAlpha: '0.38',
+      glassRimColor: 'rgba(154, 120, 224, 0.24)', nodeSelectedStroke: '#9a78e0',
+      nodeText: '#ded6f2', connectionStroke: '#9a78e0',
+      selectionGroupOutline: 'rgba(154, 120, 224, 0.70)',
+    },
+  },
+  parchment: {
+    name: 'Parchment',
+    tokens: {
+      nodeMaterial: 'matte', nodeSurfaceTint: '#f2e4c4', nodeSurfaceAlpha: '1',
+      nodeCornerRadius: '8', glassBlurRadius: '0',
+      matteBorderColor: 'rgba(138, 106, 60, 0.55)', matteBorderWidth: '1.5',
+      nodeText: '#3b2a14', nodeSelectedStroke: '#b07d2e', connectionStroke: '#b07d2e',
+      selectionGroupOutline: 'rgba(176, 125, 46, 0.70)',
+    },
+  },
+  terminal: {
+    name: 'Terminal',
+    tokens: {
+      nodeMaterial: 'matte', nodeSurfaceTint: '#12220f', nodeSurfaceAlpha: '1',
+      nodeCornerRadius: '4', glassBlurRadius: '0',
+      matteBorderColor: 'rgba(62, 207, 90, 0.45)', matteBorderWidth: '1',
+      nodeText: '#8affa0', nodeSelectedStroke: '#4fff70', connectionStroke: '#3ecf5a',
+      selectionGroupOutline: 'rgba(79, 255, 112, 0.70)',
+    },
+  },
+};
+// Live/Calm energy axis — src/app/themeDomain.js CALM_TOKEN_OVERRIDES.
+const CALM_OVERRIDES = {
+  glassRefractiveIndex: 1.12,
+  glassRimColor: 'rgba(255, 255, 255, 0.07)',
+  glassRimWidth: 1,
+  nodeLedSize: 20,
+  nodeTextShadowBlur: 4,
+  canvasGridOpacity: 0.02,
+  canvasGridAccentOpacity: 0.035,
+  ledEmpty: 'rgba(180, 180, 190, 0.32)',
+  ledBlue: 'rgba(60, 140, 255, 0.7)',
+  ledGreen: 'rgba(50, 205, 100, 0.62)',
+  ledAmber: 'rgba(240, 180, 40, 0.68)',
+  ledRed: 'rgba(240, 60, 60, 0.72)',
+};
+// The sub level has no token yet; a proposed default, 0.6 x the minor alpha.
+const SUB_ALPHA_RATIO = 0.6;
+
+const PRESETS = [
+  { label: '100·20·10', majorX: 100, majorY: 100, minorDiv: 5, subDiv: 2, note: "today's lines + sub 10" },
+  { label: '100·20·5', majorX: 100, majorY: 100, minorDiv: 5, subDiv: 4, note: 'brief illustrative' },
+  { label: '50·10·5', majorX: 50, majorY: 50, minorDiv: 5, subDiv: 2, note: 'even Strict gaps' },
+];
+
+// ── State ──
+const state = {
+  mode: 'flex',
+  grid: { majorX: 100, majorY: 100, minorDiv: 5, subDiv: 2, rect: false },
+  settleMs: 150,
+  easing: 'cubic',
+  reduceMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  themeId: 'glass',
+  energy: 'live',
+  levels: { major: true, minor: true, sub: true },
+  gridInk: 'theme', // 'theme' | 'neutral' (today's white)
+  guides: true,
+  showWires: true,
+  showOrigin: true,
+  paint: null, // per-level line opacity override; null = the theme's values
+  view: { scale: 1, x: 0, y: 0 },
+  selection: new Set(),
+  pointerWorld: { x: 0, y: 0 },
+};
+
+const INITIAL_NODES = [
+  { id: 'main', name: 'main.js', group: 'src', x: 0, y: 0, led: 'ledGreen' },
+  { id: 'utils', name: 'utils.js', group: 'src', x: 200, y: 0, led: 'ledGreen' },
+  { id: 'format', name: 'format.js', group: 'src', x: 400, y: 0, led: 'ledBlue' },
+  { id: 'api', name: 'api.js', group: 'src', x: 0, y: 200, led: 'ledGreen' },
+  { id: 'config', name: 'config.js', group: 'src', x: 180, y: 200, led: 'ledAmber' },
+  { id: 'db', name: 'db.js', group: 'lib', x: -300, y: 100, led: 'ledGreen' },
+  { id: 'cache', name: 'cache.js', group: 'lib', x: -300, y: 300, led: 'ledEmpty' },
+  { id: 'legacy', name: 'legacy.js', group: 'old', x: 613, y: 247, led: 'ledRed' },
+];
+const WIRES = [
+  ['main', 'utils'], ['main', 'api'], ['utils', 'format'], ['api', 'config'],
+  ['db', 'cache'], ['db', 'main'], ['format', 'legacy'],
+];
+
+let nodes = [];
+let drag = null;      // active node drag
+let pan = null;       // active pan
+let press = null;     // pointer down, below drag threshold
+let ghost = null;     // resolved target preview during a drag
+const anims = new Map();
+let animFrame = 0;
+
+// ── Canvas setup ──
+const stage = document.getElementById('stage');
+const ctx = stage.getContext('2d');
+const bg = document.createElement('canvas');   // background layer (sampled by glass)
+const bgCtx = bg.getContext('2d');
+let DPR = 1, CW = 0, CH = 0;
+let bgDirty = true;
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  CW = stage.clientWidth;
+  CH = stage.clientHeight;
+  for (const c of [stage, bg]) {
+    c.width = Math.round(CW * DPR);
+    c.height = Math.round(CH * DPR);
+  }
+  bgDirty = true;
+  requestDraw();
+}
+
+// ── Helpers ──
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+// Symmetric rounding (half away from zero) and negative-zero normalization.
+function roundToStep(v, step) {
+  const q = v / step;
+  const r = Math.sign(q) * Math.round(Math.abs(q));
+  return (r * step) || 0;
+}
+function isMultiple(v, step) {
+  const q = v / step;
+  return Math.abs(q - Math.round(q)) < EPS;
+}
+
+function theme() {
+  const t = { ...TOKEN_DEFAULTS, ...THEME_PRESETS[state.themeId].tokens };
+  return state.energy === 'calm' ? { ...t, ...CALM_OVERRIDES } : t;
+}
+
+// Grid ink. Proposed token canvasGridColor; unset, it derives from the
+// theme's structure accent (connectionStroke), so custom themes get a tinted
+// grid for free. Neutral = today's white.
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  const v = parseInt(h.length === 3 ? h.replace(/./g, '$&$&') : h, 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+function gridInk(t = theme()) {
+  if (state.gridInk === 'neutral') return [255, 255, 255];
+  return hexToRgb(t.canvasGridColor ?? t.connectionStroke);
+}
+const rgba = (rgb, a) => `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`;
+// Tinted ink is darker than white, so at the same alpha it nearly vanishes.
+// Scale alpha by the luma ratio: the line keeps today's visibility over the
+// canvas background and only its hue changes.
+function inkGain(ink) {
+  const luma = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  const bg = luma(CANVAS_BG_RGB);
+  return (255 - bg) / Math.max(1, luma(ink) - bg);
+}
+
+function paintAlphas(t = theme()) {
+  if (state.paint) return state.paint;
+  const gain = inkGain(gridInk(t));
+  const minor = num(t.canvasGridOpacity) * gain;
+  return { major: num(t.canvasGridAccentOpacity) * gain, minor, sub: minor * SUB_ALPHA_RATIO };
+}
+
+function syncPaintSliders() {
+  const p = paintAlphas();
+  for (const [key, id] of [['major', 'paintMajor'], ['minor', 'paintMinor'], ['sub', 'paintSub']]) {
+    document.getElementById(id).value = p[key];
+    document.getElementById(`${id}Val`).textContent = p[key].toFixed(3);
+  }
+}
+
+function steps() {
+  const g = state.grid;
+  const majorX = g.majorX;
+  const majorY = g.rect ? g.majorY : g.majorX;
+  const minorX = majorX / g.minorDiv, minorY = majorY / g.minorDiv;
+  return {
+    majorX, majorY, minorX, minorY,
+    subX: minorX / g.subDiv, subY: minorY / g.subDiv,
+  };
+}
+
+function levelOf(x, y) {
+  const s = steps();
+  if (isMultiple(x, s.majorX) && isMultiple(y, s.majorY)) return 'major';
+  if (isMultiple(x, s.minorX) && isMultiple(y, s.minorY)) return 'minor';
+  if (isMultiple(x, s.subX) && isMultiple(y, s.subY)) return 'sub';
+  return 'off-grid';
+}
+
+function rectOf(n, pos) {
+  const s = n.scale ?? 1;
+  const p = pos ?? n;
+  return { x: p.x, y: p.y, w: PIECE_W * s, h: PIECE_H * s };
+}
+function overlaps(a, b) {
+  return a.x < b.x + b.w - EPS && a.x + a.w > b.x + EPS &&
+         a.y < b.y + b.h - EPS && a.y + a.h > b.y + EPS;
+}
+const nodeById = (id) => nodes.find((n) => n.id === id);
+
+function fadeFactor(distance) {
+  if (!Number.isFinite(distance) || distance <= FADE_HIDE) return 0;
+  if (distance >= FADE_FULL) return 1;
+  return (distance - FADE_HIDE) / (FADE_FULL - FADE_HIDE);
+}
+function wiresFit(gap) {
+  if (gap < SEAM - EPS) return 0;
+  return Math.floor((gap - SEAM) / CORRIDOR + EPS) + 1;
+}
+
+const worldToScreen = (x, y) => ({ x: x * state.view.scale + state.view.x, y: y * state.view.scale + state.view.y });
+const screenToWorld = (x, y) => ({ x: (x - state.view.x) / state.view.scale, y: (y - state.view.y) / state.view.scale });
+
+// Rendered position: the committed coordinate, or the in-flight slide frame.
+function renderPos(n, now) {
+  const a = anims.get(n.id);
+  if (!a) return { x: n.x, y: n.y };
+  const t = clamp((now - a.start) / a.dur, 0, 1);
+  const e = ease(t);
+  return { x: a.fromX + (a.toX - a.fromX) * e, y: a.fromY + (a.toY - a.fromY) * e };
+}
+function ease(t) {
+  switch (state.easing) {
+    case 'quint': return 1 - Math.pow(1 - t, 5);
+    case 'sine': return Math.sin((t * Math.PI) / 2);
+    case 'linear': return t;
+    default: return 1 - Math.pow(1 - t, 3);
+  }
+}
+
+// ── Placement resolution (pure: intent in, positions out) ──
+// The moving set snaps by the top-left corner of its bounds; members keep
+// their offsets. Returns { positions, reason, anchor } or null (no room).
+function setBounds(ids, posOf) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const id of ids) {
+    const r = rectOf(nodeById(id), posOf(id));
+    minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h);
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function tryAnchor(ids, offsets, ax, ay) {
+  const moving = new Set(ids);
+  const positions = new Map();
+  for (const id of ids) {
+    const o = offsets.get(id);
+    const p = { x: (ax + o.dx) || 0, y: (ay + o.dy) || 0 };
+    const r = rectOf(nodeById(id), p);
+    for (const other of nodes) {
+      if (moving.has(other.id)) continue;
+      if (overlaps(r, rectOf(other))) return null;
+    }
+    positions.set(id, p);
+  }
+  return positions;
+}
+
+function latticeSearch(ids, offsets, anchor, stepX, stepY, maxRing) {
+  const cx = Math.sign(anchor.x / stepX) * Math.round(Math.abs(anchor.x / stepX));
+  const cy = Math.sign(anchor.y / stepY) * Math.round(Math.abs(anchor.y / stepY));
+  for (let r = 0; r <= maxRing; r++) {
+    const ring = [];
+    for (let i = -r; i <= r; i++) {
+      for (let j = -r; j <= r; j++) {
+        if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
+        const x = ((cx + i) * stepX) || 0, y = ((cy + j) * stepY) || 0;
+        ring.push({ x, y, d: Math.hypot(x - anchor.x, y - anchor.y) });
+      }
+    }
+    // Deterministic: nearest first, ties broken by y, then x.
+    ring.sort((a, b) => (a.d - b.d) || (a.y - b.y) || (a.x - b.x));
+    for (const c of ring) {
+      const positions = tryAnchor(ids, offsets, c.x, c.y);
+      if (positions) return { positions, anchor: { x: c.x, y: c.y } };
+    }
+  }
+  return null;
+}
+
+// Flex docking: today's neighbor snap (useSnap) applied to the moving set's
+// bounds — flush against a non-member edge within SNAP_DISTANCE, aligned.
+function dockSearch(ids, offsets, b) {
+  const moving = new Set(ids);
+  const candidates = [];
+  for (const n of nodes) {
+    if (moving.has(n.id)) continue;
+    const r = rectOf(n);
+    const push = (x, y, side) => candidates.push({ x, y, side, n, d: Math.hypot(x - b.x, y - b.y) });
+    if (Math.abs(b.x - (r.x + r.w)) < SNAP_DISTANCE && Math.abs(b.y - r.y) < SNAP_DISTANCE) push(r.x + r.w, r.y, 'right of');
+    if (Math.abs(b.x + b.w - r.x) < SNAP_DISTANCE && Math.abs(b.y - r.y) < SNAP_DISTANCE) push(r.x - b.w, r.y, 'left of');
+    if (Math.abs(b.y - (r.y + r.h)) < SNAP_DISTANCE && Math.abs(b.x - r.x) < SNAP_DISTANCE) push(r.x, r.y + r.h, 'below');
+    if (Math.abs(b.y + b.h - r.y) < SNAP_DISTANCE && Math.abs(b.x - r.x) < SNAP_DISTANCE) push(r.x, r.y - b.h, 'above');
+  }
+  candidates.sort((a, c) => a.d - c.d);
+  for (const c of candidates) {
+    const positions = tryAnchor(ids, offsets, c.x, c.y);
+    if (positions) return { positions, anchor: { x: c.x, y: c.y }, dock: `${c.side} ${c.n.name}` };
+  }
+  return null;
+}
+
+// ── Smart guides ──
+// Faces of a rect along one axis: start, center, end.
+const facesOf = (r, axis) => (axis === 'x' ? [r.x, r.x + r.w / 2, r.x + r.w] : [r.y, r.y + r.h / 2, r.y + r.h]);
+// Its extent on the other axis.
+const extentOf = (r, axis) => (axis === 'x' ? [r.y, r.y + r.h] : [r.x, r.x + r.w]);
+
+// The nearest face of a non-moving node that one of the moving bounds' faces
+// can align with, within tol (world units; 0 = exact alignments only).
+// Edges pair with edges, centers with centers. Opposite edges of nodes that
+// share extent are a seam, not a guide — docking owns that case. Ties prefer
+// same-side edges, then centers, then opposite edges.
+function nearestGuide(b, axis, moving, tol) {
+  const mf = facesOf(b, axis), me = extentOf(b, axis);
+  let best = null;
+  for (const n of nodes) {
+    if (moving.has(n.id)) continue;
+    const r = rectOf(n);
+    const of = facesOf(r, axis), oe = extentOf(r, axis);
+    const sharesExtent = me[0] < oe[1] + EPS && me[1] > oe[0] - EPS;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if ((i === 1) !== (j === 1)) continue;
+        const opposite = i !== j && i !== 1;
+        if (opposite && sharesExtent) continue;
+        const d = Math.abs(of[j] - mf[i]);
+        if (d > tol + EPS) continue;
+        const rank = i === 1 ? 1 : opposite ? 2 : 0;
+        if (!best || d < best.d - EPS || (Math.abs(d - best.d) < EPS && rank < best.rank)) {
+          best = { axis, value: of[j], anchor: (of[j] - (mf[i] - mf[0])) || 0, d, rank };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+// Lines to draw for a landing position: at most one per axis (the exact
+// alignment nearestGuide prefers), spanning every node with a face on it.
+function guideLines(ids, positions) {
+  const moving = new Set(ids);
+  const b = setBounds(ids, (id) => positions.get(id));
+  const lines = [];
+  for (const axis of ['x', 'y']) {
+    const g = nearestGuide(b, axis, moving, 0);
+    if (!g) continue;
+    let [lo, hi] = extentOf(b, axis);
+    for (const n of nodes) {
+      if (moving.has(n.id)) continue;
+      const r = rectOf(n);
+      if (!facesOf(r, axis).some((f) => Math.abs(f - g.value) < EPS)) continue;
+      const e = extentOf(r, axis);
+      lo = Math.min(lo, e[0]); hi = Math.max(hi, e[1]);
+    }
+    lines.push({ axis, value: g.value, lo, hi });
+  }
+  return lines;
+}
+
+function resolvePlacement(ids, posOf, mode, grid, guideTol = 0) {
+  const b = setBounds(ids, posOf);
+  const offsets = new Map(ids.map((id) => {
+    const p = posOf(id);
+    return [id, { dx: p.x - b.x, dy: p.y - b.y }];
+  }));
+  const s = grid;
+  if (mode === 'strict') {
+    // The grid always wins in Strict: guides are shown, never snapped to.
+    const hit = latticeSearch(ids, offsets, b, s.majorX, s.majorY, 6);
+    return hit ? { ...hit, reason: 'major' } : null;
+  }
+  const dock = dockSearch(ids, offsets, b);
+  if (dock) return { ...dock, reason: 'dock' };
+  if (guideTol > 0) {
+    // Grab the nearest face per axis; an axis with no face in reach takes
+    // the finest lattice step as usual.
+    const moving = new Set(ids);
+    const gx = nearestGuide(b, 'x', moving, guideTol);
+    const gy = nearestGuide(b, 'y', moving, guideTol);
+    if (gx || gy) {
+      const ax = gx ? gx.anchor : roundToStep(b.x, s.subX);
+      const ay = gy ? gy.anchor : roundToStep(b.y, s.subY);
+      const positions = tryAnchor(ids, offsets, ax, ay);
+      if (positions) return { positions, anchor: { x: ax, y: ay }, reason: 'guide' };
+    }
+  }
+  const maxRing = Math.ceil((2 * Math.max(s.majorX, s.majorY)) / Math.min(s.subX, s.subY));
+  const hit = latticeSearch(ids, offsets, b, s.subX, s.subY, Math.min(maxRing, 60));
+  return hit ? { ...hit, reason: 'fine' } : null;
+}
+
+// ── Drawing ──
+function requestDraw() {
+  if (!animFrame) animFrame = requestAnimationFrame(frame);
+}
+function frame(now) {
+  animFrame = 0;
+  for (const [id, a] of anims) if (now - a.start >= a.dur) anims.delete(id);
+  if (bgDirty) { drawBackground(); bgDirty = false; }
+  drawContent(now);
+  if (anims.size) requestDraw();
+}
+
+function drawBackground() {
+  const g = bgCtx;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = CANVAS_BG;
+  g.fillRect(0, 0, bg.width, bg.height);
+  const t = theme();
+  const s = steps();
+  const scale = state.view.scale;
+  const x0 = (-state.view.x) / scale, x1 = (CW - state.view.x) / scale;
+  const y0 = (-state.view.y) / scale, y1 = (CH - state.view.y) / scale;
+  // Levels fade out as their on-screen spacing shrinks below ~10px; majors
+  // decimate at very low zoom. Neither changes the snap lattice.
+  const fade = (px) => clamp((px - 4) / 6, 0, 1);
+  const paint = paintAlphas(t);
+  const levelAlpha = {
+    sub: state.levels.sub ? paint.sub * fade(Math.min(s.subX, s.subY) * scale) : 0,
+    minor: state.levels.minor ? paint.minor * fade(Math.min(s.minorX, s.minorY) * scale) : 0,
+    major: state.levels.major ? paint.major : 0,
+  };
+  let majorEvery = 1;
+  while (Math.min(s.majorX, s.majorY) * scale * majorEvery < 12) majorEvery *= 2;
+  const lw = Math.max(1, Math.round(DPR));
+  const ink = gridInk(t);
+
+  const strokeLevel = (alpha, stepX, stepY, skip) => {
+    if (alpha <= 0.001) return;
+    g.strokeStyle = rgba(ink, alpha);
+    g.lineWidth = lw;
+    g.beginPath();
+    for (let i = Math.floor(x0 / stepX); i <= Math.ceil(x1 / stepX); i++) {
+      if (skip(i)) continue;
+      const sx = Math.round((i * stepX * scale + state.view.x) * DPR) + 0.5;
+      g.moveTo(sx, 0); g.lineTo(sx, bg.height);
+    }
+    for (let j = Math.floor(y0 / stepY); j <= Math.ceil(y1 / stepY); j++) {
+      if (skip(j)) continue;
+      const sy = Math.round((j * stepY * scale + state.view.y) * DPR) + 0.5;
+      g.moveTo(0, sy); g.lineTo(bg.width, sy);
+    }
+    g.stroke();
+  };
+  const { minorDiv, subDiv } = state.grid;
+  // Each location is drawn once, at its strongest level.
+  strokeLevel(levelAlpha.sub, s.subX, s.subY, (i) => i % subDiv === 0);
+  strokeLevel(levelAlpha.minor, s.minorX, s.minorY, (i) => i % minorDiv === 0);
+  strokeLevel(levelAlpha.major, s.majorX * majorEvery, s.majorY * majorEvery, () => false);
+}
+
+function roundRectPath(c, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(rr, 0);
+  c.lineTo(w - rr, 0);
+  c.arcTo(w, 0, w, rr, rr);
+  c.lineTo(w, h - rr);
+  c.arcTo(w, h, w - rr, h, rr);
+  c.lineTo(rr, h);
+  c.arcTo(0, h, 0, h - rr, rr);
+  c.lineTo(0, rr);
+  c.arcTo(0, 0, rr, 0, rr);
+  c.closePath();
+}
+
+function applyWorldTransform() {
+  const v = state.view;
+  ctx.setTransform(DPR * v.scale, 0, 0, DPR * v.scale, DPR * v.x, DPR * v.y);
+}
+
+function drawContent(now) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, stage.width, stage.height);
+  ctx.drawImage(bg, 0, 0);
+  const t = theme();
+  const posCache = new Map(nodes.map((n) => [n.id, renderPos(n, now)]));
+
+  applyWorldTransform();
+  if (state.showWires) drawWires(t, posCache);
+  // Guides sit under the nodes: they read in the gaps and never cross a body.
+  if (drag && ghost && drag.guides) drawGuides(t, guideLines(drag.ids, ghost.positions));
+  for (const n of nodes) drawNode(n, posCache.get(n.id), t);
+  drawGhost(t);
+  if (state.showOrigin) drawOrigin(t);
+  updateReadouts();
+}
+
+function faceTerminals(a, ra, b, rb) {
+  const acx = ra.x + ra.w / 2, acy = ra.y + ra.h / 2;
+  const bcx = rb.x + rb.w / 2, bcy = rb.y + rb.h / 2;
+  if (Math.abs(bcx - acx) >= Math.abs(bcy - acy)) {
+    const right = bcx >= acx;
+    return {
+      horizontal: true,
+      p: { x: right ? ra.x + ra.w : ra.x, y: acy },
+      q: { x: right ? rb.x : rb.x + rb.w, y: bcy },
+    };
+  }
+  const down = bcy >= acy;
+  return {
+    horizontal: false,
+    p: { x: acx, y: down ? ra.y + ra.h : ra.y },
+    q: { x: bcx, y: down ? rb.y : rb.y + rb.h },
+  };
+}
+
+function drawWires(t, posCache) {
+  for (const [aId, bId] of WIRES) {
+    const a = nodeById(aId), b = nodeById(bId);
+    if (!a || !b) continue;
+    const ra = rectOf(a, posCache.get(aId)), rb = rectOf(b, posCache.get(bId));
+    const { horizontal, p, q } = faceTerminals(a, ra, b, rb);
+    const ink = fadeFactor(Math.hypot(q.x - p.x, q.y - p.y));
+    if (ink <= 0) continue; // contact IS the display
+    ctx.save();
+    ctx.globalAlpha = ink;
+    ctx.strokeStyle = t.connectionNeutral;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    if (horizontal) {
+      const mx = (p.x + q.x) / 2;
+      ctx.lineTo(mx, p.y); ctx.lineTo(mx, q.y);
+    } else {
+      const my = (p.y + q.y) / 2;
+      ctx.lineTo(p.x, my); ctx.lineTo(q.x, my);
+    }
+    ctx.lineTo(q.x, q.y);
+    ctx.stroke();
+    ctx.fillStyle = t.connectionNeutral;
+    for (const e of [p, q]) { ctx.beginPath(); ctx.arc(e.x, e.y, 2.5, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+  }
+}
+
+function drawNode(n, pos, t) {
+  const s = n.scale ?? 1;
+  const w = PIECE_W, h = PIECE_H;
+  const radius = num(t.nodeCornerRadius);
+  const selected = state.selection.has(n.id);
+  const material = t.nodeMaterial;
+
+  ctx.save();
+  ctx.translate(pos.x, pos.y);
+  ctx.scale(s, s);
+
+  // Shadow (depth on the pane)
+  roundRectPath(ctx, w, h, radius);
+  ctx.save();
+  ctx.shadowColor = `rgba(0, 0, 0, ${selected ? 0.5 : 0.3})`;
+  ctx.shadowBlur = (selected ? 12 : 4) * DPR;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.01)';
+  ctx.fill();
+  ctx.restore();
+
+  if (material === 'matte') {
+    roundRectPath(ctx, w, h, radius);
+    ctx.save();
+    ctx.globalAlpha = num(t.nodeSurfaceAlpha);
+    ctx.fillStyle = t.nodeSurfaceTint;
+    ctx.fill();
+    ctx.restore();
+    if (num(t.matteBorderWidth) > 0) {
+      roundRectPath(ctx, w, h, radius);
+      ctx.strokeStyle = t.matteBorderColor;
+      ctx.lineWidth = num(t.matteBorderWidth);
+      ctx.stroke();
+    }
+  } else {
+    // Backdrop: sample the BACKGROUND layer behind the node (never wires or
+    // neighbors), blur, clip — the app's glass sampling.
+    const blur = num(t.glassBlurRadius);
+    if (blur > 0) {
+      const scr = worldToScreen(pos.x, pos.y);
+      const sw = w * s * state.view.scale, sh = h * s * state.view.scale;
+      ctx.save();
+      roundRectPath(ctx, w, h, radius);
+      ctx.clip();
+      ctx.filter = `blur(${blur}px)`;
+      ctx.drawImage(bg, scr.x * DPR, scr.y * DPR, sw * DPR, sh * DPR, 0, 0, w, h);
+      ctx.filter = 'none';
+      ctx.restore();
+    }
+    const alpha = num(t.nodeSurfaceAlpha);
+    if (alpha > 0) {
+      roundRectPath(ctx, w, h, radius);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = t.nodeSurfaceTint;
+      ctx.fill();
+      ctx.restore();
+    }
+    const rimWidth = num(t.glassRimWidth);
+    roundRectPath(ctx, w, h, radius);
+    ctx.strokeStyle = t.glassRimColor;
+    ctx.lineWidth = rimWidth;
+    ctx.stroke();
+    // Snell-inspired corner highlights (curvature -> brightness)
+    const snell = Math.min(1, (num(t.glassRefractiveIndex) - 1) * 0.6 + 0.1);
+    const r = Math.min(radius, w / 2, h / 2);
+    if (snell > 0.02 && r > 0) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.lineWidth = rimWidth * 0.8;
+      ctx.lineCap = 'round';
+      const arc = (cx, cy, a0, a1, k) => {
+        ctx.globalAlpha = snell * k;
+        ctx.beginPath(); ctx.arc(cx, cy, r, a0, a1); ctx.stroke();
+      };
+      arc(w - r, r, -Math.PI / 2, 0, 1);
+      arc(r, r, Math.PI, -Math.PI / 2, 1);
+      arc(w - r, h - r, 0, Math.PI / 2, 0.6);
+      arc(r, h - r, Math.PI / 2, Math.PI, 0.4);
+      ctx.restore();
+    }
+  }
+
+  if (selected) {
+    ctx.save();
+    ctx.translate(-1, -1);
+    roundRectPath(ctx, w + 2, h + 2, radius + 1);
+    ctx.strokeStyle = t.nodeSelectedStroke;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Corner LED — radial ball
+  const ledSize = num(t.nodeLedSize);
+  const ledColor = t[n.led] ?? t.ledEmpty;
+  const lx = w - ledSize - 6 + ledSize / 2, ly = 6 + ledSize / 2;
+  const lr = ledSize / 3;
+  const grad = ctx.createRadialGradient(lx - lr * 0.3, ly - lr * 0.3, 0, lx, ly, lr * 1.8);
+  grad.addColorStop(0, ledColor);
+  grad.addColorStop(0.5, ledColor.replace(/[\d.]+\)$/, '0.35)'));
+  grad.addColorStop(1, 'transparent');
+  ctx.beginPath();
+  ctx.arc(lx, ly, lr * 1.8, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Sublabel (group) and filename — Konva's default face is Arial.
+  const shadowBlur = num(t.nodeTextShadowBlur);
+  ctx.save();
+  ctx.textBaseline = 'top';
+  ctx.font = '9px Arial';
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '0.8px';
+  ctx.fillStyle = 'rgba(160, 165, 180, 0.6)';
+  if (material !== 'matte') { ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 6; }
+  ctx.fillText(n.group.toUpperCase(), 14, h - 32);
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  ctx.font = '500 12px Arial';
+  ctx.fillStyle = t.nodeText;
+  if (material !== 'matte') {
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = shadowBlur;
+    ctx.shadowOffsetY = 1;
+  }
+  ctx.fillText(ellipsize(n.name, w - 60), 14, h - 18);
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function ellipsize(text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let out = text;
+  while (out.length > 1 && ctx.measureText(out + '…').width > maxWidth) out = out.slice(0, -1);
+  return out + '…';
+}
+
+function drawGhost(t) {
+  if (!drag || !ghost) return;
+  const scale = state.view.scale;
+  // The landing outline is the whole preview — no reticle, no label.
+  ctx.save();
+  ctx.lineWidth = 1.5 / scale;
+  ctx.setLineDash([6 / scale, 4 / scale]);
+  ctx.strokeStyle = t.nodeSelectedStroke;
+  ctx.globalAlpha = 0.75;
+  for (const [id, p] of ghost.positions) {
+    const r = rectOf(nodeById(id), p);
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    roundRectPath(ctx, r.w, r.h, num(t.nodeCornerRadius) * (nodeById(id).scale ?? 1));
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// One device pixel, pixel-snapped, drawn in device space so zoom never
+// thickens or blurs it.
+function drawGuides(t, lines) {
+  if (!lines.length) return;
+  const over = GUIDE_OVERSHOOT_PX * DPR;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.strokeStyle = t.nodeSelectedStroke;
+  ctx.globalAlpha = GUIDE_ALPHA;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const l of lines) {
+    if (l.axis === 'x') {
+      const a = worldToScreen(l.value, l.lo), b = worldToScreen(l.value, l.hi);
+      const x = Math.round(a.x * DPR) + 0.5;
+      ctx.moveTo(x, a.y * DPR - over); ctx.lineTo(x, b.y * DPR + over);
+    } else {
+      const a = worldToScreen(l.lo, l.value), b = worldToScreen(l.hi, l.value);
+      const y = Math.round(a.y * DPR) + 0.5;
+      ctx.moveTo(a.x * DPR - over, y); ctx.lineTo(b.x * DPR + over, y);
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+  applyWorldTransform();
+}
+
+function drawOrigin(t) {
+  const scale = state.view.scale;
+  ctx.save();
+  // The origin is part of the grid, so it takes the grid's ink.
+  ctx.strokeStyle = state.gridInk === 'neutral' ? 'rgba(121, 134, 203, 0.8)' : rgba(gridInk(t), 0.8);
+  ctx.lineWidth = 1.25 / scale;
+  const r = 7 / scale, arm = 14 / scale;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.moveTo(-arm, 0); ctx.lineTo(arm, 0);
+  ctx.moveTo(0, -arm); ctx.lineTo(0, arm);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── Readouts ──
+const fmt = (v) => {
+  const r = Math.round(v * 10) / 10;
+  return (Object.is(r, -0) ? 0 : r).toString();
+};
+const pad4 = (v) => {
+  const r = Math.round(v);
+  return (r < 0 ? '-' : '') + String(Math.abs(r)).padStart(4, '0');
+};
+
+function neighborGaps(n) {
+  const r = rectOf(n);
+  const out = { left: null, right: null, up: null, down: null };
+  const take = (dir, gap, other) => {
+    if (gap < -EPS) return;
+    if (!out[dir] || gap < out[dir].gap) out[dir] = { gap: Math.max(0, gap), other };
+  };
+  for (const m of nodes) {
+    if (m.id === n.id) continue;
+    const o = rectOf(m);
+    const vOverlap = o.y < r.y + r.h && o.y + o.h > r.y;
+    const hOverlap = o.x < r.x + r.w && o.x + o.w > r.x;
+    if (vOverlap) {
+      take('right', o.x - (r.x + r.w), m);
+      take('left', r.x - (o.x + o.w), m);
+    }
+    if (hOverlap) {
+      take('down', o.y - (r.y + r.h), m);
+      take('up', r.y - (o.y + o.h), m);
+    }
+  }
+  return out;
+}
+
+function describeGap(entry, n, dir) {
+  if (!entry) return '—';
+  const g = entry.gap;
+  if (g < 0.05) {
+    const a = rectOf(n), b = rectOf(entry.other);
+    const aligned = (dir === 'left' || dir === 'right')
+      ? Math.abs((a.y + a.h / 2) - (b.y + b.h / 2)) < ADJ_TOL
+      : Math.abs((a.x + a.w / 2) - (b.x + b.w / 2)) < ADJ_TOL;
+    return `flush · ${entry.other.name}${aligned ? ' · adjacent' : ''}`;
+  }
+  const fits = wiresFit(g);
+  const ink = Math.round(fadeFactor(g) * 100);
+  return `${fmt(g)} · ${fits ? `${fits} wire${fits > 1 ? 's' : ''}` : 'no lane'} · ${ink}% ink`;
+}
+
+function updateReadouts() {
+  const s = steps();
+  const sel = [...state.selection].map(nodeById).filter(Boolean);
+  const inspect = document.getElementById('inspect');
+  const gapsEl = document.getElementById('gaps');
+  const sbSel = document.getElementById('sbSel');
+
+  if (sel.length === 1) {
+    const n = sel[0];
+    const level = levelOf(n.x, n.y);
+    inspect.innerHTML =
+      `<b>${n.name}</b><br>corner (${fmt(n.x)}, ${fmt(n.y)}) · <b>${level}</b><br>` +
+      `scale ${Math.round((n.scale ?? 1) * 100)}% · body ${fmt(PIECE_W * (n.scale ?? 1))} × ${fmt(PIECE_H * (n.scale ?? 1))}`;
+    const g = neighborGaps(n);
+    gapsEl.innerHTML = [['←', 'left'], ['→', 'right'], ['↑', 'up'], ['↓', 'down']]
+      .map(([arrow, dir]) => `<span>${arrow}</span><span>${describeGap(g[dir], n, dir)}</span>`).join('');
+    sbSel.innerHTML = `<span class="sb-node">${n.name}</span> (${fmt(n.x)}, ${fmt(n.y)}) · ${level}`;
+  } else if (sel.length > 1) {
+    const b = setBounds(sel.map((n) => n.id), (id) => nodeById(id));
+    inspect.innerHTML = `<b>${sel.length} nodes</b><br>set corner (${fmt(b.x)}, ${fmt(b.y)}) · <b>${levelOf(b.x, b.y)}</b><br>bounds ${fmt(b.w)} × ${fmt(b.h)}`;
+    gapsEl.innerHTML = '';
+    sbSel.textContent = `${sel.length} selected · set corner (${fmt(b.x)}, ${fmt(b.y)})`;
+  } else {
+    inspect.innerHTML = 'Select a node to see its corner, lattice level and the gaps to its neighbors.';
+    gapsEl.innerHTML = '';
+    sbSel.textContent = 'No selection';
+  }
+  // During a drag the landing coordinate lives here, not on the canvas.
+  if (drag) {
+    const a = ghost?.anchor;
+    sbSel.textContent = !ghost ? '→ no free spot nearby'
+      : ghost.reason === 'dock' ? `→ dock ${ghost.dock}`
+      : `→ (${fmt(a.x)}, ${fmt(a.y)}) · ${ghost.reason === 'guide' ? 'aligned · ' : ''}${levelOf(a.x, a.y)}`;
+  }
+
+  // Collapsed sections keep their current value visible in a chip.
+  const scaleText = sel.length === 0 ? '' : [...new Set(sel.map((n) => n.scale ?? 1))].length > 1
+    ? 'Mixed' : `${Math.round((sel[0].scale ?? 1) * 100)}%`;
+  const stepText = (x, y) => (Math.abs(x - y) < EPS ? fmt(x) : `${fmt(x)}×${fmt(y)}`);
+  setChip('placement', `${state.mode === 'strict' ? 'Strict' : 'Flex'}${state.guides ? ' · guides' : ''}`);
+  setChip('spacing', [stepText(s.majorX, s.majorY), stepText(s.minorX, s.minorY), stepText(s.subX, s.subY)].join('·'));
+  setChip('settle', state.reduceMotion || state.settleMs <= 0 ? 'instant' : `${state.settleMs} ms`);
+  setChip('node', scaleText);
+  setChip('look', `${THEME_PRESETS[state.themeId].name} · ${state.energy === 'calm' ? 'Calm' : 'Live'}`);
+  setChip('inspector', sel.length === 1 ? sel[0].name : sel.length > 1 ? `${sel.length} nodes` : '');
+
+  document.getElementById('sbPointer').textContent = `X: ${pad4(state.pointerWorld.x)} Y: ${pad4(state.pointerWorld.y)}`;
+  document.getElementById('sbZoom').textContent = `${Math.round(state.view.scale * 100)}%`;
+  document.getElementById('sbMode').textContent = state.mode.toUpperCase();
+
+  // Node scale section: disabled (not hidden) without a selection.
+  const nodeSection = document.getElementById('nodeSection');
+  nodeSection.classList.toggle('is-disabled', sel.length === 0);
+  const scales = [...new Set(sel.map((n) => n.scale ?? 1))];
+  document.getElementById('scaleVal').textContent =
+    sel.length === 0 ? '—' : scales.length > 1 ? 'Mixed' : `${Math.round(scales[0] * 100)}%`;
+  document.getElementById('nodeHint').textContent = sel.length === 0
+    ? 'Select a node to scale it.'
+    : 'Grows from each node\'s top-left corner.';
+}
+
+function updateGridPanel() {
+  const g = state.grid;
+  const s = steps();
+  document.getElementById('majorX').value = g.majorX;
+  document.getElementById('majorY').value = g.rect ? g.majorY : g.majorX;
+  document.getElementById('majorY').disabled = !g.rect;
+  document.getElementById('majorXLabel').textContent = g.rect ? 'Major step X' : 'Major step';
+  document.getElementById('minorDiv').value = g.minorDiv;
+  document.getElementById('subDiv').value = g.subDiv;
+  document.getElementById('rect').checked = g.rect;
+
+  const pitch = (dim, step) => Math.ceil((dim - EPS) / step) * step;
+  const gapX = pitch(PIECE_W, s.majorX) - PIECE_W;
+  const gapY = pitch(PIECE_H, s.majorY) - PIECE_H;
+  const gapText = (gap) => gap < EPS ? 'flush' : `${fmt(gap)} (${wiresFit(gap)} wire${wiresFit(gap) === 1 ? '' : 's'}, ${Math.round(fadeFactor(gap) * 100)}% ink)`;
+  const stepText = (x, y) => (Math.abs(x - y) < EPS ? fmt(x) : `${fmt(x)}×${fmt(y)}`);
+  document.getElementById('derived').innerHTML =
+    `major <b>${stepText(s.majorX, s.majorY)}</b> · minor <b>${stepText(s.minorX, s.minorY)}</b> · sub <b>${stepText(s.subX, s.subY)}</b><br>` +
+    `Strict side by side: gap <b>${gapText(gapX)}</b><br>` +
+    `Strict stacked: gap <b>${gapText(gapY)}</b>`;
+
+  const warnings = [];
+  const whole = (v) => Math.abs(v - Math.round(v)) < EPS;
+  if (!whole(s.minorX) || !whole(s.minorY) || !whole(s.subX) || !whole(s.subY)) {
+    warnings.push('A derived step is not a whole number.');
+  }
+  if (!whole(10 / s.subX) || !whole(10 / s.subY)) {
+    warnings.push("Sub step doesn't divide 10: a flush dock in Flex lands off the lattice (180 × 110 share gcd 10).");
+  }
+  document.getElementById('warn').textContent = warnings.join(' ');
+
+  document.querySelectorAll('#presets .btn').forEach((b, i) => {
+    const p = PRESETS[i];
+    b.classList.toggle('is-active',
+      !g.rect && p.majorX === g.majorX && p.minorDiv === g.minorDiv && p.subDiv === g.subDiv);
+  });
+}
+
+function updateModePanel() {
+  document.querySelectorAll('#modeSeg .btn').forEach((b) => b.classList.toggle('is-active', b.dataset.mode === state.mode));
+  document.getElementById('modeHint').textContent = state.mode === 'strict'
+    ? 'Major intersections only. Never docks flush; a drop onto a neighbor takes the nearest free intersection.'
+    : 'Docks flush to a neighbor within 40, otherwise settles on the finest intersection.';
+  document.getElementById('guides').checked = state.guides;
+  document.getElementById('guidesHint').textContent = !state.guides ? ''
+    : state.mode === 'strict'
+      ? 'Shown while dragging, but the grid always wins: they never pull.'
+      : `Grab the nearest face of another node within ${GUIDE_CAPTURE_PX} px — after docking, before the lattice.`;
+}
+
+function updateLookPanel() {
+  document.querySelectorAll('#energySeg .btn').forEach((b) => b.classList.toggle('is-active', b.dataset.energy === state.energy));
+  document.querySelectorAll('#inkSeg .btn').forEach((b) => b.classList.toggle('is-active', b.dataset.ink === state.gridInk));
+  document.getElementById('theme').value = state.themeId;
+}
+
+// ── Collapsible panels (remembered per viewer; storage may be unavailable) ──
+const COLLAPSE_KEY = 'litria.gridPlayground.collapsed';
+const COLLAPSED_BY_DEFAULT = { settle: true, node: true, look: true, keys: true };
+function loadCollapsed() {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY);
+    if (raw) return { ...COLLAPSED_BY_DEFAULT, ...JSON.parse(raw) };
+  } catch { /* unavailable or unreadable: use the defaults */ }
+  return { ...COLLAPSED_BY_DEFAULT };
+}
+const collapsed = loadCollapsed();
+function saveCollapsed() {
+  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed)); } catch { /* convenience only */ }
+}
+function sectionEl(key) {
+  return document.querySelector(`.collapsible[data-section="${key}"]`);
+}
+function applyCollapsed(key) {
+  const el = sectionEl(key);
+  el.classList.toggle('is-collapsed', !!collapsed[key]);
+  el.querySelector(':scope > .hud-section-title').setAttribute('aria-expanded', String(!collapsed[key]));
+}
+function setChip(key, text) {
+  const chip = sectionEl(key)?.querySelector('.chip');
+  if (chip && chip.textContent !== text) chip.textContent = text;
+}
+
+// ── Toast ──
+let toastTimer = 0;
+function toast(text) {
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.classList.add('is-visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('is-visible'), 2400);
+}
+
+// ── Settle: commit final coordinates once; the slide is presentation ──
+function settle(fromMap, toMap) {
+  const instant = state.reduceMotion || state.settleMs <= 0;
+  const start = performance.now();
+  for (const [id, to] of toMap) {
+    const n = nodeById(id);
+    n.x = to.x; n.y = to.y; // authoritative, committed now
+    const from = fromMap.get(id);
+    if (!instant && from && (Math.abs(from.x - to.x) > EPS || Math.abs(from.y - to.y) > EPS)) {
+      anims.set(id, { fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, start, dur: state.settleMs });
+    } else {
+      anims.delete(id);
+    }
+  }
+  requestDraw();
+}
+
+// ── Pointer interaction ──
+// Guide capture is a screen-space tolerance, converted to world units at the
+// current zoom (brief: screen-space capture, world-space geometry).
+function guideTolerance() {
+  return drag && drag.guides ? GUIDE_CAPTURE_PX / state.view.scale : 0;
+}
+
+function hitTest(wx, wy) {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const r = rectOf(nodes[i]);
+    if (wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h) return nodes[i];
+  }
+  return null;
+}
+
+stage.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  stage.setPointerCapture(e.pointerId);
+  const w = screenToWorld(e.offsetX, e.offsetY);
+  const hit = hitTest(w.x, w.y);
+  press = { x: e.offsetX, y: e.offsetY, world: w, hit, shift: e.shiftKey };
+  if (!hit) {
+    pan = { x: e.offsetX, y: e.offsetY, vx: state.view.x, vy: state.view.y, moved: false };
+  }
+});
+
+stage.addEventListener('pointermove', (e) => {
+  const w = screenToWorld(e.offsetX, e.offsetY);
+  state.pointerWorld = w;
+  if (pan) {
+    const dx = e.offsetX - pan.x, dy = e.offsetY - pan.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) pan.moved = true;
+    if (pan.moved) {
+      state.view.x = pan.vx + dx;
+      state.view.y = pan.vy + dy;
+      stage.classList.add('is-panning');
+      bgDirty = true;
+    }
+    requestDraw();
+    return;
+  }
+  if (press && press.hit && !drag) {
+    if (Math.hypot(e.offsetX - press.x, e.offsetY - press.y) >= 3) beginDrag(press);
+  }
+  if (drag) {
+    const dx = w.x - drag.startWorld.x, dy = w.y - drag.startWorld.y;
+    for (const id of drag.ids) {
+      const p0 = drag.start.get(id);
+      const n = nodeById(id);
+      n.x = p0.x + dx; n.y = p0.y + dy;
+      anims.delete(id);
+    }
+    ghost = resolvePlacement(drag.ids, (id) => nodeById(id), drag.mode, drag.grid, guideTolerance());
+  }
+  requestDraw();
+});
+
+function beginDrag(p) {
+  const id = p.hit.id;
+  if (!state.selection.has(id)) {
+    if (!p.shift) state.selection.clear();
+    state.selection.add(id);
+  }
+  const ids = [...state.selection];
+  // Bring the moving set to the top of the draw order.
+  nodes = [...nodes.filter((n) => !state.selection.has(n.id)), ...nodes.filter((n) => state.selection.has(n.id))];
+  drag = {
+    ids,
+    startWorld: p.world,
+    start: new Map(ids.map((i) => {
+      const n = nodeById(i);
+      const rp = renderPos(n, performance.now());
+      return [i, { x: rp.x, y: rp.y }];
+    })),
+    committed: new Map(ids.map((i) => [i, { x: nodeById(i).x, y: nodeById(i).y }])),
+    // Mode and lattice are captured at drag start: no mid-drag lattice change.
+    mode: state.mode,
+    grid: steps(),
+    guides: state.guides,
+  };
+  for (const i of ids) anims.delete(i);
+  stage.classList.add('is-dragging');
+}
+
+stage.addEventListener('pointerup', (e) => {
+  if (pan) {
+    if (!pan.moved) state.selection.clear();
+    pan = null;
+    press = null;
+    stage.classList.remove('is-panning');
+    requestDraw();
+    return;
+  }
+  if (drag) {
+    finishDrag();
+  } else if (press && press.hit) {
+    const id = press.hit.id;
+    if (press.shift) {
+      if (state.selection.has(id)) state.selection.delete(id); else state.selection.add(id);
+    } else {
+      state.selection.clear();
+      state.selection.add(id);
+    }
+  }
+  press = null;
+  requestDraw();
+});
+
+function finishDrag() {
+  const from = new Map(drag.ids.map((id) => [id, { x: nodeById(id).x, y: nodeById(id).y }]));
+  const result = resolvePlacement(drag.ids, (id) => nodeById(id), drag.mode, drag.grid, guideTolerance());
+  if (result) {
+    settle(from, result.positions);
+  } else {
+    // No valid placement nearby: return to where the gesture began.
+    settle(from, drag.committed);
+    toast('No free spot near the drop — returned to where it started.');
+  }
+  drag = null;
+  ghost = null;
+  stage.classList.remove('is-dragging');
+}
+
+function cancelDrag() {
+  if (!drag) return;
+  for (const [id, p] of drag.committed) {
+    const n = nodeById(id);
+    n.x = p.x; n.y = p.y;
+    anims.delete(id);
+  }
+  drag = null;
+  ghost = null;
+  press = null;
+  stage.classList.remove('is-dragging');
+  requestDraw();
+}
+
+stage.addEventListener('lostpointercapture', () => {
+  if (drag) cancelDrag();
+});
+
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const v = state.view;
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  const next = clamp(v.scale * factor, MIN_ZOOM, MAX_ZOOM);
+  const w = screenToWorld(e.offsetX, e.offsetY);
+  v.scale = next;
+  v.x = e.offsetX - w.x * next;
+  v.y = e.offsetY - w.y * next;
+  bgDirty = true;
+  requestDraw();
+}, { passive: false });
+
+// ── View commands ──
+function home() {
+  state.view.scale = 1;
+  state.view.x = CW / 2;
+  state.view.y = CH / 2;
+  bgDirty = true;
+  requestDraw();
+}
+function fit() {
+  if (!nodes.length) return home();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of nodes) {
+    const r = rectOf(n);
+    minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h);
+  }
+  // Leave room for the panel on the left and the inspector on the right.
+  const left = 270, right = 300, pad = 40;
+  const availW = Math.max(200, CW - left - right - pad * 2);
+  const availH = Math.max(200, CH - pad * 2);
+  const scale = clamp(Math.min(availW / (maxX - minX), availH / (maxY - minY)), MIN_ZOOM, MAX_ZOOM);
+  state.view.scale = scale;
+  state.view.x = left + pad + (availW - (maxX - minX) * scale) / 2 - minX * scale;
+  state.view.y = pad + (availH - (maxY - minY) * scale) / 2 - minY * scale;
+  bgDirty = true;
+  requestDraw();
+}
+
+function resetLayout() {
+  nodes = INITIAL_NODES.map((n) => ({ ...n, scale: 1 }));
+  anims.clear();
+  state.selection.clear();
+  requestDraw();
+}
+
+function scatter() {
+  // Off-lattice, non-overlapping positions: mode switches must leave them be.
+  const placed = [];
+  const out = [];
+  for (const n of nodes) {
+    let p, tries = 0;
+    do {
+      p = { x: Math.round((Math.random() * 1200 - 500) * 10) / 10 + 0.3, y: Math.round((Math.random() * 700 - 250) * 10) / 10 + 0.7 };
+      tries++;
+    } while (tries < 200 && placed.some((q) => overlaps(rectOf(n, p), q)));
+    placed.push(rectOf(n, p));
+    out.push([n.id, p]);
+  }
+  const from = new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+  settle(from, new Map(out));
+}
+
+// Node scale about each node's own top-left corner (the grid anchor).
+function scaleSelection(next) {
+  const sel = [...state.selection].map(nodeById).filter(Boolean);
+  if (!sel.length) return;
+  for (const n of sel) n.scale = clamp(next(n.scale ?? 1), SCALE_MIN, SCALE_MAX);
+  const clashes = sel.filter((n) => nodes.some((m) => m !== n && overlaps(rectOf(n), rectOf(m))));
+  if (clashes.length) {
+    toast('Overlaps a neighbor — the real settlement would part them (not simulated here).');
+  }
+  requestDraw();
+}
+
+// ── Controls wiring ──
+function buildPresets() {
+  const wrap = document.getElementById('presets');
+  PRESETS.forEach((p) => {
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = p.label;
+    b.title = p.note;
+    b.addEventListener('click', () => {
+      Object.assign(state.grid, { majorX: p.majorX, majorY: p.majorY, minorDiv: p.minorDiv, subDiv: p.subDiv, rect: false });
+      onGridChanged();
+    });
+    wrap.appendChild(b);
+  });
+}
+
+function onGridChanged() {
+  bgDirty = true;
+  updateGridPanel();
+  requestDraw();
+}
+
+function readIntInput(id, lo, hi, fallback) {
+  const v = Number(document.getElementById(id).value);
+  if (!Number.isFinite(v) || v <= 0) return fallback;
+  return clamp(Math.round(v), lo, hi);
+}
+
+document.getElementById('majorX').addEventListener('change', () => {
+  state.grid.majorX = readIntInput('majorX', 10, 400, state.grid.majorX);
+  if (!state.grid.rect) state.grid.majorY = state.grid.majorX;
+  onGridChanged();
+});
+document.getElementById('majorY').addEventListener('change', () => {
+  state.grid.majorY = readIntInput('majorY', 10, 400, state.grid.majorY);
+  onGridChanged();
+});
+document.getElementById('minorDiv').addEventListener('change', () => {
+  state.grid.minorDiv = readIntInput('minorDiv', 1, 10, state.grid.minorDiv);
+  onGridChanged();
+});
+document.getElementById('subDiv').addEventListener('change', () => {
+  state.grid.subDiv = readIntInput('subDiv', 1, 10, state.grid.subDiv);
+  onGridChanged();
+});
+document.getElementById('rect').addEventListener('change', (e) => {
+  state.grid.rect = e.target.checked;
+  if (!state.grid.rect) state.grid.majorY = state.grid.majorX;
+  onGridChanged();
+});
+
+document.querySelectorAll('#modeSeg .btn').forEach((b) => b.addEventListener('click', () => {
+  state.mode = b.dataset.mode;
+  updateModePanel();
+  requestDraw();
+}));
+function setGuides(on) {
+  state.guides = on;
+  updateModePanel();
+  requestDraw();
+}
+document.getElementById('guides').addEventListener('change', (e) => setGuides(e.target.checked));
+
+document.querySelectorAll('.collapsible').forEach((el) => {
+  const key = el.dataset.section;
+  applyCollapsed(key);
+  el.querySelector(':scope > .hud-section-title').addEventListener('click', () => {
+    collapsed[key] = !collapsed[key];
+    applyCollapsed(key);
+    saveCollapsed();
+  });
+});
+// The panel pill folds every left-panel section, or opens them all.
+document.getElementById('hudPill').addEventListener('click', () => {
+  const keys = [...document.querySelectorAll('#hud .collapsible')].map((el) => el.dataset.section);
+  const anyOpen = keys.some((k) => !collapsed[k]);
+  for (const k of keys) { collapsed[k] = anyOpen; applyCollapsed(k); }
+  saveCollapsed();
+});
+
+const settleEl = document.getElementById('settle');
+settleEl.value = state.settleMs;
+const updateSettleLabel = () => { document.getElementById('settleVal').textContent = `${state.settleMs} ms`; };
+settleEl.addEventListener('input', () => { state.settleMs = Number(settleEl.value); updateSettleLabel(); requestDraw(); });
+document.getElementById('easing').addEventListener('change', (e) => { state.easing = e.target.value; });
+const rmEl = document.getElementById('rm');
+rmEl.checked = state.reduceMotion;
+rmEl.addEventListener('change', () => { state.reduceMotion = rmEl.checked; requestDraw(); });
+
+document.getElementById('scaleDown').addEventListener('click', () => scaleSelection((s) => s - SCALE_STEP));
+document.getElementById('scaleUp').addEventListener('click', () => scaleSelection((s) => s + SCALE_STEP));
+document.getElementById('scaleReset').addEventListener('click', () => scaleSelection(() => 1));
+
+// Themes own grid paint: switching theme or energy returns to its values.
+document.getElementById('theme').addEventListener('change', (e) => {
+  state.themeId = e.target.value;
+  state.paint = null;
+  syncPaintSliders();
+  bgDirty = true;
+  requestDraw();
+});
+document.querySelectorAll('#energySeg .btn').forEach((b) => b.addEventListener('click', () => {
+  state.energy = b.dataset.energy;
+  state.paint = null;
+  syncPaintSliders();
+  updateLookPanel();
+  bgDirty = true;
+  requestDraw();
+}));
+// Ink changes the luma-matched opacity, so it also returns to theme values.
+document.querySelectorAll('#inkSeg .btn').forEach((b) => b.addEventListener('click', () => {
+  state.gridInk = b.dataset.ink;
+  state.paint = null;
+  syncPaintSliders();
+  updateLookPanel();
+  bgDirty = true;
+  requestDraw();
+}));
+for (const id of ['paintMajor', 'paintMinor', 'paintSub']) {
+  document.getElementById(id).addEventListener('input', () => {
+    state.paint = {
+      major: Number(document.getElementById('paintMajor').value),
+      minor: Number(document.getElementById('paintMinor').value),
+      sub: Number(document.getElementById('paintSub').value),
+    };
+    syncPaintSliders();
+    bgDirty = true;
+    requestDraw();
+  });
+}
+for (const [id, key] of [['lvMajor', 'major'], ['lvMinor', 'minor'], ['lvSub', 'sub']]) {
+  document.getElementById(id).addEventListener('change', (e) => {
+    state.levels[key] = e.target.checked;
+    bgDirty = true;
+    requestDraw();
+  });
+}
+document.getElementById('showWires').addEventListener('change', (e) => { state.showWires = e.target.checked; requestDraw(); });
+document.getElementById('showOrigin').addEventListener('change', (e) => { state.showOrigin = e.target.checked; requestDraw(); });
+document.getElementById('home').addEventListener('click', home);
+document.getElementById('fit').addEventListener('click', fit);
+document.getElementById('reset').addEventListener('click', () => { resetLayout(); fit(); });
+document.getElementById('scatter').addEventListener('click', scatter);
+
+window.addEventListener('keydown', (e) => {
+  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
+  if (e.key === 'Escape') { cancelDrag(); return; }
+  if (typing) return;
+  if (e.key === 'Home') { e.preventDefault(); home(); }
+  else if (e.key === 'h' || e.key === 'H') document.getElementById('hud').classList.toggle('is-hidden');
+  else if (e.key === 's' || e.key === 'S') { state.mode = 'strict'; updateModePanel(); requestDraw(); }
+  else if (e.key === 'f' || e.key === 'F') { state.mode = 'flex'; updateModePanel(); requestDraw(); }
+  else if (e.key === 'g' || e.key === 'G') setGuides(!state.guides);
+});
+
+window.addEventListener('resize', resize);
+
+// ── Boot ──
+buildPresets();
+resetLayout();
+resize();
+updateModePanel();
+updateGridPanel();
+updateLookPanel();
+updateSettleLabel();
+syncPaintSliders();
+fit();
+</script>
+</body>
+</html>
