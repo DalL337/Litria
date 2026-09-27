@@ -428,6 +428,7 @@ export function useProjectPersistence({
   // by POSITION_FLUSH_MAX_WAIT_MS. A failed drain is requeued with newer
   // positions winning and retried with capped exponential backoff.
   const lastPositionsRef = useRef(new Map());
+  const lastScalesRef = useRef(new Map());
   const pendingMovesRef = useRef(new Map());
   const firstPendingAtRef = useRef(null);
   const positionRetryAttemptRef = useRef(0);
@@ -545,8 +546,34 @@ export function useProjectPersistence({
       void flushPendingMoves({ allowRetry: false });
       positionRetryAttemptRef.current = 0;
       lastPositionsRef.current = new Map();
+      lastScalesRef.current = new Map();
     };
   }, [projectInstance?.instanceId, flushPendingMoves]);
+
+  // Node scale (ADR-030 revival). The position outbox carries x and y only,
+  // so a scale change — the scale command, its undo or redo — saves here
+  // through db_update_piece. The first run after hydration seeds the map
+  // from the loaded scales instead of writing them back.
+  useEffect(() => {
+    if (!canPersist(projectInstance) || !hasLoadedPiecesRef.current) return;
+    const previous = lastScalesRef.current;
+    const isSeedRun = previous.size === 0;
+    const next = new Map();
+    const changed = [];
+    for (const piece of pieces) {
+      const scale = Number.isFinite(piece.scale) && piece.scale > 0 ? piece.scale : 1;
+      next.set(piece.id, scale);
+      if (!isSeedRun && previous.has(piece.id) && previous.get(piece.id) !== scale) {
+        changed.push({ id: piece.id, scale });
+      }
+    }
+    lastScalesRef.current = next;
+    for (const { id, scale } of changed) {
+      dbUpdatePiece(id, { scale }).catch((error) => {
+        console.warn('[persistence] piece scale write failed:', error);
+      });
+    }
+  }, [pieces, projectInstance?.instanceId, projectInstance?.rootPath, projectInstance?.manifestPath, projectInstance?.readOnly]);
 
   // Last-chance flush when the window is closing: a move made inside the
   // debounce window would otherwise ride down with the process. Fire-and-

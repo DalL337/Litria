@@ -84,6 +84,9 @@ export function useInteractionDomain(params) {
       isDragActive: controller.isDragActive,
       dragOverGroupId: controller.dragOverGroupId,
       subtractiveDragSource: controller.subtractiveDragSource,
+      // Where the dragged set will land (ADR-030): positions, reason,
+      // level and smart-guide lines, or null outside a drag.
+      placementPreview: controller.placementPreview,
       interactionMode,
       // Only meaningful while editing; null in default mode for clarity.
       activeSubMode: interactionMode === 'edit' ? activeSubMode : null
@@ -102,6 +105,7 @@ export function useInteractionDomain(params) {
       handleGroupPillDragMove: controller.handleGroupPillDragMove,
       handleGroupPillDragEnd: controller.handleGroupPillDragEnd,
       scaleSelectedPieces: controller.scaleSelectedPieces,
+      cancelActiveDrag: controller.cancelActiveDrag,
       toggleMode: modeDomain.commands.toggleMode,
       setSubMode: modeDomain.commands.setSubMode
     },

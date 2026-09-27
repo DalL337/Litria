@@ -6,6 +6,9 @@ import {
 } from '../app/interactionHelpers';
 import { findInnermostGroupAt, hasCollapsedAncestor, collectSubtreePieceIds } from '../app/selectors/workspaceSelectors';
 import { computeWireSeams } from '../utils/wireNudge';
+import { guideLinesFor, resolvePlacement, staticObstacles } from '../app/placementResolution';
+import { boundsOfRects, pieceRect } from '../utils/spatialGeometry2d';
+import { roundToStep } from '../utils/gridGeometry';
 
 export function useCanvasInteractionController({
   adjacency,
@@ -65,9 +68,21 @@ export function useCanvasInteractionController({
   // Empty-group drag commit: translates seedBounds at drag end when the
   // dragged group has no subtree pieces (its only geometry is the seed).
   onGroupSeedTranslate = null,
+  // Structural grid (ADR-030): returns { mode, steps, guides,
+  // guideTolerancePx } or null. Read once at drag start — no mid-drag
+  // lattice change (brief §5). Null keeps the pre-grid neighbor snap.
+  getGridPlacement = null,
+  // Current zoom, to turn the screen-space guide tolerance into world units.
+  getViewportScale = () => 1,
 }) {
   const dragStartRef = useRef(new Map());
   const groupDragStartRef = useRef(null);
+  // Grid placement captured at drag start, and the landing it resolves to
+  // while the pointer moves (the render layer draws it: brief §5).
+  const dragPlacementRef = useRef(null);
+  const [placementPreview, setPlacementPreview] = useState(null);
+  // Escape during a drag: the drag ends where it began, with no history.
+  const cancelDragRef = useRef(false);
   // Piece-to-group drag tracking
   const dragOverGroupRef = useRef(null);
   const dragOverCandidateRef = useRef(null);
@@ -367,6 +382,82 @@ export function useCanvasInteractionController({
     }
   }, [activeActionToken, clearDragOverGroup, getGroupBounds, groupByPieceId, groups, isEditMode, updateSubtractiveSource]);
 
+  const capturePlacement = useCallback(() => {
+    const grid = getGridPlacement?.();
+    if (!grid?.steps) return null;
+    const zoom = getViewportScale?.() || 1;
+    return {
+      mode: grid.mode === 'strict' ? 'strict' : 'flex',
+      steps: grid.steps,
+      guideTolerance: grid.guides ? (grid.guideTolerancePx ?? 0) / zoom : 0,
+    };
+  }, [getGridPlacement, getViewportScale]);
+
+  // Resolve where a moving set lands. `positionOf(id)` gives each member's
+  // current corner; `dockAnchor` is Flex's docking target for the set's
+  // corner (or null). Group drags pass occupancy: false.
+  const resolveMovingSet = useCallback(({ ids, positionOf, gridPlacement, dockAnchor = null, occupancy = true }) => {
+    const members = [];
+    for (const id of ids) {
+      const piece = piecesById.get(id) ?? pieces.find((entry) => entry.id === id);
+      if (piece) members.push({ piece, position: positionOf(id) });
+    }
+    if (!members.length) return null;
+    const obstacles = staticObstacles({
+      pieces,
+      movingIds: ids,
+      hiddenPieceIds,
+      baseWidth: pieceWidth,
+      baseHeight: pieceHeight,
+    });
+    const result = resolvePlacement({
+      members,
+      obstacles,
+      steps: gridPlacement.steps,
+      mode: gridPlacement.mode,
+      dockAnchor: gridPlacement.mode === 'flex' ? dockAnchor : null,
+      guideTolerance: gridPlacement.guideTolerance,
+      occupancy,
+      baseWidth: pieceWidth,
+      baseHeight: pieceHeight,
+    });
+    return { ...result, members, obstacles };
+  }, [hiddenPieceIds, pieceHeight, pieceWidth, pieces, piecesById]);
+
+  // Flex docking for the moving set, as today: the single-piece neighbor
+  // snap (with its wire seam), or the multi-piece bounds snap.
+  const dockAnchorFor = useCallback((ids, positionOf, leadId) => {
+    if (ids.length === 1) {
+      const piece = piecesById.get(leadId);
+      if (!piece) return null;
+      const at = positionOf(leadId);
+      return checkSnap?.(piece, at.x, at.y) ?? null;
+    }
+    const delta = getGroupSnapDelta?.(ids);
+    if (!delta || (!delta.dx && !delta.dy)) return null;
+    const bounds = boundsOfRects(ids.map((pid) => {
+      const piece = piecesById.get(pid);
+      return piece ? pieceRect(piece, pieceWidth, pieceHeight, positionOf(pid)) : null;
+    }));
+    return bounds ? { x: bounds.x + delta.dx, y: bounds.y + delta.dy } : null;
+  }, [checkSnap, getGroupSnapDelta, pieceHeight, pieceWidth, piecesById]);
+
+  const previewFor = useCallback((ids, resolved) => {
+    if (!resolved) return null;
+    if (!resolved.positions) return { ids, reason: 'blocked' };
+    const landing = boundsOfRects(resolved.members.map(({ piece }) => (
+      pieceRect(piece, pieceWidth, pieceHeight, resolved.positions.get(piece.id))
+    )));
+    return {
+      ids,
+      positions: resolved.positions,
+      reason: resolved.reason,
+      anchor: resolved.anchor,
+      level: resolved.level,
+      guideLines: guideLinesFor(landing, resolved.obstacles),
+    };
+  }, [pieceHeight, pieceWidth]);
+
   const handlePieceDragMove = useCallback((id, x, y) => {
     if (connectionDrag.isDragging) return;
     if (!isFiniteNumber(x) || !isFiniteNumber(y)) return;
@@ -374,6 +465,7 @@ export function useCanvasInteractionController({
       setDragDebug({ type: 'move', id, x: Math.round(x), y: Math.round(y), at: Date.now() });
     }
 
+    const gridPlacement = dragPlacementRef.current;
     if (isSelected(id) && selectedCount > 1) {
       const snapshot = dragStartRef.current;
       const leadStart = snapshot.get(id);
@@ -386,8 +478,30 @@ export function useCanvasInteractionController({
         dx,
         dy
       });
+      if (gridPlacement) {
+        const ids = Array.from(snapshot.keys());
+        const positionOf = (pid) => {
+          const start = snapshot.get(pid);
+          return { x: start.x + dx, y: start.y + dy };
+        };
+        setPlacementPreview(previewFor(ids, resolveMovingSet({
+          ids,
+          positionOf,
+          gridPlacement,
+          dockAnchor: dockAnchorFor(ids, positionOf, id),
+        })));
+      }
     } else {
       pieceDomain.commands.previewMovePiece({ id, x, y });
+      if (gridPlacement) {
+        const positionOf = () => ({ x, y });
+        setPlacementPreview(previewFor([id], resolveMovingSet({
+          ids: [id],
+          positionOf,
+          gridPlacement,
+          dockAnchor: dockAnchorFor([id], positionOf, id),
+        })));
+      }
     }
 
     // Piece-to-group overlap detection (single piece drag only)
@@ -398,7 +512,7 @@ export function useCanvasInteractionController({
       const cy = y + (pieceHeight * scale) / 2;
       updateDragOverGroup(id, cx, cy);
     }
-  }, [connectionDrag.isDragging, isFiniteNumber, isSelected, pieceDomain, pieceHeight, pieceWidth, piecesById, selectedCount, setDragDebug, updateDragOverGroup]);
+  }, [connectionDrag.isDragging, dockAnchorFor, isFiniteNumber, isSelected, pieceDomain, pieceHeight, pieceWidth, piecesById, previewFor, resolveMovingSet, selectedCount, setDragDebug, updateDragOverGroup]);
 
   const handlePieceDragStart = useCallback((id) => {
     if (connectionDrag.isDragging) return;
@@ -421,7 +535,10 @@ export function useCanvasInteractionController({
       });
     });
     dragStartRef.current = snapshot;
-  }, [connectionDrag.isDragging, isSelected, pieces, selectedCount, selectedIds, setDragDebug]);
+    dragPlacementRef.current = capturePlacement();
+    cancelDragRef.current = false;
+    setPlacementPreview(null);
+  }, [capturePlacement, connectionDrag.isDragging, isSelected, pieces, selectedCount, selectedIds, setDragDebug]);
 
   const handlePieceDragEnd = useCallback((id, x, y) => {
     if (connectionDrag.isDragging) return;
@@ -433,6 +550,9 @@ export function useCanvasInteractionController({
       setIsDragActive(false);
       updateSubtractiveSource(null);
       dragStartRef.current = new Map();
+      dragPlacementRef.current = null;
+      cancelDragRef.current = false;
+      setPlacementPreview(null);
       return;
     }
     if (window.CM_DEBUG_DRAG) {
@@ -448,15 +568,64 @@ export function useCanvasInteractionController({
       return startPiece ?? p;
     });
 
-    const nextPieces = applyDragEndSnap({
-      pieces,
-      dragIds,
-      draggedPieceId: id,
-      dragX: x,
-      dragY: y,
-      getGroupSnapDelta,
-      checkSnap
-    });
+    const gridPlacement = dragPlacementRef.current;
+    dragPlacementRef.current = null;
+    setPlacementPreview(null);
+
+    // Escape (or a placement with no free spot nearby) ends the drag where it
+    // began: the pre-gesture snapshot comes back with no history entry. The
+    // position outbox saw the previews, so it records the restored corners.
+    const returnToStart = () => {
+      const restored = pieces.map((p) => dragStartRef.current.get(p.id) ?? p);
+      pieceDomain.commands.replacePieces(restored);
+      setIsDragActive(false);
+      updateSubtractiveSource(null);
+      clearDragOverGroup();
+      groupDrag.endGroupDrag();
+      dragStartRef.current = new Map();
+    };
+    if (cancelDragRef.current) {
+      cancelDragRef.current = false;
+      returnToStart();
+      return;
+    }
+
+    let nextPieces;
+    if (gridPlacement) {
+      // Rigid move: every member keeps its offset from the lead's delta.
+      const leadStart = dragStartRef.current.get(id);
+      const dx = leadStart ? x - leadStart.x : 0;
+      const dy = leadStart ? y - leadStart.y : 0;
+      const positionOf = (pid) => {
+        if (pid === id) return { x, y };
+        const start = dragStartRef.current.get(pid);
+        return start ? { x: start.x + dx, y: start.y + dy } : { x, y };
+      };
+      const resolved = resolveMovingSet({
+        ids: dragIds,
+        positionOf,
+        gridPlacement,
+        dockAnchor: dockAnchorFor(dragIds, positionOf, id),
+      });
+      if (!resolved?.positions) {
+        returnToStart();
+        return;
+      }
+      nextPieces = pieces.map((p) => {
+        const landed = resolved.positions.get(p.id);
+        return landed ? { ...p, x: landed.x, y: landed.y } : p;
+      });
+    } else {
+      nextPieces = applyDragEndSnap({
+        pieces,
+        dragIds,
+        draggedPieceId: id,
+        dragX: x,
+        dragY: y,
+        getGroupSnapDelta,
+        checkSnap
+      });
+    }
 
     // Seam maintenance (ADR-025 §4 as amended 2026-07-31): a settled
     // arrangement must never leave a wire under-passing because adjacency
@@ -533,8 +702,10 @@ export function useCanvasInteractionController({
     updateSubtractiveSource,
     connectionDomain,
     connectionDrag.isDragging,
+    dockAnchorFor,
     getGroupBounds,
     getGroupSnapDelta,
+    resolveMovingSet,
     groupByPieceId,
     groupDrag,
     groups,
@@ -593,6 +764,8 @@ export function useCanvasInteractionController({
         references: Array.isArray(piece.references) ? [...piece.references] : piece.references
       });
     });
+    dragPlacementRef.current = capturePlacement();
+    cancelDragRef.current = false;
     groupDragStartRef.current = {
       groupId,
       startX: bounds.minX,
@@ -603,12 +776,17 @@ export function useCanvasInteractionController({
       // expanded-group box is a plain MOVE in every mode, so it opts out.
       detectNest
     };
-  }, [getGroupBounds, groups, piecesById]);
+  }, [capturePlacement, getGroupBounds, groups, piecesById]);
 
   const handleGroupPillDragMove = useCallback((event) => {
     const dragState = groupDragStartRef.current;
     if (!dragState) return;
     const node = event.target;
+    // Remember the dragged Konva node so Escape can put it back: a memberless
+    // group's node is not bound to any state that a restore would re-render.
+    if (!dragState.node) {
+      dragState.node = node;
+    }
     const nextX = node.x();
     const nextY = node.y();
     if (!Number.isFinite(nextX) || !Number.isFinite(nextY)) return;
@@ -699,30 +877,97 @@ export function useCanvasInteractionController({
   const handleGroupPillDragEnd = useCallback((groupId) => {
     const dragState = groupDragStartRef.current;
     if (!dragState || dragState.groupId !== groupId) return;
+    const gridPlacement = dragPlacementRef.current;
+    dragPlacementRef.current = null;
     const beforePieces = pieces.map((piece) => {
       const snapshot = dragState.pieceSnapshot.get(piece.id);
       return snapshot ?? piece;
     });
-    let nextPieces = pieces;
     const dragIds = Array.from(dragState.pieceSnapshot.keys()).sort((a, b) => a - b);
+
+    if (cancelDragRef.current) {
+      // Escape: members and the dragged node go back; nothing is recorded.
+      cancelDragRef.current = false;
+      if (dragIds.length) pieceDomain.commands.replacePieces(beforePieces);
+      dragState.node?.position?.({ x: dragState.startX, y: dragState.startY });
+      setIsDragActive(false);
+      updateSubtractiveSource(null);
+      clearDragOverGroup();
+      groupDragStartRef.current = null;
+      return;
+    }
+
+    let nextPieces = pieces;
     if (dragIds.length === 0) {
       // Seed-positioned group (no pieces in the snapshot): the gesture's
       // delta lands on seedBounds or the move silently reverts — the Konva
       // node followed the pointer, but state is what the action pill and
       // the reopen position anchor to (owner live repro 2026-08-01:
-      // newfolder's action pill "not moving with it").
-      const seedDx = (dragState.lastX ?? dragState.startX) - dragState.startX;
-      const seedDy = (dragState.lastY ?? dragState.startY) - dragState.startY;
+      // newfolder's action pill "not moving with it"). With the grid, the
+      // seed's corner lands on the lattice like any other corner.
+      let seedDx = (dragState.lastX ?? dragState.startX) - dragState.startX;
+      let seedDy = (dragState.lastY ?? dragState.startY) - dragState.startY;
+      const seed = groups.find((entry) => entry.id === groupId)?.seedBounds;
+      if (gridPlacement && seed && (seedDx || seedDy)) {
+        const strict = gridPlacement.mode === 'strict';
+        const stepX = strict ? gridPlacement.steps.majorX : gridPlacement.steps.subX;
+        const stepY = strict ? gridPlacement.steps.majorY : gridPlacement.steps.subY;
+        seedDx = roundToStep(seed.x + seedDx, stepX) - seed.x;
+        seedDy = roundToStep(seed.y + seedDy, stepY) - seed.y;
+      }
       if (seedDx || seedDy) onGroupSeedTranslate?.(groupId, seedDx, seedDy);
     } else {
-      nextPieces = applyDragEndSnap({
-        pieces,
-        dragIds,
-        draggedPieceId: dragIds[0],
-        dragX: 0,
-        dragY: 0,
-        getGroupSnapDelta
+      if (gridPlacement) {
+        // A group moves rigidly by its members' corner. Its visible footprint
+        // is its box or pill, not its members' rectangles, so no occupancy.
+        const positionOf = (pid) => {
+          const piece = piecesById.get(pid);
+          return { x: piece.x, y: piece.y };
+        };
+        const resolved = resolveMovingSet({
+          ids: dragIds,
+          positionOf,
+          gridPlacement,
+          dockAnchor: dockAnchorFor(dragIds, positionOf, dragIds[0]),
+          occupancy: false,
+        });
+        if (resolved?.positions) {
+          nextPieces = pieces.map((p) => {
+            const landed = resolved.positions.get(p.id);
+            return landed ? { ...p, x: landed.x, y: landed.y } : p;
+          });
+        }
+      } else {
+        nextPieces = applyDragEndSnap({
+          pieces,
+          dragIds,
+          draggedPieceId: dragIds[0],
+          dragX: 0,
+          dragY: 0,
+          getGroupSnapDelta
+        });
+      }
+      // Seam maintenance, as for a piece drop (brief §5: group drags had no
+      // seam pass). Formal group members never freeform-part, so the seams
+      // only move outside neighbors; one gesture, one undo.
+      const seamMoves = computeWireSeams({
+        wires: connectionDomain.selectors.getAllConnections(),
+        pieces: nextPieces,
+        hiddenPieceIds,
+        groupByPieceId,
+        pieceWidth,
+        pieceHeight,
       });
+      const seamById = seamMoves ? new Map(seamMoves.map((m) => [m.id, m])) : null;
+      if (seamById) {
+        nextPieces = nextPieces.map((p) => {
+          const d = seamById.get(p.id);
+          return d ? { ...p, x: p.x + d.dx, y: p.y + d.dy } : p;
+        });
+      }
+      const movedIds = seamMoves
+        ? [...new Set([...dragIds, ...seamMoves.map((m) => m.id)])]
+        : dragIds;
       if (nextPieces !== pieces) {
         pieceDomain.commands.replacePieces(nextPieces);
       }
@@ -730,13 +975,13 @@ export function useCanvasInteractionController({
         beforePieces,
         afterPieces: nextPieces,
         setPieces: pieceDomain.commands.replacePieces,
-        ids: dragIds,
+        ids: movedIds,
         label: 'Move group',
         finalizePieces: (updated) => {
-          const withLocations = placement.updateMultiplePieceLocations(updated, dragIds);
-          return adjacencyMode === 'accurate' || dragIds.length > 1
+          const withLocations = placement.updateMultiplePieceLocations(updated, movedIds);
+          return adjacencyMode === 'accurate' || movedIds.length > 1
             ? adjacency.rebuildAllAdjacencies(withLocations)
-            : adjacency.updateAdjacenciesForPieces(withLocations, dragIds);
+            : adjacency.updateAdjacenciesForPieces(withLocations, movedIds);
         }
       });
       executeInteractionHistoryAction(history, {
@@ -769,66 +1014,59 @@ export function useCanvasInteractionController({
     updateSubtractiveSource(null);
     clearDragOverGroup();
     groupDragStartRef.current = null;
-  }, [activeActionToken, adjacency, adjacencyMode, clearDragOverGroup, getGroupSnapDelta, groups, history, isEditMode, movePiecesAction, onGroupSeedTranslate, onGroupStructureDrop, pieceDomain, pieces, placement, updateSubtractiveSource]);
+  }, [activeActionToken, adjacency, adjacencyMode, clearDragOverGroup, connectionDomain, dockAnchorFor, getGroupSnapDelta, groupByPieceId, groups, hiddenPieceIds, history, isEditMode, movePiecesAction, onGroupSeedTranslate, onGroupStructureDrop, pieceDomain, pieceHeight, pieceWidth, pieces, piecesById, placement, resolveMovingSet, updateSubtractiveSource]);
 
+  // Node scale (owner rulings 2026-09-27): each selected node grows or
+  // shrinks from its own top-left corner — the grid anchor — so a node on an
+  // intersection stays on it and every member of a multi-selection keeps its
+  // corner. Growth that seals a wired face opens a seam; the scale and any
+  // parted neighbors are one undo step.
   const scaleSelectedPieces = useCallback((targetScale) => {
     if (!selectedCount) return;
-    const clampedScale = clamp(targetScale, minScale, maxScale);
     const ids = selectedIds;
     const selected = new Set(ids);
 
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-
-    pieces.forEach(piece => {
-      if (!selected.has(piece.id)) return;
-      const scale = piece.scale ?? 1;
-      const width = pieceWidth * scale;
-      const height = pieceHeight * scale;
-      minX = Math.min(minX, piece.x);
-      minY = Math.min(minY, piece.y);
-      maxX = Math.max(maxX, piece.x + width);
-      maxY = Math.max(maxY, piece.y + height);
-    });
-
-    if (!Number.isFinite(minX)) return;
-
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-
-    const nextPieces = pieces.map(piece => {
+    const scaledPieces = pieces.map((piece) => {
       if (!selected.has(piece.id)) return piece;
-      const currentScale = piece.scale ?? 1;
-      const factor = clampedScale / currentScale;
-      const width = pieceWidth * currentScale;
-      const height = pieceHeight * currentScale;
-      const pieceCenterX = piece.x + width / 2;
-      const pieceCenterY = piece.y + height / 2;
-      const nextCenterX = centerX + (pieceCenterX - centerX) * factor;
-      const nextCenterY = centerY + (pieceCenterY - centerY) * factor;
-      const nextWidth = pieceWidth * clampedScale;
-      const nextHeight = pieceHeight * clampedScale;
-      return {
-        ...piece,
-        x: nextCenterX - nextWidth / 2,
-        y: nextCenterY - nextHeight / 2,
-        scale: clampedScale
-      };
+      const nextScale = clamp(
+        typeof targetScale === 'function' ? targetScale(piece.scale ?? 1) : targetScale,
+        minScale,
+        maxScale,
+      );
+      return nextScale === (piece.scale ?? 1) ? piece : { ...piece, scale: nextScale };
     });
+    if (scaledPieces.every((piece, index) => piece === pieces[index])) return;
+
+    const seamMoves = computeWireSeams({
+      wires: connectionDomain.selectors.getAllConnections(),
+      pieces: scaledPieces,
+      hiddenPieceIds,
+      groupByPieceId,
+      pieceWidth,
+      pieceHeight,
+    });
+    const seamById = seamMoves ? new Map(seamMoves.map((m) => [m.id, m])) : null;
+    const nextPieces = seamById
+      ? scaledPieces.map((p) => {
+          const d = seamById.get(p.id);
+          return d ? { ...p, x: p.x + d.dx, y: p.y + d.dy } : p;
+        })
+      : scaledPieces;
+    const movedIds = seamMoves
+      ? [...new Set([...ids, ...seamMoves.map((m) => m.id)])]
+      : ids;
 
     const moveAction = movePiecesAction({
       beforePieces: pieces,
       afterPieces: nextPieces,
       setPieces: pieceDomain.commands.replacePieces,
-      ids,
+      ids: movedIds,
       label: 'Scale pieces',
       finalizePieces: (updated) => {
-        const withLocations = placement.updateMultiplePieceLocations(updated, ids);
-        return adjacencyMode === 'accurate'
+        const withLocations = placement.updateMultiplePieceLocations(updated, movedIds);
+        return adjacencyMode === 'accurate' || movedIds.length > 1
           ? adjacency.rebuildAllAdjacencies(withLocations)
-          : adjacency.updateAdjacenciesForPieces(withLocations, ids);
+          : adjacency.updateAdjacenciesForPieces(withLocations, movedIds);
       }
     });
 
@@ -837,6 +1075,9 @@ export function useCanvasInteractionController({
     adjacency,
     adjacencyMode,
     clamp,
+    connectionDomain,
+    groupByPieceId,
+    hiddenPieceIds,
     history,
     maxScale,
     minScale,
@@ -849,6 +1090,34 @@ export function useCanvasInteractionController({
     selectedCount,
     selectedIds,
   ]);
+
+  // Escape during a piece or group drag cancels it: Konva ends the drag,
+  // and the drag-end handlers see the flag and restore the start.
+  const cancelActiveDrag = useCallback(() => {
+    if (dragStartRef.current.size === 0 && !groupDragStartRef.current) return false;
+    cancelDragRef.current = true;
+    const stage = stageRef?.current;
+    const dragging = stage?.find?.((node) => node.isDragging?.()) ?? [];
+    if (dragging.length === 0) {
+      // Nothing is mid-drag in Konva (the gesture already ended): nothing to undo.
+      cancelDragRef.current = false;
+      return false;
+    }
+    dragging.forEach((node) => node.stopDrag());
+    return true;
+  }, [stageRef]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      if (cancelActiveDrag()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [cancelActiveDrag]);
 
   const handleStageMouseLeave = useCallback(() => {
     if (isPanActive()) {
@@ -871,9 +1140,11 @@ export function useCanvasInteractionController({
     handleGroupPillDragMove,
     handleGroupPillDragEnd,
     scaleSelectedPieces,
+    cancelActiveDrag,
     isDraggingPiece,
     isDragActive,
     dragOverGroupId,
-    subtractiveDragSource
+    subtractiveDragSource,
+    placementPreview
   };
 }

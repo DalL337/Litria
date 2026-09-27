@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createGridDomain } from './gridDomain.js';
-import { resolveGridPreferences, withPaintOverride } from './gridPreferences.js';
+import { GRID_GUIDE_CAPTURE_PX, resolveGridPreferences, withPaintOverride } from './gridPreferences.js';
 import { dbSaveWorkspaceGrid, getWorkspaceEpoch, isWorkspaceChanged } from '../project/dbStorage.js';
 import { canPersist } from '../project/persistenceNotices.js';
 import {
@@ -157,6 +157,19 @@ export function useGridActions({ projectInstance, history }) {
     });
   }, []);
 
+  // What placement reads at drag start (brief §5: captured once per gesture).
+  // A stable getter over a ref, so the interaction controller's callbacks do
+  // not rebuild on every grid or preference change.
+  const placementRef = useRef(null);
+  placementRef.current = {
+    mode: gridPreferences.snapMode,
+    steps: gridState.steps,
+    revision: gridState.revision,
+    guides: gridPreferences.smartGuides,
+    guideTolerancePx: GRID_GUIDE_CAPTURE_PX,
+  };
+  const getGridPlacement = useCallback(() => placementRef.current, []);
+
   /** Set this theme/energy/ink's line opacities, or clear them with null. */
   const setGridPaintOverride = useCallback((context, levels) => {
     const next = withPaintOverride(gridPreferences.paintOverrides, context, levels);
@@ -172,5 +185,6 @@ export function useGridActions({ projectInstance, history }) {
     gridPreferences,
     setGridPreference,
     setGridPaintOverride,
+    getGridPlacement,
   };
 }
