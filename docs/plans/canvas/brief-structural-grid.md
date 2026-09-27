@@ -13,6 +13,11 @@
 > (node scale) and §7 (ADR-032 epoch fence). The canvas, interaction, routing
 > and theme sources cited in §3 were re-checked against `main` `810d527`:
 > none changed since `ef4c2a3`.
+>
+> **Implemented 2026-09-27:** all five slices, as stacked PRs #76–#80 for the
+> owner to merge. §12 records what shipped, the decisions made while
+> building, and the owner's live pass still owed. The Slice 5 measurements
+> are in §9.
 
 ## 1. Objective and boundaries
 
@@ -618,6 +623,35 @@ and node-parting behavior are preserved; unrelated moves do not churn routes;
 minimum-zoom and dense-canvas measurements stay within the measured desktop
 budget. No VR/XR runtime work is included.
 
+> **Disposition (2026-09-27, measured): the route search stays unchanged.**
+> Grid-aligned placement already supplies the consistency; lattice lanes
+> would be a speculative algorithm change.
+>
+> Method: 40 seeded layouts of 12 nodes and 16 wires, placed off-grid, then
+> settled node by node through the real placement path (`resolvePlacement`,
+> then the seam pass), routed by the unchanged `computeWireRoutes`.
+>
+> | Arrangement | Straight wires | Bends | Jogs under 20 | Total length | Routed |
+> |---|---|---|---|---|---|
+> | Off-grid | 0 | 1468 | 43 | 482,481 | 640 / 640 |
+> | Flex (guides on) | 6 | 1452 | 37 | 482,435 | 640 / 640 |
+> | Strict | 27 | 1334 | 42 | 483,119 | 640 / 640 |
+>
+> Aligned faces give aligned terminals, so wires straighten and bends drop
+> (9% in Strict) at the same length, with nothing left unrouted. Interior
+> corridor segments land on the 20-unit lattice only 10–22% of the time,
+> because corridors come from obstacle edges plus clearance and spacing. Moving
+> them onto grid lines would change valid routes for looks alone.
+>
+> Budgets, recorded rather than gated (owner ruling 2026-09-09):
+> - A placement preview costs a median 0.07 ms per pointer move on 500 nodes
+>   (p95 0.30 ms).
+> - The grid draws at most about 870 lines per frame on a 1600 × 900 canvas
+>   (at 50% zoom). At 10% zoom it draws 129 major lines, every second one.
+> - The router itself takes 9.1 s off-grid and 6.1 s once Flex-settled, on
+>   an extreme 150-node, 180-wire canvas. That is a pre-existing cost, not
+>   one this work added, and grid placement lowers it by about a third.
+
 ## 10. Verification plan and observed baseline
 
 Existing suites to extend include `interactionHelpers.regression`, `snapSeam`,
@@ -689,3 +723,73 @@ renderers, with renderer-specific implementation of their appearance.
 This is the extension boundary to preserve now. Full room-scale routing will
 need new work; the current 2D implementation should provide the shared project
 operations and a clear integration point for that work.
+
+## 12. Implementation record (2026-09-27)
+
+Built on the owner's go-ahead ("lets build it. full send"). Each slice is its
+own pull request, stacked for the owner to merge in order.
+
+| Slice | Pull request | What it delivered |
+|---|---|---|
+| 1 | #76 | Grid geometry (`utils/gridGeometry.js`) and the 2D node-rectangle contract (`utils/spatialGeometry2d.js`). GridDomain (`app/gridDomain.js`). Scaled bounds in snap, adjacency, seams, anchors, obstacles, hit tests and lasso. |
+| 2 | #77 | The `workspace_grid` table: schema v4, one transactional step, a validating storage boundary that never overwrites a newer or unreadable row. `useGridActions`, with undoable spacing and saves fenced by the epoch captured at queue time. Theme grid paint (`theme/gridPaint.js`). The Grid preferences room and the registry's `number` type. |
+| 3 | #78 | `app/placementResolution.js` (Strict, Flex, docking, smart guides, occupancy, bounded search). One settlement path for piece, multi-selection, group and seed drops. Escape cancel. Scale grows from each node's corner with a seam pass. Scale persistence. Grid-aware creation. |
+| 4 | #79 | The view-bounded, three-level, theme-inked `CanvasGrid`. Smart guides under the nodes, and the landing outline and origin above them. The settle slide. The canvas HUD Grid widget. Edit ▸ Scale Node and the status-bar scale and landing readouts. The Settings drawer Grid pill. |
+| 5 | #80 | The route measurements and disposition (§9). New groups' boxes land on a major intersection. Compatibility checks. |
+
+**Decisions made while building.** Each follows a ruling or the design above
+unless it says otherwise.
+
+- **Spacing edits apply at once.** Each one is a single undo step, as the
+  playground did (§2, playground-review rulings).
+- **Record-less workspaces read a frozen compatibility lattice** (100 · 20 ·
+  10, the pre-grid lines plus a sub level) and are never written on open. A
+  test fails if the default is ever changed without also capturing it at
+  workspace creation (§7).
+- **Group drags skip occupancy.** A group's visible footprint is its box or
+  pill, not its members' rectangles. The members' corner still snaps, and
+  group drags now get the seam pass they lacked (§3).
+- **The pill-picker wire path gets no seam pass.** Its target is always a
+  hidden member of a collapsed group, and seams never move hidden nodes, so
+  the pass would do nothing (§5).
+- **Scale growth parts overlapped neighbors,** not only wired faces. Each
+  overlapped neighbor moves out along its shallowest overlap to the next
+  lattice line, and Strict never leaves it flush. The cascade is bounded at
+  6, matching the seam cascade. It is one undo step with the scale. This
+  implements the node-scale ruling that growth into a neighbor resolves in
+  the same settlement.
+- **Creation.** A new node spawns on the free major intersection nearest the
+  viewport center, falling back to the centered intersection; the random
+  fallback is gone. A new group's box corner also lands on a major
+  intersection. Folder layouts keep their own spacing from that origin (§8).
+- **Theme editing.** The Settings drawer's Grid pill edits the theme's own
+  paint: per-level opacity and `canvasGridColor`, with a reset to the wire
+  color. The HUD sliders stay the personal override.
+
+**Verified.** Every slice passed the standard checks. Rust changes built
+with zero warnings, and `cargo test` passed.
+
+The UI was driven end to end in headless Chrome against the dev build, with
+a stubbed Tauri `invoke` serving a sample project, so no real app data was
+touched. The screenshots were read at 1× with zero console errors. They
+covered:
+
+- Flex guide landing.
+- Strict landing with display-only guides.
+- Escape cancel.
+- The settle slide, with only the final corner saved.
+- Scale with parting.
+- Theme ink on Terminal and Parchment.
+- Preset spacing saved to the workspace.
+- Hydration of a saved record, with no write-back.
+- Camera, theme, visibility, mode and spacing changes that moved no node and
+  saved no position.
+- The Grid widget and the drawer pill.
+
+**Owner live pass owed**, in the real app:
+
+- Drag feel: the 6 px guide tolerance and the 150 ms slide.
+- The HUD's height with four widgets.
+- Real save and reopen of the grid record and of node scale.
+- Glass on real hardware.
+- macOS and Linux.
