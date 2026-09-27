@@ -40,6 +40,18 @@ pub(crate) enum StoredGrid {
 /// Read the workspace's grid row. Never fails the project open over a bad
 /// row: a row that does not decode is reported as `Unreadable`.
 pub(crate) fn load_grid(conn: &Connection) -> Result<StoredGrid, DbError> {
+    // A read-only workspace saved before the grid is opened without
+    // migrating, so the table may not exist: that is simply no record.
+    let has_table: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_grid')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(DbError::sqlite("Failed to look for the workspace grid table"))?;
+    if !has_table {
+        return Ok(StoredGrid::Absent);
+    }
     let row = conn
         .query_row(
             "SELECT schema_version, coordinate_system, major_x, major_y, minor_divisions, sub_divisions
