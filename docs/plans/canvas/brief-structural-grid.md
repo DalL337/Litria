@@ -808,7 +808,9 @@ The owner ran the merged build. "Looks good-ish", with two fixes:
   Strict is unchanged: a guide appears only when the landing lines up
   exactly with another node's face. In a layout arranged before the grid,
   nodes sit off the lattice, so that happens only once nodes have been placed
-  on majors.
+  on majors. **Owner ruling (2026-09-27): keep it.** The alternative, showing
+  display-only guides from the held position, was declined: a Strict guide
+  shows only an alignment the drop will actually keep.
 - **Every HUD section folds.** Each widget folds to its title row: Create,
   Pan & Zoom, Grid and Help. Help's three subsections fold like the Grid
   widget's. The HUD shrinks by what is folded. A folded Pan & Zoom keeps
