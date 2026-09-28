@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 
 import {
+  applyGroupSeedPreview,
   buildGroupBoundsWithDescendants,
   buildPiecesById,
   buildSlotColorsByPieceId,
@@ -65,12 +66,25 @@ export function useWorkspaceRenderSelectors({
     () => (isSettling ? buildPiecesById(drawnPieces) : piecesById),
     [isSettling, drawnPieces, piecesById]
   );
-  const getDrawnGroupBounds = useMemo(
-    () => (isSettling
-      ? (group) => buildGroupBoundsWithDescendants(group, groups, drawnPiecesById, PIECE_WIDTH, PIECE_HEIGHT)
-      : getGroupBounds),
-    [isSettling, getGroupBounds, groups, drawnPiecesById, PIECE_WIDTH, PIECE_HEIGHT]
-  );
+  // A group drag carries its seeded subtree (empty subfolders): their boxes
+  // follow the pointer as member pieces do. The subtractive un-nest
+  // exclusions are rebuilt here as App's render bounds build them.
+  const seedPreview = interactionDomain.lifecycle.groupSeedPreview ?? null;
+  const subtractiveSource = interactionDomain.lifecycle.subtractiveDragSource ?? null;
+  const drawnGroups = useMemo(() => applyGroupSeedPreview(groups, seedPreview), [groups, seedPreview]);
+  const getDrawnGroupBounds = useMemo(() => {
+    if (!isSettling && drawnGroups === groups) return getGroupBounds;
+    const exclusions = subtractiveSource
+      ? {
+        pieceIds: subtractiveSource.pieceId != null ? new Set([subtractiveSource.pieceId]) : null,
+        groupIds: subtractiveSource.childGroupId ? new Set([subtractiveSource.childGroupId]) : null,
+      }
+      : null;
+    const drawnById = new Map(drawnGroups.map((group) => [group.id, group]));
+    return (group) => buildGroupBoundsWithDescendants(
+      drawnById.get(group?.id) ?? group, drawnGroups, drawnPiecesById, PIECE_WIDTH, PIECE_HEIGHT, undefined, exclusions
+    );
+  }, [isSettling, getGroupBounds, groups, drawnGroups, subtractiveSource, drawnPiecesById, PIECE_WIDTH, PIECE_HEIGHT]);
   // Endpoint RESOLVER, not a filter (brief-cross-group-wires D1): wires to
   // collapsed-group members re-anchor to the pill instead of vanishing.
   const renderableWires = useMemo(

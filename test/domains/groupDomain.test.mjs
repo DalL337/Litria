@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createGroupDomain } from '../../src/app/groupDomain.js';
+import { createUndoManager } from '../../src/history/undoManager.js';
 
 function createStateSetter(getter, setter) {
   return (updater) => {
@@ -350,6 +351,25 @@ test('GroupDomain promoteToFolderGroup claims members; emptied folder groups sur
   const donor = groups.find((g) => g.id === 'g-old');
   assert.ok(donor, 'emptied donor folder group survives — its folder still exists');
   assert.deepEqual(donor.pieceIds, []);
+});
+
+test('GroupDomain translateGroupSeeds moves every listed seed by one delta, as one undo step', () => {
+  let groups = [
+    { id: 'a', pieceIds: [], seedBounds: { x: 0, y: 0, width: 160, height: 80 } },
+    { id: 'b', pieceIds: [], seedBounds: { x: 40, y: 160, width: 160, height: 80 } },
+    { id: 'c', pieceIds: [], seedBounds: { x: 500, y: 0, width: 160, height: 80 } },
+    { id: 'd', pieceIds: [1] },
+  ];
+  const history = createUndoManager();
+  const domain = createGroupDomain({
+    setGroups: createStateSetter(() => groups, (next) => { groups = next; }),
+    getGroups: () => groups,
+    history,
+  });
+  domain.commands.translateGroupSeeds({ groupIds: ['a', 'b', 'd'], dx: 100, dy: 50 });
+  assert.deepEqual(groups.map((g) => g.seedBounds && [g.seedBounds.x, g.seedBounds.y]), [[100, 50], [140, 210], [500, 0], undefined]);
+  history.undo();
+  assert.deepEqual(groups.map((g) => g.seedBounds && [g.seedBounds.x, g.seedBounds.y]), [[0, 0], [40, 160], [500, 0], undefined]);
 });
 
 test('GroupDomain allocateGroupId mints sequential ids and advances the counter', () => {

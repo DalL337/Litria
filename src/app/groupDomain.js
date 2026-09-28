@@ -51,6 +51,28 @@ export function createGroupDomain({ setGroups, history, getGroups, getNextGroupI
     return true;
   };
 
+  // Move several seeds by one delta in one update (one undo step): a
+  // dragged subtree's empty folders move with it.
+  const translateGroupSeeds = ({ groupIds, dx, dy }) => {
+    const ids = new Set((groupIds ?? []).filter(Boolean));
+    if (!ids.size || !Number.isFinite(dx) || !Number.isFinite(dy) || (!dx && !dy)) return;
+    applyGroupsUpdate({
+      label: 'Move group',
+      update: (prev) => prev.map((group) => (
+        ids.has(group.id) && group.seedBounds
+          ? {
+            ...group,
+            seedBounds: {
+              ...group.seedBounds,
+              x: group.seedBounds.x + dx,
+              y: group.seedBounds.y + dy
+            }
+          }
+          : group
+      ))
+    });
+  };
+
   return {
     commands: {
       // Mint the next `group-<n>` id and advance the counter. The counter cell
@@ -164,23 +186,9 @@ export function createGroupDomain({ setGroups, history, getGroups, getNextGroupI
        *  2026-08-01: newfolder's action pill "not moving with it").
        *  History participates: one gesture, one undo. */
       translateGroupSeed({ groupId, dx, dy }) {
-        if (!groupId || !Number.isFinite(dx) || !Number.isFinite(dy) || (!dx && !dy)) return;
-        applyGroupsUpdate({
-          label: 'Move group',
-          update: (prev) => prev.map((group) => (
-            group.id === groupId && group.seedBounds
-              ? {
-                ...group,
-                seedBounds: {
-                  ...group.seedBounds,
-                  x: group.seedBounds.x + dx,
-                  y: group.seedBounds.y + dy
-                }
-              }
-              : group
-          ))
-        });
+        translateGroupSeeds({ groupIds: [groupId], dx, dy });
       },
+      translateGroupSeeds,
       addPieceToGroup(groupId, pieceId) {
         if (!groupId || pieceId == null) return;
         applyGroupsUpdate({

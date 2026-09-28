@@ -102,6 +102,27 @@ export function collectSubtreePieceIds(root, childrenByParent) {
   return pieceIds;
 }
 
+/**
+ * Groups as drawn during a group drag: the seeds in `preview.ids` offset by
+ * (dx, dy), so a dragged subtree's empty folders follow it live. Returns the
+ * input array when there is nothing to offset. Presentation only.
+ */
+export function applyGroupSeedPreview(groups, preview) {
+  if (!preview || !Array.isArray(groups) || (!preview.dx && !preview.dy)) return groups;
+  const ids = new Set(preview.ids ?? []);
+  if (!ids.size) return groups;
+  return groups.map((group) => (ids.has(group.id) && group.seedBounds
+    ? {
+      ...group,
+      seedBounds: {
+        ...group.seedBounds,
+        x: group.seedBounds.x + preview.dx,
+        y: group.seedBounds.y + preview.dy,
+      },
+    }
+    : group));
+}
+
 /** True when any strict ANCESTOR (never the group itself) is collapsed. */
 export function hasCollapsedAncestor(group, groupsById) {
   let currentId = group?.parentId ?? null;

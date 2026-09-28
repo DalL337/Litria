@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { reconcileGroupsWithFolders } from './reconcileGroupsWithFolders.js';
-import { COLLAPSED_STUB_HEIGHT } from './selectors/workspaceSelectors.js';
+import { COLLAPSED_STUB_HEIGHT, GROUP_OUTLINE_PAD, GROUP_NEST_PAD } from './selectors/workspaceSelectors.js';
+import { GROUP_TAB_HEIGHT, layoutEmptyGroupSeeds } from './emptyGroupSeeds.js';
+import { pieceRect } from '../utils/spatialGeometry2d.js';
 import { dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup, dbUpdateGroup } from '../project/dbStorage.js';
 
 /**
@@ -16,9 +18,10 @@ import { dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup, dbUpdateGroup } from '
  * piece-derived behavior rather than guessing.
  *
  * Empty-folder creations carry seedBounds (their only geometry until members
- * arrive): under an existing parent group they sit just below the parent's
- * content (the parent's descendant-union box absorbs them); top-level ones
- * stagger from the spawn position.
+ * arrive), laid out by layoutEmptyGroupSeeds: each empty subtree is a
+ * column; under a parent that already has a box it sits just below the
+ * parent's content (the parent's descendant-union box absorbs it); any
+ * other column takes a free major intersection near the spawn position.
  *
  * Triggers (owner live-verify D, 2026-07-18 — the old version skipped its
  * initial run and only fired on scaffold refreshes, so a project whose
@@ -55,6 +58,8 @@ import { dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup, dbUpdateGroup } from '
  * @param {function} [params.getSpawnPosition] - () => {x, y} for top-level seeds
  * @param {function} [params.getGroupBounds]   - (group) => bounds|null
  * @param {number}   [params.pieceWidth]
+ * @param {number}   [params.pieceHeight]
+ * @param {function} [params.getGridPlacement] - () => { steps } | null
  */
 export function useGroupFolderReconciliation({
   pieces,
@@ -69,6 +74,8 @@ export function useGroupFolderReconciliation({
   getSpawnPosition = null,
   getGroupBounds = null,
   pieceWidth = 160,
+  pieceHeight = 110,
+  getGridPlacement = null,
 }) {
   const ranForTokenRef = useRef(null);
   const prevScaffoldTokenRef = useRef(scaffoldRefreshToken);
@@ -141,33 +148,42 @@ export function useGroupFolderReconciliation({
 
       // Seed geometry for EMPTY creations (their only geometry). Non-empty
       // creations derive bounds from members as always.
-      const seedByGroupId = new Map();
-      let topLevelSeeds = 0;
-      const spawnOrigin = typeof getSpawnPosition === 'function'
-        ? getSpawnPosition()
-        : { x: 0, y: 0 };
-      for (const entry of creations) {
-        if (entry.pieceIds.length > 0) continue;
-        let x = spawnOrigin.x + topLevelSeeds * 24;
-        let y = spawnOrigin.y + topLevelSeeds * 24;
-        const parentGroup = entry.parentFolderPath
-          ? groupByFolder.get(entry.parentFolderPath) ?? null
+      const boundsOf = (group) => (typeof getGroupBounds === 'function' ? getGroupBounds(group) : null);
+      const creationByFolder = new Map(creations.map((entry) => [entry.folderPath, entry]));
+      const anchorBoundsFor = (folder) => {
+        const existing = groupByFolder.get(folder);
+        if (existing) return boundsOf(existing);
+        const created = creationByFolder.get(folder);
+        return created?.pieceIds.length
+          ? boundsOf({ id: created.groupId, pieceIds: created.pieceIds, parentId: null, isCollapsed: false, seedBounds: null })
           : null;
-        const parentBounds = parentGroup && typeof getGroupBounds === 'function'
-          ? getGroupBounds(parentGroup)
-          : null;
-        if (parentBounds) {
-          x = parentBounds.minX + 16;
-          y = parentBounds.maxY + 16;
-        } else if (entry.parentFolderPath && seedByGroupId.has(groupIdByFolder.get(entry.parentFolderPath))) {
-          const parentSeed = seedByGroupId.get(groupIdByFolder.get(entry.parentFolderPath));
-          x = parentSeed.x + 24;
-          y = parentSeed.y + parentSeed.height + 24;
-        } else {
-          topLevelSeeds += 1;
-        }
-        seedByGroupId.set(entry.groupId, { x, y, width: pieceWidth, height: COLLAPSED_STUB_HEIGHT });
+      };
+      // Keep clear of every node and every drawn group box (tab included).
+      const obstacles = [];
+      for (const piece of pieces) {
+        if (Number.isFinite(piece?.x) && Number.isFinite(piece?.y)) obstacles.push(pieceRect(piece, pieceWidth, pieceHeight));
       }
+      for (const group of groups) {
+        if (removedIds.has(group.id)) continue;
+        const b = boundsOf(group);
+        if (!b) continue;
+        const pad = group.parentId ? GROUP_OUTLINE_PAD + GROUP_NEST_PAD : GROUP_OUTLINE_PAD;
+        obstacles.push({
+          x: b.minX - pad,
+          y: b.minY - pad - GROUP_TAB_HEIGHT,
+          width: b.maxX - b.minX + 2 * pad,
+          height: b.maxY - b.minY + 2 * pad + GROUP_TAB_HEIGHT,
+        });
+      }
+      const seedByGroupId = layoutEmptyGroupSeeds({
+        creations,
+        anchorBoundsFor,
+        origin: typeof getSpawnPosition === 'function' ? getSpawnPosition() : { x: 0, y: 0 },
+        obstacles,
+        steps: typeof getGridPlacement === 'function' ? getGridPlacement()?.steps ?? null : null,
+        seedWidth: pieceWidth,
+        seedHeight: COLLAPSED_STUB_HEIGHT,
+      });
 
       groupDomain.commands.applyFsSyncPlan({
         upserts: creations.map((entry) => ({
@@ -220,5 +236,5 @@ export function useGroupFolderReconciliation({
         ranForTokenRef.current = null;
       }
     };
-  }, [scaffoldRefreshToken, loadToken, pieces, groups, groupDomain, normalizePath, getBasename, listTree, projectRootPath, getSpawnPosition, getGroupBounds, pieceWidth]);
+  }, [scaffoldRefreshToken, loadToken, pieces, groups, groupDomain, normalizePath, getBasename, listTree, projectRootPath, getSpawnPosition, getGroupBounds, pieceWidth, pieceHeight, getGridPlacement]);
 }
