@@ -209,17 +209,6 @@ function WorkspaceStage({
             height={deskHeight}
           />
         </Layer>
-        {/* Smart guides sit UNDER the nodes (read in the gaps) and above the
-            background, so glass never samples them. */}
-        <Layer listening={false}>
-          <GridGuides
-            lines={placementPreview?.guideLines ?? null}
-            color={guideColor}
-            viewportScale={viewportScale}
-            viewportOffsetX={viewportOffsetX}
-            viewportOffsetY={viewportOffsetY}
-          />
-        </Layer>
         <Layer>
           {Array.isArray(groupOutlines) && groupOutlines.map((outline) => {
             const pad = outline.parentId ? GROUP_OUTLINE_PAD + GROUP_NEST_PAD : GROUP_OUTLINE_PAD;
@@ -699,8 +688,18 @@ function WorkspaceStage({
             />
           )}
         </Layer>
-        {/* Landing outline and origin marker: above the nodes, never sampled. */}
+        {/* Smart guides, landing outline and origin marker: above the nodes,
+            never sampled. Guides were first drawn under the nodes, where the
+            commonest one (two nodes docked flush, edges aligned) hid entirely
+            behind the node bodies (owner smoke test, 2026-09-27). */}
         <Layer listening={false}>
+          <GridGuides
+            lines={placementPreview?.guideLines ?? null}
+            color={guideColor}
+            viewportScale={viewportScale}
+            viewportOffsetX={viewportOffsetX}
+            viewportOffsetY={viewportOffsetY}
+          />
           <GridMarks
             preview={placementPreview}
             piecesById={piecesById}

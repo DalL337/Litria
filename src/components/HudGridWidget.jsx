@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { PREF_KEYS } from '../preferences/registry.js';
 import { GRID_LIMITS, GRID_PRESETS, sameGridDefinition } from '../utils/gridGeometry';
 import { NODE_SCALE_STEP } from '../app/gridWidgetModel';
+import HudSubsection from './HudSubsection';
 
 /**
  * HudGridWidget — the canvas HUD's Grid section (ADR-030 playground-review
@@ -9,24 +10,6 @@ import { NODE_SCALE_STEP } from '../app/gridWidgetModel';
  * a folded one keeps its current value in a chip. Everything here is a
  * window onto its owner — the bindings (useGridWidget) carry the calls.
  */
-
-function Subsection({ id, title, chip, collapsed, onToggle, children }) {
-  return (
-    <div className={`hud-grid-sub${collapsed ? ' is-collapsed' : ''}`} data-section={id}>
-      <button
-        type="button"
-        className="hud-grid-sub-title"
-        aria-expanded={!collapsed}
-        onClick={() => onToggle(id, !collapsed)}
-      >
-        <span className="hud-grid-chev" aria-hidden="true" />
-        <span className="hud-grid-sub-name">{title}</span>
-        {collapsed && chip ? <span className="hud-grid-chip">{chip}</span> : null}
-      </button>
-      {!collapsed && <div className="hud-grid-sub-body">{children}</div>}
-    </div>
-  );
-}
 
 function Segmented({ value, options, onChange, label }) {
   return (
@@ -135,7 +118,7 @@ export default function HudGridWidget({ gridWidget }) {
 
   return (
     <div className="hud-grid">
-      <Subsection id="placement" title="Placement" chip={chips.placement} collapsed={collapsed.placement} onToggle={toggle}>
+      <HudSubsection id="placement" title="Placement" chip={chips.placement} collapsed={collapsed.placement} onToggle={toggle}>
         <Segmented
           label="Placement"
           value={p.snapMode}
@@ -157,9 +140,9 @@ export default function HudGridWidget({ gridWidget }) {
               : 'Grab the nearest face of another node within 6 px — after docking, before the lattice.'}
           </p>
         )}
-      </Subsection>
+      </HudSubsection>
 
-      <Subsection id="spacing" title="Grid spacing" chip={chips.spacing} collapsed={collapsed.spacing} onToggle={toggle}>
+      <HudSubsection id="spacing" title="Grid spacing" chip={chips.spacing} collapsed={collapsed.spacing} onToggle={toggle}>
         <div className="hud-grid-presets">
           {GRID_PRESETS.map((preset) => (
             <button
@@ -240,9 +223,9 @@ export default function HudGridWidget({ gridWidget }) {
               : 'This workspace is read-only; its grid can be viewed, not changed.'}
           </p>
         )}
-      </Subsection>
+      </HudSubsection>
 
-      <Subsection id="settle" title="Settle" chip={chips.settle} collapsed={collapsed.settle} onToggle={toggle}>
+      <HudSubsection id="settle" title="Settle" chip={chips.settle} collapsed={collapsed.settle} onToggle={toggle}>
         <div className="hud-grid-sliders">
           <Slider
             label="Time"
@@ -275,9 +258,9 @@ export default function HudGridWidget({ gridWidget }) {
           <option value="always">Reduce motion: always</option>
           <option value="never">Reduce motion: never</option>
         </select>
-      </Subsection>
+      </HudSubsection>
 
-      <Subsection id="node" title="Node" chip={chips.node} collapsed={collapsed.node} onToggle={toggle}>
+      <HudSubsection id="node" title="Node" chip={chips.node} collapsed={collapsed.node} onToggle={toggle}>
         <div className={`hud-grid-scale${noSelection ? ' is-disabled' : ''}`}>
           <button type="button" aria-label="Scale down" disabled={noSelection} onClick={() => w.onScale((s) => s - NODE_SCALE_STEP)}>−</button>
           <span className="hud-grid-scale-value">{noSelection ? '—' : w.scaleText}</span>
@@ -287,9 +270,9 @@ export default function HudGridWidget({ gridWidget }) {
         <p className="hud-grid-hint">
           {noSelection ? 'Select a node to scale it.' : "Grows from each node's top-left corner."}
         </p>
-      </Subsection>
+      </HudSubsection>
 
-      <Subsection id="look" title="Look" chip={chips.look} collapsed={collapsed.look} onToggle={toggle}>
+      <HudSubsection id="look" title="Look" chip={chips.look} collapsed={collapsed.look} onToggle={toggle}>
         <select
           className="hud-grid-select"
           aria-label="Theme"
@@ -327,7 +310,7 @@ export default function HudGridWidget({ gridWidget }) {
           <Check checked={p.showOrigin} onChange={(on) => w.setPreference(PREF_KEYS.gridShowOrigin, on)}>Origin</Check>
         </div>
         <p className="hud-grid-hint">Theme ink is luma-matched: tinted lines are as visible as white ones.</p>
-      </Subsection>
+      </HudSubsection>
     </div>
   );
 }

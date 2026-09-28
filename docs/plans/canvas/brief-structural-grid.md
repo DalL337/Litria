@@ -793,3 +793,27 @@ covered:
 - Real save and reopen of the grid record and of node scale.
 - Glass on real hardware.
 - macOS and Linux.
+
+### Owner smoke test (2026-09-27, after merge)
+
+The owner ran the merged build. "Looks good-ish", with two fixes:
+
+- **Smart guides did not render.** They did render, but out of sight. They
+  were drawn under the node bodies, per the §2 playground-review row, so the
+  commonest guide was hidden entirely. That is the Flex dock, where two
+  nodes sit flush and share an edge. A guide in a gap was a one-pixel line at
+  60% in a hue close to the grid ink. Guides now draw above the nodes, as in
+  Illustrator, at 85% with a 12 px overshoot. They are still one device pixel
+  and still one per axis.
+  Strict is unchanged: a guide appears only when the landing lines up
+  exactly with another node's face. In a layout arranged before the grid,
+  nodes sit off the lattice, so that happens only once nodes have been placed
+  on majors. **Owner ruling (2026-09-27): keep it.** The alternative, showing
+  display-only guides from the held position, was declined: a Strict guide
+  shows only an alignment the drop will actually keep.
+- **Every HUD section folds.** Each widget folds to its title row: Create,
+  Pan & Zoom, Grid and Help. Help's three subsections fold like the Grid
+  widget's. The HUD shrinks by what is folded. A folded Pan & Zoom keeps
+  its zoom in a chip, and a folded Grid keeps its mode and spacing. Folds
+  persist with the HUD state (`collapsedWidgets`, plus the Help subsection
+  ids in `collapsed`). Widgets start open.

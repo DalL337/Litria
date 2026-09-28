@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import HudGridWidget from './HudGridWidget';
+import HudSubsection from './HudSubsection';
 
 // Canvas quick-action HUD (ADR-018 Phase A): screen-anchored glass cluster
 // floating over the canvas. The pill is permanent chrome (drag grip + menu
@@ -8,6 +9,10 @@ import HudGridWidget from './HudGridWidget';
 //
 // Phase A ships the Create section (New Node). Renderers for Phase B/C
 // widgets (pan/zoom dial, help) slot into WIDGET_RENDERERS by id.
+//
+// Every widget folds to its title row, and the HUD shortens by what is
+// folded (owner smoke test, 2026-09-27). A folded widget with a current
+// value (zoom, grid placement) keeps it in a chip.
 
 function CreateSection({ onNewNode, onNewGroup }) {
   return (
@@ -97,21 +102,21 @@ function PanZoomSection({ panBy, zoomIn, zoomOut, onFitContent, resetZoom, viewp
 // model gestures yet — see docs/plans/ideas/shortcut-registry.md); every
 // row must describe a real, shipped interaction.
 const HELP_SUBSECTIONS = [
-  { title: 'Drag', rows: [
+  { id: 'help-drag', title: 'Drag', rows: [
     ['Empty canvas', 'Pan the view'],
     ['Node / group', 'Move it'],
     ['Node → group', 'Add to group'],
     ['Node → editor pane', 'Open it there'],
     ['HUD glass', 'Move the HUD'],
   ] },
-  { title: 'Mouse + Keyboard', rows: [
+  { id: 'help-mouse', title: 'Mouse + Keyboard', rows: [
     ['Wheel', 'Zoom to cursor'],
     ['Shift + Drag', 'Lasso select'],
     ['Dbl-click node', 'Open in editor'],
     ['Dbl-click group pill', 'Expand group'],
     ['Hold dial wedge', 'Glide the view'],
   ] },
-  { title: 'Canvas Keys', rows: [
+  { id: 'help-keys', title: 'Canvas Keys', rows: [
     ['E', 'Toggle edit mode'],
     ['Ctrl (tap)', 'Additive sub-mode'],
     ['Alt (tap)', 'Subtractive sub-mode'],
@@ -121,19 +126,25 @@ const HELP_SUBSECTIONS = [
   ] },
 ];
 
-function HelpSection() {
+function HelpSection({ collapsedSections, setSectionsCollapsed }) {
+  const toggle = (id, next) => setSectionsCollapsed?.({ [id]: next });
   return (
     <div className="hud-help">
       {HELP_SUBSECTIONS.map((sub) => (
-        <div key={sub.title} className="hud-help-sub">
-          <div className="hud-help-sub-title">{sub.title}</div>
+        <HudSubsection
+          key={sub.id}
+          id={sub.id}
+          title={sub.title}
+          collapsed={Boolean(collapsedSections?.[sub.id])}
+          onToggle={toggle}
+        >
           {sub.rows.map(([keys, what]) => (
             <div key={keys} className="hud-help-row">
               <span className="hud-help-keys">{keys}</span>
               <span className="hud-help-what">{what}</span>
             </div>
           ))}
-        </div>
+        </HudSubsection>
       ))}
     </div>
   );
@@ -146,6 +157,16 @@ const WIDGET_RENDERERS = {
   grid: HudGridWidget,
 };
 
+// What a folded widget still shows beside its title.
+function foldedChip(id, { viewportScale, gridWidget }) {
+  if (id === 'panzoom') return `${Math.round((viewportScale ?? 1) * 100)}%`;
+  if (id === 'grid' && gridWidget) {
+    const mode = gridWidget.preferences?.snapMode === 'strict' ? 'Strict' : 'Flex';
+    return gridWidget.chips?.spacing ? `${mode} · ${gridWidget.chips.spacing}` : mode;
+  }
+  return null;
+}
+
 export default function CanvasHud({
   widgets,
   hudPosition,
@@ -154,6 +175,10 @@ export default function CanvasHud({
   moveHud,
   commitHudPosition,
   toggleHudWidget,
+  collapsedWidgetIds = [],
+  toggleWidgetCollapsed = null,
+  collapsedSections = null,
+  setSectionsCollapsed = null,
   clampPosition,
   spawnGhost,
   onNewNode,
@@ -326,20 +351,39 @@ export default function CanvasHud({
               if (!hudVisibleIds.includes(widget.id)) return null;
               const Renderer = WIDGET_RENDERERS[widget.id];
               if (!Renderer) return null;
+              const folded = collapsedWidgetIds.includes(widget.id);
+              const chip = folded ? foldedChip(widget.id, { viewportScale, gridWidget }) : null;
               return (
-                <div key={widget.id} className="hud-section">
-                  <div className="hud-section-title">{widget.title}</div>
-                  <Renderer
-                    onNewNode={onNewNode}
-                    onNewGroup={onNewGroup}
-                    panBy={panBy}
-                    zoomIn={zoomIn}
-                    zoomOut={zoomOut}
-                    onFitContent={onFitContent}
-                    resetZoom={resetZoom}
-                    viewportScale={viewportScale}
-                    gridWidget={gridWidget}
-                  />
+                <div
+                  key={widget.id}
+                  className={`hud-section${folded ? ' is-collapsed' : ''}`}
+                  data-widget={widget.id}
+                >
+                  <button
+                    type="button"
+                    className="hud-section-title"
+                    aria-expanded={!folded}
+                    onClick={() => toggleWidgetCollapsed?.(widget.id)}
+                  >
+                    <span className="hud-chev" aria-hidden="true" />
+                    <span className="hud-section-name">{widget.title}</span>
+                    {chip ? <span className="hud-chip">{chip}</span> : null}
+                  </button>
+                  {!folded && (
+                    <Renderer
+                      onNewNode={onNewNode}
+                      onNewGroup={onNewGroup}
+                      panBy={panBy}
+                      zoomIn={zoomIn}
+                      zoomOut={zoomOut}
+                      onFitContent={onFitContent}
+                      resetZoom={resetZoom}
+                      viewportScale={viewportScale}
+                      gridWidget={gridWidget}
+                      collapsedSections={collapsedSections}
+                      setSectionsCollapsed={setSectionsCollapsed}
+                    />
+                  )}
                 </div>
               );
             })}

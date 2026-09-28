@@ -1684,6 +1684,10 @@ function App() {
           moveHud={canvasHud.moveHud}
           commitHudPosition={canvasHud.commitHudPosition}
           toggleHudWidget={canvasHud.toggleHudWidget}
+          collapsedWidgetIds={canvasHud.hudCollapsedWidgets}
+          toggleWidgetCollapsed={canvasHud.toggleHudWidgetCollapsed}
+          collapsedSections={canvasHud.hudCollapsed}
+          setSectionsCollapsed={canvasHud.setHudSectionsCollapsed}
           clampPosition={canvasHud.clampPosition}
           spawnGhost={canvasHud.spawnGhost}
           onNewNode={handleOpenCreatePieceModal}

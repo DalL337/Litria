@@ -74,7 +74,8 @@ test('normalizeHudState defaults on null/garbage input', () => {
       y: HUD_DEFAULT_POSITION.y,
       visibleIds: ['create'],
       hidden: false,
-      collapsed: { placement: false, spacing: false, settle: true, node: true, look: true },
+      collapsed: { placement: false, spacing: false, settle: true, node: true, look: true, 'help-drag': false, 'help-mouse': false, 'help-keys': false },
+      collapsedWidgets: [],
     });
   }
 });
@@ -107,7 +108,8 @@ test('serialize -> parse round-trips state exactly', () => {
     y: 44,
     visibleIds: ['create'],
     hidden: true,
-    collapsed: { placement: true, spacing: false, settle: false, node: true, look: false },
+    collapsed: { placement: true, spacing: false, settle: false, node: true, look: false, 'help-drag': true, 'help-mouse': false, 'help-keys': false },
+    collapsedWidgets: ['help'],
   };
   const restored = parseHudState(serializeHudState(original), TEST_WIDGETS);
   assert.deepEqual(restored, original);
@@ -115,7 +117,21 @@ test('serialize -> parse round-trips state exactly', () => {
 
 test('Grid subsection folds: unknown keys drop, missing ones take the defaults', () => {
   const s = normalizeHudState({ collapsed: { look: false, bogus: true, settle: 'yes' } }, TEST_WIDGETS);
-  assert.deepEqual(s.collapsed, { placement: false, spacing: false, settle: true, node: true, look: false });
+  assert.deepEqual(s.collapsed, { placement: false, spacing: false, settle: true, node: true, look: false, 'help-drag': false, 'help-mouse': false, 'help-keys': false });
+});
+
+test('every widget folds: folded ids keep registry order, unknown and repeated ids drop', () => {
+  const s = normalizeHudState({ collapsedWidgets: ['help', 'removed-widget', 'create', 'help'] }, TEST_WIDGETS);
+  assert.deepEqual(s.collapsedWidgets, ['create', 'help']);
+  assert.deepEqual(normalizeHudState({ collapsedWidgets: 'help' }, TEST_WIDGETS).collapsedWidgets, []);
+});
+
+test('state saved before widgets folded restores with every widget open', () => {
+  const legacy = { x: 0, y: 0, visibleIds: ['create'], hidden: false, collapsed: { look: false }, knownIds: ['create', 'help'] };
+  const s = normalizeHudState(legacy, TEST_WIDGETS);
+  assert.deepEqual(s.collapsedWidgets, []);
+  assert.equal(s.collapsed['help-drag'], false, 'Help subsections start open');
+  assert.equal(s.collapsed.look, false, 'saved Grid folds survive');
 });
 
 test('the Grid widget is registered and shows by default for existing users', () => {

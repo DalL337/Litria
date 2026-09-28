@@ -44,12 +44,22 @@ export function useCanvasHud({
   const [hudPosition, setHudPosition] = useState(HUD_DEFAULT_POSITION);
   const [hudVisibleIds, setHudVisibleIds] = useState(() => getDefaultVisibleIds());
   const [isHudHidden, setIsHudHidden] = useState(false);
-  // Which Grid widget subsections are folded (persisted with the HUD).
+  // Which subsections (Grid's, Help's) and which whole widgets are folded
+  // (persisted with the HUD).
   const [hudCollapsed, setHudCollapsed] = useState(() => normalizeCollapsed(null));
+  const [hudCollapsedWidgets, setHudCollapsedWidgets] = useState([]);
   const hasRestoredRef = useRef(false);
 
-  const stateRef = useRef({ x: hudPosition.x, y: hudPosition.y, visibleIds: hudVisibleIds, hidden: isHudHidden, collapsed: hudCollapsed });
-  stateRef.current = { x: hudPosition.x, y: hudPosition.y, visibleIds: hudVisibleIds, hidden: isHudHidden, collapsed: hudCollapsed };
+  const snapshot = {
+    x: hudPosition.x,
+    y: hudPosition.y,
+    visibleIds: hudVisibleIds,
+    hidden: isHudHidden,
+    collapsed: hudCollapsed,
+    collapsedWidgets: hudCollapsedWidgets,
+  };
+  const stateRef = useRef(snapshot);
+  stateRef.current = snapshot;
 
   const persist = useCallback(() => {
     if (!hasRestoredRef.current) return;
@@ -69,6 +79,7 @@ export function useCanvasHud({
         setHudVisibleIds(restored.visibleIds);
         setIsHudHidden(restored.hidden);
         setHudCollapsed(restored.collapsed);
+        setHudCollapsedWidgets(restored.collapsedWidgets);
       } catch {
         // No prefs available — defaults stand.
       } finally {
@@ -97,7 +108,17 @@ export function useCanvasHud({
     });
   }, [persist]);
 
-  /** Fold or open Grid widget subsections: `{ look: false, ... }`. */
+  /** Fold or open one whole widget; its title row stays. */
+  const toggleHudWidgetCollapsed = useCallback((id) => {
+    setHudCollapsedWidgets((prev) => {
+      const next = toggleVisibleId(prev, id);
+      stateRef.current = { ...stateRef.current, collapsedWidgets: next };
+      persist();
+      return next;
+    });
+  }, [persist]);
+
+  /** Fold or open subsections (Grid's, Help's): `{ look: false, ... }`. */
   const setHudSectionsCollapsed = useCallback((changes) => {
     setHudCollapsed((prev) => {
       const next = normalizeCollapsed({ ...prev, ...changes });
@@ -299,6 +320,8 @@ export function useCanvasHud({
     toggleHudHidden,
     hudCollapsed,
     setHudSectionsCollapsed,
+    hudCollapsedWidgets,
+    toggleHudWidgetCollapsed,
     clampPosition,
     spawnGhost,
     panBy,
