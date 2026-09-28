@@ -293,19 +293,23 @@ export function useGroupMenuActions({
     return true;
   }, [bumpScaffoldRefresh, fsManager, getDirname, getGroupBounds, groupDomain, groups, normalizePath, pieces, showToast, toFolderSegment]);
 
-  /* Empty-group drag commit (seed translation): the interaction controller
-     calls this at drag end when the dragged group has no subtree pieces —
-     seedBounds is the group's only geometry, so the delta lands there
-     (state + SQLite) or the gesture silently reverts on the next prop sync. */
-  const handleTranslateGroupSeed = useCallback((groupId, dx, dy) => {
-    if (!groupId || (!dx && !dy)) return;
-    const group = groups.find((g) => g.id === groupId);
-    if (!group?.seedBounds) return;
-    groupDomain.commands.translateGroupSeed({ groupId, dx, dy });
-    dbUpdateGroup(groupId, {
-      seedX: group.seedBounds.x + dx,
-      seedY: group.seedBounds.y + dy
-    }).catch(() => {});
+  /* Group drag commit for seeds (seed translation): the interaction
+     controller calls this at drag end with every seeded group in the
+     dragged subtree — an empty folder's seedBounds is its only geometry, so
+     the delta lands there (state + SQLite) or the gesture silently reverts
+     on the next prop sync. Takes one id or several. */
+  const handleTranslateGroupSeed = useCallback((groupIds, dx, dy) => {
+    const ids = (Array.isArray(groupIds) ? groupIds : [groupIds]).filter(Boolean);
+    if (!ids.length || (!dx && !dy)) return;
+    const seeded = groups.filter((g) => ids.includes(g.id) && g.seedBounds);
+    if (!seeded.length) return;
+    groupDomain.commands.translateGroupSeeds({ groupIds: seeded.map((g) => g.id), dx, dy });
+    for (const group of seeded) {
+      dbUpdateGroup(group.id, {
+        seedX: group.seedBounds.x + dx,
+        seedY: group.seedBounds.y + dy
+      }).catch(() => {});
+    }
   }, [groupDomain, groups]);
 
   const handleCreateFolderGroup = useCallback(async () => {

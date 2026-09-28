@@ -796,6 +796,8 @@ function App() {
     getSpawnPosition,
     getGroupBounds,
     pieceWidth: PIECE_WIDTH,
+    pieceHeight: PIECE_HEIGHT,
+    getGridPlacement,
   });
 
   // DP2 (brief-group-physicality): ghost groups rectify silently on open —

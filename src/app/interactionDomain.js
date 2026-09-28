@@ -107,6 +107,8 @@ export function useInteractionDomain(params) {
       // Where the dragged set will land (ADR-030): positions, reason,
       // level and smart-guide lines, or null outside a drag.
       placementPreview: controller.placementPreview,
+      // A group drag's seeded subtree offset ({ ids, dx, dy }) or null.
+      groupSeedPreview: controller.groupSeedPreview,
       // The settle slide in flight ({ transition, now, isSettling }).
       settle: { transition: settle.transition, now: settle.now, isSettling: settle.isSettling },
       interactionMode,

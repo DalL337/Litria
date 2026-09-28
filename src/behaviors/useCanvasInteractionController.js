@@ -10,6 +10,21 @@ import { guideLinesFor, partOverlappedNeighbors, resolvePlacement, staticObstacl
 import { boundsOfRects, pieceRect } from '../utils/spatialGeometry2d';
 import { roundToStep } from '../utils/gridGeometry';
 
+// Every group in a subtree, root first (cycle-safe).
+function collectSubtreeGroups(root, childrenByParent) {
+  const out = [];
+  const seen = new Set();
+  const stack = [root];
+  while (stack.length) {
+    const group = stack.pop();
+    if (!group || seen.has(group.id)) continue;
+    seen.add(group.id);
+    out.push(group);
+    for (const child of childrenByParent.get(group.id) ?? []) stack.push(child);
+  }
+  return out;
+}
+
 export function useCanvasInteractionController({
   adjacency,
   adjacencyMode,
@@ -85,6 +100,10 @@ export function useCanvasInteractionController({
   // while the pointer moves (the render layer draws it: brief §5).
   const dragPlacementRef = useRef(null);
   const [placementPreview, setPlacementPreview] = useState(null);
+  // A group drag's seeded subtree ({ ids, dx, dy }) while it moves: the
+  // render layer offsets those seeds so an empty subfolder's box follows
+  // its parent live, as member pieces do. Presentation only.
+  const [groupSeedPreview, setGroupSeedPreview] = useState(null);
   // Escape during a drag: the drag ends where it began, with no history.
   const cancelDragRef = useRef(false);
   // Piece-to-group drag tracking
@@ -781,6 +800,13 @@ export function useCanvasInteractionController({
       if (!childrenByParent.has(g.parentId)) childrenByParent.set(g.parentId, []);
       childrenByParent.get(g.parentId).push(g);
     }
+    // Seeded groups move with the subtree too: an empty folder's box IS its
+    // seed, and a parent's box is the union of its subtree, so a seed left
+    // behind stretched the parent's box on the drop (owner smoke test,
+    // 2026-09-27: dragging an empty src-tauri "redraws its size").
+    const seedGroupIds = collectSubtreeGroups(group, childrenByParent)
+      .filter((entry) => entry.seedBounds)
+      .map((entry) => entry.id);
     const pieceSnapshot = new Map();
     collectSubtreePieceIds(group, childrenByParent).forEach((pieceId) => {
       const piece = piecesById.get(pieceId);
@@ -798,6 +824,7 @@ export function useCanvasInteractionController({
       startX: bounds.minX,
       startY: bounds.minY,
       pieceSnapshot,
+      seedGroupIds,
       // Collapsed pill drags participate in group-overlap detection (nest /
       // un-nest — edit-mode only, gated in drag-move and drag-end). The
       // expanded-group box is a plain MOVE in every mode, so it opts out.
@@ -829,6 +856,9 @@ export function useCanvasInteractionController({
       dx,
       dy
     });
+    if (dragState.seedGroupIds.length) {
+      setGroupSeedPreview({ ids: dragState.seedGroupIds, dx, dy });
+    }
 
     // Subtractive de-emphasis for un-nest: dragging a nested group under
     // edit+subtractive is LEAVING its parent — flag the parent so its box
@@ -911,6 +941,8 @@ export function useCanvasInteractionController({
       return snapshot ?? piece;
     });
     const dragIds = Array.from(dragState.pieceSnapshot.keys()).sort((a, b) => a - b);
+    const seedGroupIds = dragState.seedGroupIds ?? [];
+    setGroupSeedPreview(null);
 
     if (cancelDragRef.current) {
       // Escape: members and the dragged node go back; nothing is recorded.
@@ -932,17 +964,21 @@ export function useCanvasInteractionController({
       // the reopen position anchor to (owner live repro 2026-08-01:
       // newfolder's action pill "not moving with it"). With the grid, the
       // seed's corner lands on the lattice like any other corner.
+      // Every seed in the subtree takes the same delta, so the subtree moves
+      // rigidly. The corner that lands on the lattice is the dragged group's
+      // own seed, or its box when it only contains seeded subfolders.
       let seedDx = (dragState.lastX ?? dragState.startX) - dragState.startX;
       let seedDy = (dragState.lastY ?? dragState.startY) - dragState.startY;
       const seed = groups.find((entry) => entry.id === groupId)?.seedBounds;
-      if (gridPlacement && seed && (seedDx || seedDy)) {
+      const corner = seed ?? { x: dragState.startX, y: dragState.startY };
+      if (gridPlacement && (seedDx || seedDy)) {
         const strict = gridPlacement.mode === 'strict';
         const stepX = strict ? gridPlacement.steps.majorX : gridPlacement.steps.subX;
         const stepY = strict ? gridPlacement.steps.majorY : gridPlacement.steps.subY;
-        seedDx = roundToStep(seed.x + seedDx, stepX) - seed.x;
-        seedDy = roundToStep(seed.y + seedDy, stepY) - seed.y;
+        seedDx = roundToStep(corner.x + seedDx, stepX) - corner.x;
+        seedDy = roundToStep(corner.y + seedDy, stepY) - corner.y;
       }
-      if (seedDx || seedDy) onGroupSeedTranslate?.(groupId, seedDx, seedDy);
+      if ((seedDx || seedDy) && seedGroupIds.length) onGroupSeedTranslate?.(seedGroupIds, seedDx, seedDy);
     } else {
       if (gridPlacement) {
         // A group moves rigidly by its members' corner. Its visible footprint
@@ -974,6 +1010,12 @@ export function useCanvasInteractionController({
           getGroupSnapDelta
         });
       }
+      // The members' rigid move, which the subtree's seeds also take.
+      const leadStart = dragState.pieceSnapshot.get(dragIds[0]);
+      const leadEnd = nextPieces.find((p) => p.id === dragIds[0]);
+      const seedDelta = leadStart && leadEnd
+        ? { dx: leadEnd.x - leadStart.x, dy: leadEnd.y - leadStart.y }
+        : { dx: 0, dy: 0 };
       // Seam maintenance, as for a piece drop (brief §5: group drags had no
       // seam pass). Formal group members never freeform-part, so the seams
       // only move outside neighbors; one gesture, one undo.
@@ -1011,11 +1053,19 @@ export function useCanvasInteractionController({
             : adjacency.updateAdjacenciesForPieces(withLocations, movedIds);
         }
       });
-      executeInteractionHistoryAction(history, {
-        label: 'Move group',
-        action: moveAction,
-        skipDo: true
-      });
+      // Members and seeds are one gesture, so one undo step.
+      const carrySeeds = seedGroupIds.length > 0 && (seedDelta.dx || seedDelta.dy);
+      if (carrySeeds) history.beginGroup?.('Move group');
+      try {
+        executeInteractionHistoryAction(history, {
+          label: 'Move group',
+          action: moveAction,
+          skipDo: true
+        });
+        if (carrySeeds) onGroupSeedTranslate?.(seedGroupIds, seedDelta.dx, seedDelta.dy);
+      } finally {
+        if (carrySeeds) history.endGroup?.();
+      }
       if (gridPlacement && onPlacementSettled) {
         const from = new Map();
         const to = new Map();
@@ -1207,6 +1257,7 @@ export function useCanvasInteractionController({
     isDragActive,
     dragOverGroupId,
     subtractiveDragSource,
-    placementPreview
+    placementPreview,
+    groupSeedPreview
   };
 }

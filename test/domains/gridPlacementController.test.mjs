@@ -125,6 +125,7 @@ function mount({
     run,
     get pieces() { return latest.pieces; },
     get preview() { return latest.controller.placementPreview; },
+    get seedPreview() { return latest.controller.groupSeedPreview; },
     at(id) {
       const piece = latest.pieces.find((p) => p.id === id);
       return { x: piece.x, y: piece.y };
@@ -275,7 +276,57 @@ test('a memberless group\'s seed lands on the lattice', () => {
   h.run((c) => c.handleGroupPillDragMove({ target: { x: () => 40 + 155, y: () => 20 + 71 }, evt: null }));
   h.run((c) => c.handleGroupPillDragEnd('seed'));
   // Seed corner (40, 20) moved by (155, 71) → (195, 91) → major (200, 100).
-  assert.deepEqual(calls, [['seed', 160, 80]]);
+  assert.deepEqual(calls, [[['seed'], 160, 80]]);
+  h.unmount();
+});
+
+// Owner smoke test 2026-09-27: dragging an empty src-tauri moved only its own
+// seed; its empty subfolders stayed, so its box (their union) changed size.
+test('an empty group drag carries every seeded subfolder, rigidly, previewed live', () => {
+  const calls = [];
+  const seed = (x, y) => ({ x, y, width: 160, height: 80 });
+  const groups = [
+    { id: 'tauri', pieceIds: [], isCollapsed: false, parentId: null, seedBounds: seed(100, 100) },
+    { id: 'icons', pieceIds: [], isCollapsed: false, parentId: 'tauri', seedBounds: seed(140, 260) },
+    { id: 'bin', pieceIds: [], isCollapsed: false, parentId: 'icons', seedBounds: seed(180, 420) },
+    { id: 'other', pieceIds: [], isCollapsed: false, parentId: null, seedBounds: seed(900, 100) },
+  ];
+  const h = mount({ pieces: [piece(1, 2000, 2000)], groups, onGroupSeedTranslate: (...args) => calls.push(args) });
+  h.run((c) => c.handleGroupPillDragStart('tauri', { detectNest: false }));
+  h.run((c) => c.handleGroupPillDragMove({ target: { x: () => 100 + 205, y: () => 100 + 94 }, evt: null }));
+  assert.deepEqual(h.seedPreview, { ids: ['tauri', 'icons', 'bin'], dx: 205, dy: 94 });
+  h.run((c) => c.handleGroupPillDragEnd('tauri'));
+  // (305, 194) → major (300, 200): every seed in the subtree takes (200, 100).
+  assert.equal(calls.length, 1);
+  assert.deepEqual([[...calls[0][0]].sort(), calls[0][1], calls[0][2]], [['bin', 'icons', 'tauri'], 200, 100]);
+  assert.equal(h.seedPreview, null, 'the preview clears at the drop');
+  h.unmount();
+});
+
+test('a group with members carries its empty subfolder too, in the same undo step', () => {
+  const calls = [];
+  let undoneSeeds = 0;
+  const groups = [
+    { id: 'src', pieceIds: [1, 2], isCollapsed: false, parentId: null },
+    { id: 'hooks', pieceIds: [], isCollapsed: false, parentId: 'src', seedBounds: { x: 40, y: 260, width: 160, height: 80 } },
+  ];
+  let h = null;
+  h = mount({
+    pieces: [piece(1, 0, 0), piece(2, 200, 0), piece(3, 900, 900)],
+    groups,
+    onGroupSeedTranslate: (ids, dx, dy) => {
+      calls.push([ids, dx, dy]);
+      h.history.execute({ label: 'Move group', do() {}, undo() { undoneSeeds += 1; } });
+    },
+  });
+  h.run((c) => c.handleGroupPillDragStart('src', { detectNest: false }));
+  h.run((c) => c.handleGroupPillDragMove({ target: { x: () => 137, y: () => 58 }, evt: null }));
+  h.run((c) => c.handleGroupPillDragEnd('src'));
+  assert.deepEqual(h.at(1), { x: 100, y: 100 });
+  assert.deepEqual(calls, [[['hooks'], 100, 100]], 'the seed takes the members’ delta');
+  h.run(() => h.history.undo());
+  assert.deepEqual(h.at(1), { x: 0, y: 0 });
+  assert.equal(undoneSeeds, 1, 'one undo reverts members and seed together');
   h.unmount();
 });
 
