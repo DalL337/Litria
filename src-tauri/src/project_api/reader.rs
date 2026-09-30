@@ -34,7 +34,7 @@ pub(crate) enum DiskRead {
 /// Read a project file for the API: syntax, policy, typed resolution, policy
 /// again on the canonical target, then a capped read.
 pub(crate) fn read_disk(root: &Path, path: &str) -> DiskRead {
-    read_disk_with(root, path, HARD_CAP_BYTES, || {}, || {})
+    read_disk_with(root, path, HARD_CAP_BYTES, || {}, || {}, || {})
 }
 
 /// `read_disk` with the cap and two hooks for the race windows tests probe:
@@ -46,6 +46,7 @@ fn read_disk_with(
     path: &str,
     cap: u64,
     before_open: impl FnOnce(),
+    after_open: impl FnOnce(),
     after_checks: impl FnOnce(),
 ) -> DiskRead {
     if !is_valid_api_path(path) {
@@ -84,9 +85,18 @@ fn read_disk_with(
     // parent directory can be swapped for a link between the two (the
     // classic check/use race). The handle's own path cannot change underneath
     // us, so containment and the policy run again on it.
+    after_open();
     let Some(opened) = opened_path(&file) else {
         return DiskRead::Unreadable; // fail closed when the OS cannot say
     };
+    // …and only while the object still has a name. Asked AFTER the path
+    // query, so a file unlinked before that query shows up here: its path is
+    // never trusted alone. (Linux reports such a path as "<old> (deleted)",
+    // which no deny rule matches, while the handle still reads the contents —
+    // Codex re-review of b85b6f0, reproduced on Linux 6.6.)
+    if opened_object_is_unlinked(&file, &opened) {
+        return DiskRead::Unreadable;
+    }
     match canonical_relative(root, &opened) {
         Some(relative) if classify(&relative) != Class::Denied => {}
         _ => return DiskRead::Denied,
@@ -198,6 +208,59 @@ fn opened_path(file: &File) -> Option<PathBuf> {
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn opened_path(_file: &File) -> Option<PathBuf> {
     None
+}
+
+/// Whether the opened object has lost its last name (unlinked or pending
+/// deletion). A path queried from such a handle is not a name the file can be
+/// judged by, so the reader fails closed. Any query failure also counts as
+/// unlinked.
+#[cfg(unix)]
+fn opened_object_is_unlinked(file: &File, opened: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    file.metadata().map_or(true, |metadata| metadata.nlink() == 0) || has_deleted_marker(opened)
+}
+
+/// Linux marks the `/proc/self/fd` link of an unlinked file with this suffix.
+/// Refused even if the link count reads non-zero (a relinked file): the
+/// marker says the path was taken from a nameless object. A real file whose
+/// name ends this way is refused too — fail closed.
+#[cfg(target_os = "linux")]
+fn has_deleted_marker(opened: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    opened.as_os_str().as_bytes().ends_with(b" (deleted)")
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn has_deleted_marker(_opened: &Path) -> bool {
+    false
+}
+
+/// Windows: a deleted file can outlive its name while a handle is open, and
+/// with POSIX delete semantics its final path moves to `\$Extend\$Deleted\…`
+/// on the volume — inside the project if the project is a drive root.
+#[cfg(windows)]
+fn opened_object_is_unlinked(file: &File, _opened: &Path) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{FileStandardInfo, GetFileInformationByHandleEx, FILE_STANDARD_INFO};
+
+    let mut info = FILE_STANDARD_INFO::default();
+    // SAFETY: the handle belongs to `file`, alive across the call; the buffer
+    // is a FILE_STANDARD_INFO and its exact size is passed.
+    let queried = unsafe {
+        GetFileInformationByHandleEx(
+            HANDLE(file.as_raw_handle()),
+            FileStandardInfo,
+            (&mut info as *mut FILE_STANDARD_INFO).cast(),
+            std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
+        )
+    };
+    queried.is_err() || info.NumberOfLinks == 0 || info.DeletePending
+}
+
+#[cfg(not(any(unix, windows)))]
+fn opened_object_is_unlinked(_file: &File, _opened: &Path) -> bool {
+    true
 }
 
 fn io_outcome(kind: ErrorKind) -> DiskRead {
@@ -361,7 +424,7 @@ mod tests {
         let root = temp_root("cap");
         fs::write(root.join("big.txt"), "0123456789ABCDEF!").unwrap(); // 17 bytes
         let reached_read = Cell::new(false);
-        let outcome = read_disk_with(&root, "big.txt", 16, || {}, || reached_read.set(true));
+        let outcome = read_disk_with(&root, "big.txt", 16, || {}, || {}, || reached_read.set(true));
         assert_eq!(outcome, DiskRead::TooLarge);
         assert!(!reached_read.get(), "the size check refuses before reading");
         let _ = fs::remove_dir_all(&root);
@@ -374,7 +437,7 @@ mod tests {
         let root = temp_root("grow");
         let path = root.join("grow.txt");
         fs::write(&path, "0123456789").unwrap(); // 10 bytes, under the cap
-        let outcome = read_disk_with(&root, "grow.txt", 16, || {}, || {
+        let outcome = read_disk_with(&root, "grow.txt", 16, || {}, || {}, || {
             let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
             file.write_all(b"much more than six more bytes").unwrap();
         });
@@ -512,6 +575,7 @@ mod tests {
                 junction(&root.join("sub"), &root.join(".git"));
             },
             || {},
+            || {},
         );
         fs::remove_dir(root.join("sub")).unwrap(); // the junction itself
         assert_eq!(outcome, DiskRead::Denied, "read through a swapped-in junction");
@@ -535,6 +599,7 @@ mod tests {
                 fs::rename(root.join("sub"), root.join("sub-real")).unwrap();
                 junction(&root.join("sub"), &outside);
             },
+            || {},
             || {},
         );
         fs::remove_dir(root.join("sub")).unwrap();
@@ -564,12 +629,93 @@ mod tests {
                     std::os::unix::fs::symlink(&target, root.join("notes.txt")).unwrap();
                 },
                 || {},
+                || {},
             );
             assert_eq!(outcome, DiskRead::Denied, "read through a swapped-in link to {}", target.display());
             fs::remove_file(root.join("notes.txt")).unwrap();
         }
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    /// Codex re-review of `b85b6f0`: the denied file is UNLINKED between the
+    /// open and the handle-path query. Linux then reports `<path> (deleted)`,
+    /// a name no deny rule matches, while the handle still reads the old
+    /// contents. The reader must fail closed. Covers the exact-name rule
+    /// (`.env`) and the suffix rule (`.pem`), both defeated by the suffix.
+    #[cfg(unix)]
+    #[test]
+    fn a_denied_file_unlinked_after_opening_is_still_withheld() {
+        for denied in [".env", "server.pem"] {
+            let root = temp_root("race-unlink");
+            fs::write(root.join("notes.txt"), "allowed\n").unwrap();
+            fs::write(root.join(denied), "SECRET=1\n").unwrap();
+            let outcome = read_disk_with(
+                &root,
+                "notes.txt",
+                HARD_CAP_BYTES,
+                || {
+                    fs::remove_file(root.join("notes.txt")).unwrap();
+                    std::os::unix::fs::symlink(root.join(denied), root.join("notes.txt")).unwrap();
+                },
+                || fs::remove_file(root.join(denied)).unwrap(),
+                || {},
+            );
+            assert!(
+                !matches!(outcome, DiskRead::Text { .. }),
+                "read {denied} after it was unlinked behind the open handle: {outcome:?}"
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    /// Windows analogue: a junction swap opens `.git/config`, which is then
+    /// deleted while our handle is open (std opens with FILE_SHARE_DELETE).
+    #[cfg(windows)]
+    #[test]
+    fn a_denied_file_deleted_after_opening_is_still_withheld() {
+        let root = temp_root("race-delete");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/config"), "allowed\n").unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/config"), "SECRET\n").unwrap();
+        let outcome = read_disk_with(
+            &root,
+            "sub/config",
+            HARD_CAP_BYTES,
+            || {
+                fs::rename(root.join("sub"), root.join("sub-real")).unwrap();
+                junction(&root.join("sub"), &root.join(".git"));
+            },
+            || fs::remove_file(root.join(".git/config")).unwrap(),
+            || {},
+        );
+        fs::remove_dir(root.join("sub")).unwrap();
+        assert!(!matches!(outcome, DiskRead::Text { .. }), "read a deleted denied file: {outcome:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The name check itself: a file deleted while our handle is open reads
+    /// as unlinked on every platform; a live file does not.
+    #[test]
+    fn a_file_deleted_behind_an_open_handle_reads_as_unlinked() {
+        let root = temp_root("unlinked");
+        let path = root.join("doomed.txt");
+        fs::write(&path, "x").unwrap();
+        let file = open_for_read(&path).unwrap();
+        let opened = opened_path(&file).expect("the OS names an open file");
+        assert!(!opened_object_is_unlinked(&file, &opened), "a live file is not unlinked");
+        fs::remove_file(&path).unwrap(); // std opens with FILE_SHARE_DELETE on Windows
+        assert!(opened_object_is_unlinked(&file, &opened), "a deleted file must read as unlinked");
+        drop(file);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_deleted_marker_is_refused() {
+        assert!(has_deleted_marker(Path::new("/p/.env (deleted)")));
+        assert!(!has_deleted_marker(Path::new("/p/notes.txt")));
     }
 
     // --- exact names (Codex review finding 2) -------------------------------
