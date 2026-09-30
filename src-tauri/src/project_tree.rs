@@ -60,7 +60,9 @@ fn is_ignored(file_name: &str) -> bool {
     IGNORED_NAMES.iter().any(|&ignored| file_name.eq_ignore_ascii_case(ignored))
 }
 
-fn is_ignored_dir(dir_name: &str) -> bool {
+/// Also the Project API's "unindexed" class (contract brief §6): reused, not
+/// copied, so the tree and the API skip the same directories.
+pub(crate) fn is_ignored_dir(dir_name: &str) -> bool {
     IGNORED_DIRS.iter().any(|&ignored| dir_name.eq_ignore_ascii_case(ignored))
 }
 

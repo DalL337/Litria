@@ -1,0 +1,10 @@
+{
+  "documents": [
+    {
+      "path": "../outside"
+    },
+    {
+      "path": "a.txt:stream"
+    }
+  ]
+}

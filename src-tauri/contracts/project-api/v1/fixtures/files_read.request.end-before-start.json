@@ -1,0 +1,9 @@
+{
+  "documents": [
+    {
+      "path": "a.txt",
+      "startLine": 5,
+      "endLine": 2
+    }
+  ]
+}

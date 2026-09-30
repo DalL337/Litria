@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesReadRequest",
+  "type": "object",
+  "properties": {
+    "documents": {
+      "description": "The documents to read, answered in this order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DocumentRequest"
+      },
+      "maxItems": 20,
+      "minItems": 1
+    },
+    "maxBytesPerDocument": {
+      "description": "Text budget per document, in UTF-8 bytes; absent means the server\ndefault. The server may return less when the response budget runs out.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "maximum": 262144,
+      "minimum": 4
+    },
+    "source": {
+      "description": "Which text to return. Defaults to the effective text.",
+      "$ref": "#/$defs/ReadSource",
+      "default": "effective"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "documents"
+  ],
+  "$defs": {
+    "DocumentRequest": {
+      "type": "object",
+      "properties": {
+        "endLine": {
+          "description": "Last line to return, inclusive. Defaults to the end of the document.\nAn end before the start returns no lines.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "maximum": 16777216,
+          "minimum": 1
+        },
+        "path": {
+          "description": "Project-relative path with forward slashes. A path the API cannot\naccept is answered as `invalidPath`, not as a request error.",
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "startLine": {
+          "description": "First line to return, 1-based. Defaults to 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "maximum": 16777216,
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "ReadSource": {
+      "description": "Inbound-only, but `Serialize` too: schemars emits a field's `default` only\nwhen it can serialize the default value, and callers should see it.",
+      "oneOf": [
+        {
+          "description": "The editor's buffer when the document is open or unsaved, otherwise\nthe saved file.",
+          "type": "string",
+          "const": "effective"
+        },
+        {
+          "description": "The saved file, even when the editor holds unsaved changes.",
+          "type": "string",
+          "const": "disk"
+        }
+      ]
+    }
+  }
+}

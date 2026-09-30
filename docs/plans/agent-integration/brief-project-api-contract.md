@@ -125,7 +125,11 @@ The hash algorithm and token format are implementation details of each owner, no
 - **Bounded disk reads.** The bound is on the bytes actually consumed, not on a size checked beforehand. A file can grow, or be replaced, between a metadata check and a read.
   1. Check the path with the disclosure policy (§6).
   2. Resolve it through the typed resolver (§12, Q4).
-  3. Open the file once. On Unix, open it non-blocking, so that a FIFO swapped in at that path cannot hang the reader.
+  3. Open the file once. On Unix, open it non-blocking, so that a FIFO swapped in at that path cannot hang the reader. Then ask the handle which path it actually refers to, and repeat the containment and policy checks on that path. A file or parent directory swapped for a link between resolution and open would otherwise pass as the authorized path. The platform APIs are `GetFinalPathNameByHandleW` on Windows, `/proc/self/fd` on Linux and `F_GETPATH` on macOS; any other platform fails closed. *(Added 2026-09-30 after Codex's review of PR #86 found and reproduced that race.)* A path taken from an object that has lost its last name is refused (`unreadable`); the check runs after the path query, so an unlink before that query is seen:
+  - Unix: a link count of 0, and on Linux also the ` (deleted)` marker that `/proc` appends.
+  - Windows: `NumberOfLinks` of 0, or `DeletePending`. A deleted file's final path can move to `\$Extend\$Deleted\…`, which lies inside a project stored at a drive root.
+
+  Without this check, a denied file unlinked behind the open handle passed as `.env (deleted)`. *(Added 2026-09-30: Codex's re-review of `b85b6f0`, reproduced on Linux 6.6.)*
   4. Check the **handle's** metadata, not the path's. Anything other than a regular file (a directory, FIFO, device or socket) returns `notFile`. A size above the hard cap returns `tooLarge` without reading.
   5. Read through `take(cap + 1)` into a buffer whose capacity is capped. If the extra byte arrives, the file grew past the cap after the check: return `tooLarge` and discard what was read.
   6. If the first 8 KiB contain a NUL byte, or the bytes are not valid UTF-8, return `notText`.
@@ -136,7 +140,7 @@ The hash algorithm and token format are implementation details of each owner, no
   - Lines are 1-based and inclusive.
   - Columns are 1-based, in Unicode code points (the unit JSON Schema uses for string length).
   - A read that does not fit the per-document budget stops at a line boundary. The result reports `truncated`, the range actually returned and `totalLines`, so the caller can continue from the next line.
-  - **Oversized lines.** If the first requested line alone exceeds the budget, that line is cut at a character boundary and the result carries `lineCut: true`. Every read therefore returns at least part of a line, and a caller always progresses by asking for the next line. v1 has no way to continue *within* a cut line; for such a file, search previews are the way to locate content (a minified bundle, for example). Without this rule, a 300 KiB one-line file would fit under the hard cap and still be unreadable, because requesting fewer lines cannot shrink one line.
+  - **Oversized lines.** If the first requested line alone exceeds the budget, that line is cut at a character boundary and the result carries `lineCut: true`. Every read therefore returns at least part of a line, and a caller always progresses by asking for the next line. *(Clarified 2026-09-30, PR #86 review: budgets are strict, so a character that does not fit is never returned. The minimum per-document budget is 4 bytes, the largest UTF-8 character, which keeps the progress guarantee for the first document. A later document whose next character cannot fit is `skipped`.)* v1 has no way to continue *within* a cut line; for such a file, search previews are the way to locate content (a minified bundle, for example). Without this rule, a 300 KiB one-line file would fit under the hard cap and still be unreadable, because requesting fewer lines cannot shrink one line.
   - For buffers, the JS port slices before replying, so large buffers never cross IPC whole. The revision still covers the whole text.
 - **Line endings** are returned as stored.
 
@@ -153,7 +157,9 @@ One Rust module decides, for every project-relative path, whether that path is *
 Rules:
 - **Denied wins.** A path matching both classes is denied. The overlap is real: the reused unindexed list includes `.git` and `.litria`, which are also denied, so they must never become readable by explicit path.
 - **Matching is ASCII case-insensitive on every platform.** This is conservative: Windows and default macOS volumes are case-insensitive, so `.ENV` is `.env`. A pattern matches a path segment at any depth.
-- **Both the requested path and its canonical target are checked.** A link inside the project that points at a denied file is denied. The search walker does not follow links at all.
+- **The requested path, its canonical target and the opened object's own path are all checked** (the last since 2026-09-30, §5 step 3). A link inside the project that points at a denied file is denied, including one swapped in after resolution. The search walker does not follow links at all.
+- **Names are taken exactly** *(2026-09-30, PR #86 review)*. Whitespace is part of a filename: `" notes.txt"` is not `notes.txt`. The legacy commands' trimming never applies to the API, so an answer cannot come from a neighbouring file, and cannot reveal whether a denied file exists.
+- **Residual:** a hard link gives one file several names, and the policy judges names. A hard link to a denied file under an allowed name is equivalent to copying that file, which any process able to write inside the project can already do.
 - **Precedence: repository content can never widen access.** v1 reads no policy from the repository. User-configurable additions (a preference) are a later slice and can only add restrictions. Application defaults cannot be relaxed per project in v1.
 - **API path syntax is stricter than `path_guard`.** A path is rejected as a per-item `invalidPath` outcome, not as a request error, when it contains:
   - anything other than forward slashes, or an empty, `.` or `..` segment;
@@ -198,6 +204,7 @@ The workspace epoch is **not** returned. The channel is already bound, and expos
 - `notText`;
 - `tooLarge` — with the limit;
 - `invalidPath`;
+- `unreadable` — the file exists but could not be read, for example a lock or a permission failure *(added 2026-09-30 by build plan P1; the list above had no outcome for an I/O failure other than not-found)*;
 - `skipped` — the total response budget ran out before this document.
 
 Per ADR-033 §6, a reader that meets an unfamiliar `kind` treats that one document as unknown and never as `read`.

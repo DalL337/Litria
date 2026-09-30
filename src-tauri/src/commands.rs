@@ -419,6 +419,24 @@ pub(crate) fn crash_test_panic() {
     panic!("crash_test_panic: intentional dev-only panic to exercise the crash hook");
 }
 
+/// Call a Project API operation from the webview — dev builds only
+/// (implementation-policy Rule 3). It lets a live pass drive the real
+/// boundary over CDP before the external transport exists (Project API build
+/// plan track T). `payload` is the raw request JSON. Absent from release
+/// builds; it reads nothing the webview cannot already read through
+/// `read_project_file`, and the disclosure policy still applies.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub(crate) async fn project_api_dev_call(
+    operation: String,
+    payload: String,
+) -> Result<serde_json::Value, crate::contracts::error::ContractError> {
+    use crate::contracts::error::{ContractError, ErrorCode};
+    tauri::async_runtime::spawn_blocking(move || crate::project_api::dev_call(&operation, payload.as_bytes()))
+        .await
+        .map_err(|_| ContractError::new(ErrorCode::Internal, "the call did not complete"))?
+}
+
 // ---------------------------------------------------------------------------
 // Generic LSP commands (language-agnostic)
 // ---------------------------------------------------------------------------

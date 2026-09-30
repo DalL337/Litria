@@ -1,0 +1,16 @@
+{
+  "apiVersion": 1,
+  "error": "error.schema.json",
+  "family": "project-api",
+  "operations": [
+    {
+      "capability": "project.files.read",
+      "description": "Read project documents by project-relative path, optionally by line range. Returns the editor's buffer when the document is open or unsaved, otherwise the saved file (source: effective), or the saved file only (source: disk). Every document reports its source, dirty state and revision.",
+      "name": "litria_files_read",
+      "request": "litria_files_read.request.schema.json",
+      "resultIn": "litria_files_read.result.in.schema.json",
+      "resultOut": "litria_files_read.result.out.schema.json"
+    }
+  ],
+  "status": "draft"
+}

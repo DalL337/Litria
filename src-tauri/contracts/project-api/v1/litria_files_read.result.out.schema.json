@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesReadResult",
+  "type": "object",
+  "properties": {
+    "documents": {
+      "description": "One outcome per requested document, in request order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DocumentOutcome"
+      }
+    }
+  },
+  "required": [
+    "documents"
+  ],
+  "$defs": {
+    "DocumentOutcome": {
+      "description": "Per-document outcome. A reader that meets an unfamiliar `kind` must treat\nthat document as unknown, never as one of these.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "dirty": {
+              "description": "Whether the editor holds unsaved changes. Always false for disk.",
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "const": "read"
+            },
+            "lineCut": {
+              "description": "The only returned line was cut at a character boundary because it\nalone exceeds the budget. Defaulted when read, always written.",
+              "type": "boolean",
+              "default": false
+            },
+            "path": {
+              "type": "string"
+            },
+            "range": {
+              "description": "The lines returned; omitted when no line was returned.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LineRange"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "description": "Opaque revision of the whole document as observed. Compare for\nequality only; editor and disk revisions are never comparable.",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/DocumentSource"
+            },
+            "text": {
+              "type": "string"
+            },
+            "totalLines": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "truncated": {
+              "description": "Fewer lines were returned than requested; continue from the line\nafter `range.endLine`.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "source",
+            "dirty",
+            "revision",
+            "text",
+            "totalLines",
+            "truncated",
+            "lineCut"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "notFound"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "The disclosure policy withholds this path. Existence is not revealed.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "denied"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "A directory or another non-regular file.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "notFile"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "Binary or not valid UTF-8.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "notText"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tooLarge"
+            },
+            "limitBytes": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "limitBytes"
+          ]
+        },
+        {
+          "description": "A path the API does not accept (brief §6).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "invalidPath"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "The file exists but could not be read (for example, locked).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unreadable"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "description": "The response budget ran out before this document.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "skipped"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        }
+      ]
+    },
+    "DocumentSource": {
+      "type": "string",
+      "enum": [
+        "editor",
+        "disk"
+      ]
+    },
+    "LineRange": {
+      "type": "object",
+      "properties": {
+        "endLine": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "startLine": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "startLine",
+        "endLine"
+      ]
+    }
+  }
+}

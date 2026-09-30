@@ -1,8 +1,0 @@
-{
-  "paths": [
-    "src/auth.ts",
-    "README.md"
-  ],
-  "source": "disk",
-  "maxBytesPerDocument": 65536
-}

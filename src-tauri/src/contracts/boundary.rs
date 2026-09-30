@@ -39,9 +39,24 @@ pub(crate) fn accept<T: DeserializeOwned + Validate>(raw: &[u8]) -> Result<T, Co
         ));
     }
     let value: T = serde_json::from_slice(raw)
-        .map_err(|error| ContractError::new(ErrorCode::InvalidParams, error.to_string()))?;
+        .map_err(|error| ContractError::new(ErrorCode::InvalidParams, parse_failure(&error)))?;
     value.validate()?;
     Ok(value)
+}
+
+/// A fixed message per failure category, with the position at most. serde's
+/// own text quotes unknown field names and rejected values — the caller's
+/// input — which must not flow back into messages or routine diagnostics
+/// (Project API contract brief §9; agent brief §9).
+pub(crate) fn parse_failure(error: &serde_json::Error) -> String {
+    use serde_json::error::Category;
+    let what = match error.classify() {
+        Category::Syntax => "the request is not valid JSON",
+        Category::Eof => "the request ended unexpectedly",
+        Category::Data => "the request does not match the operation's input schema",
+        Category::Io => "the request could not be read",
+    };
+    format!("{what} (line {}, column {})", error.line(), error.column())
 }
 
 /// A string's length as JSON Schema's `minLength`/`maxLength` measure it:

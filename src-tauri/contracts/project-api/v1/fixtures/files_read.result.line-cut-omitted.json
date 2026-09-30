@@ -1,0 +1,18 @@
+{
+  "documents": [
+    {
+      "kind": "read",
+      "path": "a.txt",
+      "source": "disk",
+      "dirty": false,
+      "revision": "d1-00",
+      "text": "x\n",
+      "range": {
+        "startLine": 1,
+        "endLine": 1
+      },
+      "totalLines": 1,
+      "truncated": false
+    }
+  ]
+}

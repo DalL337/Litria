@@ -1,6 +1,0 @@
-{
-  "paths": [
-    "src/auth.ts"
-  ],
-  "maxBytesPerDocument": 2000000
-}

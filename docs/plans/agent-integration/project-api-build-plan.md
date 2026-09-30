@@ -34,8 +34,8 @@ This document owns sequencing, executable evidence and completion status. It own
 
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
-| P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`) | — | Pending |
-| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads, debug-only development call | P1 | Pending |
+| P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | In review (see [P1 record](#p1-record)) |
+| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Pending |
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Pending |
 | P4 | `litria_graph_query` | P2 | Pending |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Pending |
@@ -142,6 +142,112 @@ The contract machinery compiles into the application, while schemars stays out o
 - Messages contain no absolute path and no denied path (asserted).
 - The slice record here names the pull request and the commands.
 
+### P1 record
+
+**2026-09-30, branch `feat/project-api-p1`,** a worktree off `main` `b381467`. Environment: Windows 10, rustc 1.97.1, Node 24.14.0. The pull request is linked from the branch.
+
+**Delivered, as tasked above:**
+- the workspace binding;
+- production contract machinery, with schemars test-only;
+- the call context, grant, in-flight ceiling and epoch fence;
+- sanitized parse errors;
+- the typed `path_guard` resolver;
+- path validation, the disclosure policy and the bounded reader;
+- `project-api` v1 with `litria_files_read` (26 fixtures, including one generated);
+- the S0 `v0` family and its JavaScript prototype retired;
+- `rust-module-ownership.md` entries.
+
+**Deviations, each recorded where it applies:**
+- **The debug-only development call moved here from P2 (task 5).** Without it, P1's production code has no consumer and `cargo build` reports it all as dead code. Release builds allow the dead code at module level (`lib.rs`), with a reason naming track T's transport.
+- **A ninth outcome kind, `unreadable`,** for an I/O failure other than not-found (brief §7.2, dated). The list had no outcome for a locked or permission-denied file.
+- **`endLine` before `startLine` is not a request error.** It is a cross-field constraint JSON Schema cannot express, so rejecting it would break verdict equality. It returns no lines, and a fixture records the case.
+- **The hard-cap test uses an injected cap rather than a sparse 8 MiB file.** The reader takes the cap as a parameter, and a hook proves the size check refuses the file before anything is read.
+- **A unix-only direct dependency on `libc` 0.2** (for `O_NONBLOCK`). It is already in the lockfile through Tauri and portable-pty, so it adds a direct edge and no crate. `Cargo.lock` gains one line.
+
+**Checks (all run in the worktree):**
+
+| Command | Outcome |
+|---|---|
+| `cargo build` | zero warnings |
+| `cargo check --release` | zero warnings; the development call compiles out |
+| `cargo test` | 396 passed, 3 ignored (pre-existing) |
+| `LITRIA_UPDATE_CONTRACTS=1 cargo test contracts:: -- --test-threads=1`, then `cargo test contracts::` | 25 contract tests pass against the committed `v1` artifacts |
+| `npm run check:architecture` | all seven guards pass |
+| `npm run test:domains` | 1316 of 1316. This is 1325 before, minus the 9 retired S0 JavaScript tests. |
+| `npm run build` | pass |
+| `cargo tree -e normal`, before and after | host graph identical (416 lines). On Linux, `libc` gains the direct edge from `litria`. Neither schemars 1.x nor jsonschema is in any normal graph. (schemars 0.8.22 is Tauri's own, through `tauri-utils`, and is unchanged from `main`.) |
+
+**Planted mistakes, each caught and then restored** (the restore was verified by content and then `touch`ed):
+
+| Planted mistake | Caught by |
+|---|---|
+| Path length measured in bytes (`str::len`) | The fixture verdict test (`max-length-non-ascii`) |
+| No policy check on the canonical target | The Windows junction test |
+| No overflow check after the capped read | The growth-after-check test |
+| No end-of-call fence | The switch-during-work test |
+
+A fifth plant, an uncapped read, was malformed and failed to compile, so it proved nothing. The overflow-check plant replaced it.
+
+**Platform coverage:**
+- The FIFO test (`cfg(unix)`) and the Unix symlink test run on the Linux and macOS jobs of `rust-tests.yml`, not locally. Both passed on PR #86: `cargo test (linux-x86_64)` and `cargo test (macos-aarch64)` each reported 390 passed and 3 ignored, and their logs show both tests as `ok`.
+- The Windows junction test ran locally.
+- The Architecture Guard also passed on the PR.
+
+**Peer review by Codex (2026-09-30, commit `c03d22e`).** Codex reported four findings. Each was verified with a reproduction test written against the unfixed code before anything changed:
+
+| Finding | Verified | Fix |
+|---|---|---|
+| **High.** The reader authorized the resolved path and then opened it separately, so a file or parent swapped for a link in between was read. | **Reproduced** on Windows: with `sub/` swapped for a junction into `.git`, the read returned `.git/config`'s content; a junction to a directory outside the project returned the outside file. (The Unix symlink variant runs in CI.) | After opening, the reader asks the handle for its real path (`GetFinalPathNameByHandleW`, `/proc/self/fd`, `F_GETPATH`; any other platform fails closed) and repeats containment and the policy on it. Brief §5 step 3 and §6 are amended. |
+| **Medium.** The typed resolver reused the legacy validator, which trims. | **Reproduced:** `" notes.txt"` returned `notes.txt`'s content. `" .env"` answered `denied` or `notFound` depending on whether `.env` existed, leaking existence. | The typed resolver takes names exactly. The legacy resolver trims first and then delegates, so its results and messages are unchanged (tested). |
+| **Medium.** Slicing collected every line into a `Vec<&str>`. | Confirmed from the code: 16 bytes per line, so an 8 MiB file of newlines costs about 128 MiB. | Lines are counted and walked by iterator, and memory is proportional to the returned text. A new test covers a million short lines. |
+| **Medium.** One character was kept even when it exceeded the budget. | **Reproduced:** 4 bytes were returned against a 3-byte budget, and 262,147 bytes against the 262,144-byte response budget. | Budgets are strict. The minimum per-document budget rises from 1 to 4 bytes, the largest UTF-8 character, which changes the contract schema and adds two fixtures. A later document whose next character cannot fit is `skipped`. |
+
+**Checks after the fixes:**
+- `cargo test`: 403 passed, 3 ignored. That is the 396 above plus 7 new tests that run on Windows; the Unix race test runs in CI.
+- Contract tests: 25 pass.
+- `cargo build` and `cargo check --release`: zero warnings.
+- Host normal graph: identical.
+- `Cargo.lock`: unchanged.
+- Guards: all seven pass.
+- `windows` gains the `Win32_Storage_FileSystem` feature. Another crate already enables it on `windows` 0.61.3, so nothing new compiles.
+- **CI on the fix commits:** Linux and macOS each passed 396 tests with 3 ignored. `a_file_swapped_for_a_symlink_after_resolution_is_denied` passed on both. Every read test there goes through the new post-open path query, so these runs are also the evidence that `/proc/self/fd` (Linux) and `F_GETPATH` (macOS) work.
+
+**Re-review by Codex (2026-09-30, commit `b85b6f0`).** Codex confirmed the three medium fixes and raised one more high finding. On Linux, `/proc/self/fd` reports an unlinked file as `<path> (deleted)`. That name matches no deny rule, while the open handle still reads the contents.
+
+Codex could not run commands (its sandbox asked for extra authentication), so the finding was reproduced here:
+- **Environment:** Docker Desktop, image `rust:1-bookworm`, kernel `6.6.87.2-microsoft-standard-WSL2`.
+- **Code under test:** the real `path_guard`, `project_tree`, `project_types`, `paths`, `policy` and `reader` modules, copied unmodified (verified with `cmp`) into a throwaway crate.
+- **Kernel behavior:** a shell check showed `readlink` returning `…/.env (deleted)` after the unlink, while the handle still read the secret.
+- **The reader:** the new test `a_denied_file_unlinked_after_opening_is_still_withheld` returned the `.env` contents against the unfixed reader.
+
+**Fix.** After the path query, the reader checks that the opened object still has a name, and fails closed (`unreadable`) if it has none. Brief §5 step 3 records this.
+- On Unix it checks for a link count of 0, and on Linux also for the ` (deleted)` marker.
+- **Windows** gets the equivalent check (`NumberOfLinks` of 0, or `DeletePending`). This came from our own analysis while fixing: with POSIX delete semantics, a deleted file's path moves to `\$Extend\$Deleted\…`, which is inside a project stored at a drive root.
+
+**Results after the fix:**
+- Linux, in the same container: all 42 tests of the copied modules pass, including the one that failed before the fix.
+- Windows: `cargo test` gives 405 passed and 3 ignored.
+- `cargo check --release`: zero warnings.
+- New tests:
+  - unlink after open, for `.env` and a `.pem` (Unix);
+  - delete after open (Windows);
+  - a file deleted behind an open handle reads as unlinked (all platforms);
+  - the Linux marker.
+- **CI on the fix:** Linux passed 399 and macOS passed 398, each with 3 ignored. Both logs show the unlink-after-open regression test and the direct unlinked-handle test as `ok`, and the Linux log also shows the marker test.
+  - That macOS pass is the first evidence of how `F_GETPATH` behaves for a deleted file.
+  - The Architecture Guard also passed.
+
+**Security review** (security policy Rule 1: a new command touching the filesystem):
+- `project_api_dev_call` exists only in debug builds.
+- It reads nothing the webview cannot already read through `read_project_file`.
+- Its reads pass the disclosure policy and the epoch fence.
+
+Residual risks:
+- The policy's denied list is not a confidentiality guarantee (brief §6).
+- A FIFO swapped in between the stat and the non-blocking open is answered as `notFile`. On Windows, named pipes are not reachable through project paths.
+- A hard link to a denied file under an allowed name is read like a copy of that file (brief §6).
+- Platforms other than Windows, Linux and macOS fail closed (`unreadable`), because they have no post-open path query.
+
 ## P2. Owner bridge and effective reads
 
 ### Goal
@@ -170,7 +276,7 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 4. **Effective `litria_files_read`**
    - Documents whose session state is `open` or `closedDirty` come from the buffer. All others come from disk.
    - `source` and `dirty` are reported.
-5. **Debug-only development call**
+5. **Debug-only development call** — *delivered in P1 (2026-09-30), as P1's first consumer; see the [P1 record](#p1-record).*
    - `project_api_dev_call(operation, payload)` under `#[cfg(debug_assertions)]`.
    - The `dev` principal gets the full read grant, bound to the current epoch.
    - It is absent from release builds (asserted by a release-profile `cargo build` check or a test).

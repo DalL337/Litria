@@ -1,0 +1,78 @@
+{
+  "documents": [
+    {
+      "dirty": false,
+      "kind": "read",
+      "lineCut": false,
+      "path": "src/auth.ts",
+      "range": {
+        "endLine": 1,
+        "startLine": 1
+      },
+      "revision": "d1-9f86d081884c7d659a2feaa0c55ad015",
+      "source": "disk",
+      "text": "export function signIn() {}\n",
+      "totalLines": 1,
+      "truncated": false
+    },
+    {
+      "dirty": false,
+      "kind": "read",
+      "lineCut": true,
+      "path": "dist/bundle.min.js",
+      "range": {
+        "endLine": 1,
+        "startLine": 1
+      },
+      "revision": "d1-2c26b46b68ffc68ff99b453c1d304134",
+      "source": "disk",
+      "text": "!function(){var a=",
+      "totalLines": 1,
+      "truncated": true
+    },
+    {
+      "dirty": false,
+      "kind": "read",
+      "lineCut": false,
+      "path": "empty.txt",
+      "revision": "d1-e3b0c44298fc1c149afbf4c8996fb924",
+      "source": "disk",
+      "text": "",
+      "totalLines": 0,
+      "truncated": false
+    },
+    {
+      "kind": "notFound",
+      "path": "src/missing.ts"
+    },
+    {
+      "kind": "denied",
+      "path": ".env"
+    },
+    {
+      "kind": "notFile",
+      "path": "src"
+    },
+    {
+      "kind": "notText",
+      "path": "assets/logo.png"
+    },
+    {
+      "kind": "tooLarge",
+      "limitBytes": 8388608,
+      "path": "data/dump.sql"
+    },
+    {
+      "kind": "invalidPath",
+      "path": "../outside"
+    },
+    {
+      "kind": "unreadable",
+      "path": "locked.log"
+    },
+    {
+      "kind": "skipped",
+      "path": "src/later.ts"
+    }
+  ]
+}
