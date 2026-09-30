@@ -1,6 +1,6 @@
 # Contract schemas: one source for Rust, JavaScript and MCP
 
-**Status:** Proposed design brief (2026-09-29; revised the same day after peer review by Codex, see §11). Canonical detailed design for [ADR-033](../../adrs/033-contract-schema-source-of-truth.md). Not implemented; no dependency added. The recommended pipeline is accepted only on the evidence of the S0 spike (§9).
+**Status:** Accepted design brief (2026-09-30, owner ruling after the S0 spike, PR #84). Proposed 2026-09-29 and revised the same day after peer review by Codex (§11). Canonical detailed design for [ADR-033](../../adrs/033-contract-schema-source-of-truth.md). The S0 spike (§9, with its record in §11) is the only implementation so far. It is test-only, and schemars and jsonschema are dev-dependencies.
 **Owner direction (2026-09-29):** "Schema gets its own ADR." Ruled after a review of an externally drafted API brief found that three accepted or drafted designs each need cross-boundary contracts, and the repository has no schema tooling.
 
 ## 1. Problem

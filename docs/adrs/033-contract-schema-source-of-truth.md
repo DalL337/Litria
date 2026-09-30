@@ -2,6 +2,8 @@
 
 ## Status
 
+Accepted (2026-09-30 — owner ruling after the S0 spike, PR #84. Adoption starts with the Project API contract and build plan under ADR-031, scheduled separately. The ruling on the three forced lockfile bumps (Consequences) is still open.)
+
 S0 run (2026-09-30 — every §9 acceptance check passed, and all twelve planted mistakes failed a test (brief §11, S0 record). One new cost surfaced: the validator dev-dependency raises three shipped transitive crates through the shared lockfile (see Consequences). Status stays Proposed until the owner rules on acceptance and on those bumps.)
 
 Revised (2026-09-29 — peer review by Codex, each point re-verified before adoption. Changes: directional inbound/outbound schemas; three-layer enforcement tested as a whole-boundary verdict; the committed schema named as the contract, with fixtures as sampled evidence; complete-file-set drift check with CI path coverage; wire versions separated from `engines.litria`; reader-side compatibility rules; typed catalog registration (new decision 7); explicit legacy translation; corrected alternatives. Decisions renumbered; the spike is now decision 9.)

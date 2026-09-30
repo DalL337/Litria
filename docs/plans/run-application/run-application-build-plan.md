@@ -62,6 +62,13 @@ can spawn a process.
 
 ### Tasks
 
+> **Note (2026-09-30, ADR-033 accepted):** the typed schema and shared
+> fixtures below follow [ADR-033](../../adrs/033-contract-schema-source-of-truth.md).
+> Rust contract types are the source; schemars generates committed,
+> directional JSON Schema 2020-12; the Rust boundary enforces; fixtures prove
+> the two agree. The conventions and the proven S0 layout are in the
+> [contract schemas brief](../contracts/brief-contract-schemas.md).
+
 - Implement the typed target/launch-plan/preview/result/event schema in
   Rust and shared serialization fixtures for the frontend. Reject unknown
   execution kinds, unsupported schema versions, duplicate IDs and oversize
