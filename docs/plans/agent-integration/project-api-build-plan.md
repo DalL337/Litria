@@ -189,8 +189,9 @@ The contract machinery compiles into the application, while schemars stays out o
 A fifth plant, an uncapped read, was malformed and failed to compile, so it proved nothing. The overflow-check plant replaced it.
 
 **Platform coverage:**
-- The FIFO test (`cfg(unix)`) and the Unix symlink test run on the Linux and macOS jobs of `rust-tests.yml`, not locally.
+- The FIFO test (`cfg(unix)`) and the Unix symlink test run on the Linux and macOS jobs of `rust-tests.yml`, not locally. Both passed on PR #86: `cargo test (linux-x86_64)` and `cargo test (macos-aarch64)` each reported 390 passed and 3 ignored, and their logs show both tests as `ok`.
 - The Windows junction test ran locally.
+- The Architecture Guard also passed on the PR.
 
 **Security review** (security policy Rule 1: a new command touching the filesystem):
 - `project_api_dev_call` exists only in debug builds.
