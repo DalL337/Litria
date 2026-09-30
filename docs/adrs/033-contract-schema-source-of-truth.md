@@ -2,6 +2,8 @@
 
 ## Status
 
+Amended (2026-09-30 — the owner accepted the three forced lockfile bumps S0 surfaced: `regex-automata` 0.4.18, `regex-syntax` 0.8.11 and `zmij` 1.0.23. Future bumps forced through the shared lockfile are still decided case by case.)
+
 Accepted (2026-09-30 — owner ruling after the S0 spike, PR #84. Adoption starts with the Project API contract and build plan under ADR-031, scheduled separately. The ruling on the three forced lockfile bumps (Consequences) is still open.)
 
 S0 run (2026-09-30 — every §9 acceptance check passed, and all twelve planted mistakes failed a test (brief §11, S0 record). One new cost surfaced: the validator dev-dependency raises three shipped transitive crates through the shared lockfile (see Consequences). Status stays Proposed until the owner rules on acceptance and on those bumps.)
@@ -138,7 +140,7 @@ A successful regeneration alone is not acceptance. If schemars cannot faithfully
 - Boundary types duplicate parts of internal types, and mapping and legacy-translation code is required. This is deliberate.
 - Directional artifacts can double the committed files for types used both ways.
 - schemars 1.x becomes a direct dependency, at least for development, alongside the 0.8 line that Tauri already uses at build time. Two major versions sit in the graph.
-- Dev-dependencies share the one `Cargo.lock` with the shipped build. S0 found that the fixture validator's minimum versions raise shipped transitive crates (`regex-automata`, `regex-syntax`, `zmij`; brief §11). Each such bump needs a decision.
+- Dev-dependencies share the one `Cargo.lock` with the shipped build. S0 found that the fixture validator's minimum versions raise shipped transitive crates (`regex-automata`, `regex-syntax`, `zmij`; brief §11). Each such bump needs a decision; the owner accepted these three on 2026-09-30.
 - Committed generated artifacts add diff volume to reviews.
 - The CI path filter must track the artifact locations; a location added without its path entry escapes the drift check.
 - A declared constraint can still be mis-enforced, for example by counting bytes where JSON Schema counts characters. Only boundary-verdict tests keep them aligned.

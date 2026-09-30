@@ -199,6 +199,7 @@ This also answers the extension sandbox design's open question 4 at the contract
 5. **Drift check scope:** should it classify changes as additive or breaking against the reader rules (§6), or only report that the artifacts changed?
 6. **Production inclusion** *(added by S0)*: S0's contract types are test-only. A family compiled into the application needs either schemars as a normal dependency, or `cfg_attr(test, derive(JsonSchema))` with every `schemars(...)` attribute gated the same way. Decide with the first real family.
 7. **Lockfile coupling** *(added by S0)*: dev-dependencies share the one `Cargo.lock` with the shipped build, so a validator's minimum versions can raise shipped transitive crates (§11, S0 record). Accept such bumps case by case, or choose a validator that does not force them.
+   > **Ruled for S0 (2026-09-30):** the owner accepted the three bumps S0 surfaced (`regex-automata` 0.4.18, `regex-syntax` 0.8.11, `zmij` 1.0.23), keeping jsonschema. Later bumps forced the same way are still decided case by case.
 
 (Serving is settled in §5: the application embeds the committed artifacts. Whether a chosen MCP SDK depends on schemars is a dependency question for that SDK's review.)
 
