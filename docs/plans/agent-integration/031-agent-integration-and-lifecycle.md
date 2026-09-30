@@ -109,3 +109,5 @@ This decision creates no implementation modules, changes no existing domain impo
 ## Implementation Follow-ups
 
 Qualify the initial runtime and cloud/local routes; define module placement and shared contracts; prove login reuse and foreground cancellation; resolve the write and native-reconciliation gates; then produce a build plan with actual platform evidence. The [brief's implementation gates](brief-agent-integration.md#10-implementation-gates-and-unresolved-choices) own the detailed requirements.
+
+> **Note (2026-09-30, owner acceptance on PR #85):** the runtime-independent Project API now precedes runtime qualification. It is contracted in the [Project API contract brief](brief-project-api-contract.md) and sequenced in the [Project API build plan](project-api-build-plan.md). The sequencing change is recorded as an amendment in the brief's §10. Runtime qualification and every external exposure remain gated as above. The decisions of this ADR are unchanged.

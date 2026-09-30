@@ -154,6 +154,16 @@ The Project API defines semantics independently of the model, MCP transport and 
 
 These names are proposed contract targets, not implemented endpoints. Define exact schemas, error codes and measured budgets in the implementation plan. The prior proposal's example limits are provisional. Test a small-context local model; bound work and allocations before constructing large results. Prefer summaries and explicit expansion to full-project exports.
 
+> **Note (2026-09-30, owner acceptance on PR #85):** the read contract is designed in the [Project API contract brief](brief-project-api-contract.md) and sequenced in the [Project API build plan](project-api-build-plan.md), both written against [ADR-033](../../adrs/033-contract-schema-source-of-truth.md). They define:
+> - the two contract families (the external API and the bridge to live owners);
+> - identity and fencing;
+> - the disclosure policy;
+> - the five read operations;
+> - error codes;
+> - provisional budgets, which are measured in build plan P3 and track T.
+>
+> Once each family's artifacts exist, the committed schemas under `src-tauri/contracts/` are the contract of record. The write operations remain direction only (contract brief §13) until their own increment.
+
 ### Reads
 
 - Use live owner snapshots for graph and selection; database rows alone are not current editor context.
@@ -230,6 +240,20 @@ These are prerequisites for a build plan, not completed checks or a schedule.
 Before coding, settle the minimum shared schemas, session/operation storage, installed helper transport, concrete domain/service placement, shutdown deadline and fallback, and the exact native-tool capability set. Revalidate earlier source-inspection findings against the then-current implementation. Preserve the [earlier R1-R9 review](../ideas/brief-project-api-mcp.md#12-adversarial-design-review--2026-09-19) as evidence, not as proof that those issues have been fixed.
 
 A sensible implementation order is to qualify runtime/auth/lifetime first, establish the API identity and read contract, then enable mediated writes and native synchronization as their gates pass. The first useful release must satisfy its advertised cloud/local and lifecycle behavior; unfinished capabilities remain unavailable. A separate build plan should own delivery slices and tests once the runtime spike resolves those choices.
+
+> **Amendment (2026-09-30, owner acceptance on PR #85) — sequencing.** The two paragraphs above no longer set the order for the provider-independent Project API.
+>
+> **What changes.** By owner direction, the runtime-independent parts are built first, before the runtime spike: the Project API's identity, reads, mediated buffer edits and conditional disk writes. The [Project API build plan](project-api-build-plan.md) (its P and W tracks) owns their slices and tests. Their contracts and the service placement are settled in the [contract brief](brief-project-api-contract.md). They can be built and verified without an agent runtime: by Rust tests, JavaScript tests and a debug-only development call.
+>
+> **What is unchanged.** Everything that exposes the API outside the application stays behind the gates in this section:
+> - runtime and platform qualification;
+> - cloud and local model routes;
+> - authentication and persistence;
+> - foreground lifecycle;
+> - the helper transport;
+> - the native-tool capability set.
+>
+> This is the build plan's track T, which becomes its own plan once a runtime is chosen. No P or W slice adds a listener, socket or external process. None reaches users until track T passes. The pre-coding list above still applies to track T.
 
 ## 11. Verification record
 

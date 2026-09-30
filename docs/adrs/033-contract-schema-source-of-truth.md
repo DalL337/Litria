@@ -173,3 +173,8 @@ Numbering note: 031 is held by the agent-integration decision, which by owner di
 1. Run the S0 spike (brief §9), then accept or reopen this decision.
 2. On acceptance, add dated notes to Run build plan S1 and to the extension sandbox design's open question 4. Then write the Project API contract and build plan under ADR-031 against this pipeline.
 3. Resolve the brief's open questions (§10) in S0 or in the first consumer's plan.
+
+> **Progress (2026-09-30, owner acceptance on PR #85):**
+> - Follow-up 2 is done: the [Project API contract brief](../plans/agent-integration/brief-project-api-contract.md) and [build plan](../plans/agent-integration/project-api-build-plan.md) adopt this pipeline for two families, `project-api` and `project-api-bridge`.
+> - Follow-up 3 is done for those families: questions 2, 4, 5 and 6 are answered in the contract brief §12, with dated notes in the schemas brief §10. Question 6 is decided as `cfg_attr(test, …)`, so schemars 1.x stays out of the shipped graph.
+> - The S0 exemplar (`v0`) is retired by build plan P1.
