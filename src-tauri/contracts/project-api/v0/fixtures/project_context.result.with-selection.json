@@ -1,0 +1,33 @@
+{
+  "workspaceEpoch": "ws-12",
+  "projectName": "alice-shop",
+  "selection": [
+    {
+      "nodeId": "node-7f3a",
+      "path": "src/auth.ts"
+    },
+    {
+      "nodeId": "node-group-02"
+    }
+  ],
+  "languages": [
+    {
+      "languageId": "typescript",
+      "documentAccess": true,
+      "diagnostics": true,
+      "navigation": true,
+      "symbols": true,
+      "relationshipDiscovery": true,
+      "sourceTransformations": true
+    },
+    {
+      "languageId": "go",
+      "documentAccess": true,
+      "diagnostics": true,
+      "navigation": false,
+      "symbols": false,
+      "relationshipDiscovery": false,
+      "sourceTransformations": false
+    }
+  ]
+}

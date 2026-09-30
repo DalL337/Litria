@@ -2,6 +2,10 @@ mod blank_project;
 mod build_log;
 mod bundled_runtime;
 mod commands;
+// ADR-033 S0: the contract schema pipeline, proven on illustrative shapes.
+// Test-only until a real contract family adopts it (see contracts/mod.rs).
+#[cfg(test)]
+mod contracts;
 mod crash;
 mod db;
 mod errors;

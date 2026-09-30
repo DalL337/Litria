@@ -1,0 +1,212 @@
+{
+  "family": "project-api",
+  "apiVersion": 0,
+  "fixtures": [
+    {
+      "file": "project_context.request.default.json",
+      "operation": "litria_project_context",
+      "message": "request",
+      "expect": "accept",
+      "note": "Empty object: includeSelection defaults to false."
+    },
+    {
+      "file": "project_context.request.selection.json",
+      "operation": "litria_project_context",
+      "message": "request",
+      "expect": "accept",
+      "note": "Explicit includeSelection."
+    },
+    {
+      "file": "project_context.request.unknown-field.json",
+      "operation": "litria_project_context",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Unknown input field: rejected by deny_unknown_fields and by additionalProperties false."
+    },
+    {
+      "file": "project_context.request.wrong-type.json",
+      "operation": "litria_project_context",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "A string where a boolean is required."
+    },
+    {
+      "file": "files_read.request.minimal.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "source and maxBytesPerDocument take their defaults."
+    },
+    {
+      "file": "files_read.request.disk.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "Every field explicit."
+    },
+    {
+      "file": "files_read.request.null-optional.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "null for an optional field reads as absent."
+    },
+    {
+      "file": "files_read.request.max-length-non-ascii.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "1024 two-byte and 1024 four-byte characters: at maxLength counted in characters, far over it counted in bytes."
+    },
+    {
+      "file": "files_read.request.over-length-ascii.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "1025 ASCII characters: one over maxLength."
+    },
+    {
+      "file": "files_read.request.over-length-non-ascii.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "1025 two-byte characters: one over maxLength in characters."
+    },
+    {
+      "file": "files_read.request.empty-path.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An empty path is under minLength."
+    },
+    {
+      "file": "files_read.request.no-paths.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An empty paths array is under minItems."
+    },
+    {
+      "file": "files_read.request.too-many-paths.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "21 paths: one over maxItems."
+    },
+    {
+      "file": "files_read.request.missing-paths.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "The required field is missing."
+    },
+    {
+      "file": "files_read.request.null-paths.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "null where an array is required."
+    },
+    {
+      "file": "files_read.request.misspelled-field.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "`path` for `paths`: the field-name mistake a caller makes."
+    },
+    {
+      "file": "files_read.request.unknown-source.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An enum value outside the declared set."
+    },
+    {
+      "file": "files_read.request.over-max-bytes.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Fits a u32, so serde accepts it: only the explicit validator (and the schema's maximum) reject it."
+    },
+    {
+      "file": "files_read.request.integer-beyond-2-53.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "2^53 + 1: not representable as a JavaScript number; out of range for the field."
+    },
+    {
+      "generated": "overByteBudget",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "limit": true,
+      "errorCode": "limitExceeded",
+      "note": "20 paths of 1024 four-byte characters: schema-valid, but about 80 KiB encoded, over the 64 KiB byte budget."
+    },
+    {
+      "file": "project_context.result.json",
+      "operation": "litria_project_context",
+      "message": "result",
+      "expect": "accept",
+      "note": "What Rust emits with no selection: the empty selection is omitted."
+    },
+    {
+      "file": "project_context.result.with-selection.json",
+      "operation": "litria_project_context",
+      "message": "result",
+      "expect": "accept",
+      "note": "What Rust emits with a selection; one node has no path, so path is omitted."
+    },
+    {
+      "file": "files_read.result.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "accept",
+      "note": "What Rust emits: every outcome kind."
+    },
+    {
+      "file": "files_read.result.dirty-omitted.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "accept",
+      "note": "A producer may omit dirty (it defaults to false); Rust itself always emits it."
+    },
+    {
+      "file": "files_read.result.additive-field.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "accept",
+      "note": "Unfamiliar output fields: tolerant readers ignore them."
+    },
+    {
+      "file": "files_read.result.unknown-kind.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An unfamiliar outcome kind: Rust rejects it; the JavaScript reader must surface it as unknown."
+    },
+    {
+      "file": "files_read.result.null-id.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "null where an opaque identifier string is required."
+    }
+  ]
+}

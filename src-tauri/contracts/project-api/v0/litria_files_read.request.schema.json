@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesReadRequest",
+  "type": "object",
+  "properties": {
+    "maxBytesPerDocument": {
+      "description": "Per-document text budget in bytes; absent means the server default.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "maximum": 1048576,
+      "minimum": 1
+    },
+    "paths": {
+      "description": "Project-relative paths to read.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 1024,
+        "minLength": 1
+      },
+      "maxItems": 20,
+      "minItems": 1
+    },
+    "source": {
+      "description": "Which text to return. Defaults to the effective (open-buffer) text.",
+      "$ref": "#/$defs/ReadSource",
+      "default": "effective"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "paths"
+  ],
+  "$defs": {
+    "ReadSource": {
+      "description": "Inbound-only, but `Serialize` too: schemars emits a field's `default` only\nwhen it can serialize the default value, and callers should see it.",
+      "oneOf": [
+        {
+          "description": "The open buffer when the document is open, otherwise disk.",
+          "type": "string",
+          "const": "effective"
+        },
+        {
+          "description": "The saved file, even when a dirty buffer exists.",
+          "type": "string",
+          "const": "disk"
+        }
+      ]
+    }
+  }
+}
