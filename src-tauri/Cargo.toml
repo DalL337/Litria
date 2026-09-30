@@ -39,7 +39,9 @@ zip = "2"
 flate2 = "1"
 tar = "0.4"
 
-# ADR-033 S0 (contract schemas) — test-only, nothing ships. schemars derives
+# ADR-033 (contract schemas) — test-only, nothing ships. The contract types
+# compile into the app, but derive JsonSchema only under cfg(test) (Project
+# API contract brief §12, Q6). schemars derives
 # the committed JSON Schema artifacts from the Rust contract types; jsonschema
 # checks fixture verdicts and outbound conformance against them. jsonschema's
 # default features resolve remote `$ref`s over HTTP (reqwest + a TLS stack),
@@ -47,6 +49,12 @@ tar = "0.4"
 [dev-dependencies]
 schemars = "1.2.2"
 jsonschema = { version = "0.58.2", default-features = false }
+
+# Project API bounded reader (contract brief §5): O_NONBLOCK, so a FIFO swapped
+# in after the metadata check cannot hang a read. Already in the lockfile
+# through tauri and portable-pty; this adds a direct edge, not a crate.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 win32job = "2"

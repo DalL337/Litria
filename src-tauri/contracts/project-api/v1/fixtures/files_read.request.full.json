@@ -1,0 +1,14 @@
+{
+  "documents": [
+    {
+      "path": "src/main.ts",
+      "startLine": 10,
+      "endLine": 40
+    },
+    {
+      "path": "README.md"
+    }
+  ],
+  "source": "disk",
+  "maxBytesPerDocument": 262144
+}

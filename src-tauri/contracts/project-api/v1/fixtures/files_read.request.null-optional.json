@@ -1,0 +1,10 @@
+{
+  "documents": [
+    {
+      "path": "a.txt",
+      "startLine": null,
+      "endLine": null
+    }
+  ],
+  "maxBytesPerDocument": null
+}

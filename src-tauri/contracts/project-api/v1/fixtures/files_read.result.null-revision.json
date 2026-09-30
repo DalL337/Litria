@@ -1,0 +1,15 @@
+{
+  "documents": [
+    {
+      "kind": "read",
+      "path": "a.txt",
+      "source": "disk",
+      "dirty": false,
+      "revision": null,
+      "text": "",
+      "totalLines": 0,
+      "truncated": false,
+      "lineCut": false
+    }
+  ]
+}

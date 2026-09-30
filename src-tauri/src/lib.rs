@@ -2,9 +2,11 @@ mod blank_project;
 mod build_log;
 mod bundled_runtime;
 mod commands;
-// ADR-033 S0: the contract schema pipeline, proven on illustrative shapes.
-// Test-only until a real contract family adopts it (see contracts/mod.rs).
-#[cfg(test)]
+// ADR-033 contract types and machinery; schema generation stays test-only.
+// Release builds have no consumer until the Project API's external transport
+// (build plan track T), so they allow the dead code; debug builds use it
+// through the dev-only `project_api_dev_call`.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 mod contracts;
 mod crash;
 mod db;
@@ -14,6 +16,9 @@ mod lsp;
 mod path_guard;
 mod platform;
 mod preferences;
+// ADR-031 Project API service. Same release-build note as `contracts` above.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+mod project_api;
 mod project_ops;
 mod project_tree;
 mod project_types;
@@ -134,6 +139,9 @@ pub fn run() {
             commands::crash_home_dir,
             #[cfg(debug_assertions)]
             commands::crash_test_panic,
+            // Project API — dev builds only, until a transport exists (track T)
+            #[cfg(debug_assertions)]
+            commands::project_api_dev_call,
             // Build logs — scaffold/build diagnostics (not crashes)
             commands::build_log_write,
             commands::build_log_list,

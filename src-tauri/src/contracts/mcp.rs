@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 
 use super::artifacts::{committed_json, CATALOG_FILE};
 use super::catalog::Dispatcher;
+use super::context::CallContext;
 use super::error::{ContractError, ErrorCode};
 
 /// JSON-RPC "Invalid params", which MCP uses for an unknown tool.
@@ -40,8 +41,13 @@ pub(crate) fn tools_list() -> Value {
 }
 
 /// `Ok` is a `CallToolResult`; `Err` is a JSON-RPC error object.
-pub(crate) fn call_tool(dispatcher: &Dispatcher, name: &str, arguments: &[u8]) -> Result<Value, Value> {
-    match dispatcher.dispatch(name, arguments) {
+pub(crate) fn call_tool(
+    dispatcher: &Dispatcher,
+    context: &CallContext,
+    name: &str,
+    arguments: &[u8],
+) -> Result<Value, Value> {
+    match dispatcher.dispatch(context, name, arguments) {
         Ok(value) => Ok(json!({
             "content": [{ "type": "text", "text": value.to_string() }],
             "structuredContent": value,
@@ -67,7 +73,9 @@ mod tests {
     use super::*;
     use crate::contracts::artifacts::{assert_self_contained, validator, ERROR_FILE};
     use crate::contracts::catalog::Operation;
-    use crate::contracts::project_api::{catalog, sample_dispatcher, FilesReadOp, ProjectContextOp};
+    use crate::contracts::context::{Grant, Principal};
+    use crate::contracts::project_api::files_read::FilesReadOp;
+    use crate::contracts::project_api::{catalog, test_dispatcher};
 
     fn tool<'a>(list: &'a Value, name: &str) -> &'a Value {
         list["tools"]
@@ -76,6 +84,14 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == name)
             .unwrap_or_else(|| panic!("tool `{name}` not published"))
+    }
+
+    fn context() -> CallContext {
+        CallContext {
+            principal: Principal::Test,
+            grant: Grant::of([FilesReadOp::CAPABILITY]),
+            epoch: "ws-test".into(),
+        }
     }
 
     #[test]
@@ -102,38 +118,32 @@ mod tests {
     #[test]
     fn successful_calls_return_conforming_structured_content() {
         let list = tools_list();
-        let dispatcher = sample_dispatcher();
-        let calls: [(&str, &[u8]); 3] = [
-            (ProjectContextOp::NAME, b"{}"),
-            (ProjectContextOp::NAME, br#"{"includeSelection":true}"#),
-            (FilesReadOp::NAME, br#"{"paths":["src/auth.ts"],"source":"disk"}"#),
-        ];
-        for (name, arguments) in calls {
-            let result = call_tool(&dispatcher, name, arguments).expect("a tool result");
-            assert_eq!(result["isError"], false, "{name}");
-            let structured = &result["structuredContent"];
-            let output_schema = &tool(&list, name)["outputSchema"];
-            assert!(validator(output_schema).is_valid(structured), "{name}: structuredContent violates outputSchema");
-            // MCP backwards compatibility: the same JSON also as text content.
-            let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-            assert_eq!(&text, structured, "{name}");
-        }
-        // The owner stand-in honours the typed request: a disk read is never dirty.
-        let disk = call_tool(&dispatcher, FilesReadOp::NAME, br#"{"paths":["src/auth.ts"],"source":"disk"}"#).unwrap();
-        for document in disk["structuredContent"]["documents"].as_array().unwrap() {
-            if document["kind"] == "read" {
-                assert_eq!(document["source"], "disk");
-                assert_eq!(document["dirty"], false);
-            }
-        }
+        let result = call_tool(
+            &test_dispatcher(),
+            &context(),
+            FilesReadOp::NAME,
+            br#"{"documents":[{"path":"src/auth.ts"}],"source":"disk"}"#,
+        )
+        .expect("a tool result");
+        assert_eq!(result["isError"], false);
+        let structured = &result["structuredContent"];
+        let output_schema = &tool(&list, FilesReadOp::NAME)["outputSchema"];
+        assert!(validator(output_schema).is_valid(structured), "structuredContent violates outputSchema");
+        // MCP backwards compatibility: the same JSON also as text content.
+        let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(&text, structured);
     }
 
     #[test]
     fn contract_failures_are_tool_errors_without_structured_content() {
-        let dispatcher = sample_dispatcher();
         let error_schema = committed_json(ERROR_FILE);
-        let result = call_tool(&dispatcher, FilesReadOp::NAME, br#"{"paths":["a"],"extra":true}"#)
-            .expect("a tool result, not a protocol error");
+        let result = call_tool(
+            &test_dispatcher(),
+            &context(),
+            FilesReadOp::NAME,
+            br#"{"documents":[{"path":"a"}],"extra":true}"#,
+        )
+        .expect("a tool result, not a protocol error");
         assert_eq!(result["isError"], true);
         assert!(result.get("structuredContent").is_none(), "errors carry no structuredContent");
         let error: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
@@ -142,8 +152,19 @@ mod tests {
     }
 
     #[test]
+    fn a_denied_capability_is_a_tool_error() {
+        let mut context = context();
+        context.grant = Grant::default();
+        let result = call_tool(&test_dispatcher(), &context, FilesReadOp::NAME, br#"{"documents":[{"path":"a"}]}"#)
+            .expect("a tool result");
+        assert_eq!(result["isError"], true);
+        let error: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(error["code"], "denied");
+    }
+
+    #[test]
     fn an_unknown_tool_is_a_protocol_error() {
-        let error = call_tool(&sample_dispatcher(), "litria_nope", b"{}").unwrap_err();
+        let error = call_tool(&test_dispatcher(), &context(), "litria_nope", b"{}").unwrap_err();
         assert_eq!(error["code"], INVALID_PARAMS);
     }
 }

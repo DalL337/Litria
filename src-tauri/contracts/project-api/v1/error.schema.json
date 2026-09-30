@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ContractError",
+  "description": "Request-level failure of a contract operation (Project API contract brief\n§9). Per-item answers — a missing or denied file — are outcomes inside a\nresult, not errors. Adapters map this onto their transport (an MCP\n`isError` result, a JSON-RPC error object) rather than redefining it.\n\nA message never contains file content, a denied path, an absolute path, or\ntext echoed from the caller's input.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/ErrorCode"
+    },
+    "message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "$defs": {
+    "ErrorCode": {
+      "oneOf": [
+        {
+          "description": "The request violates a constraint its inbound schema declares.",
+          "type": "string",
+          "const": "invalidParams"
+        },
+        {
+          "description": "The request exceeds an operational limit that JSON Schema cannot\nexpress (the encoded byte budget).",
+          "type": "string",
+          "const": "limitExceeded"
+        },
+        {
+          "description": "No operation of that name is in the catalog.",
+          "type": "string",
+          "const": "unknownOperation"
+        },
+        {
+          "description": "The caller's grant lacks the operation's capability.",
+          "type": "string",
+          "const": "denied"
+        },
+        {
+          "description": "No workspace is bound, or the session holds a single file only.",
+          "type": "string",
+          "const": "notReady"
+        },
+        {
+          "description": "The workspace changed between attach and answer (the epoch fence).",
+          "type": "string",
+          "const": "workspaceChanged"
+        },
+        {
+          "description": "The frontend bridge has no live listener for this workspace.",
+          "type": "string",
+          "const": "ownerUnavailable"
+        },
+        {
+          "description": "The frontend bridge did not answer before its deadline (P2).",
+          "type": "string",
+          "const": "ownerTimeout"
+        },
+        {
+          "description": "A concurrency ceiling was reached; the call may be retried.",
+          "type": "string",
+          "const": "busy"
+        },
+        {
+          "description": "The caller or Litria cancelled the request (track T).",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "Litria is closing (track T).",
+          "type": "string",
+          "const": "shuttingDown"
+        },
+        {
+          "description": "Any other failure.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    }
+  }
+}

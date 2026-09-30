@@ -1,0 +1,10 @@
+{
+  "documents": [
+    {
+      "kind": "notFound",
+      "path": "a.txt",
+      "movedTo": "b.txt"
+    }
+  ],
+  "servedBy": "future"
+}

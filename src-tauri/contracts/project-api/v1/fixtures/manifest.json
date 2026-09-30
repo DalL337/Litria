@@ -1,0 +1,206 @@
+{
+  "family": "project-api",
+  "apiVersion": 1,
+  "fixtures": [
+    {
+      "file": "files_read.result.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "accept",
+      "note": "Every outcome kind, exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "files_read.request.minimal.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "source, maxBytesPerDocument and startLine take their defaults."
+    },
+    {
+      "file": "files_read.request.full.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "Every field explicit, at the per-document ceiling."
+    },
+    {
+      "file": "files_read.request.null-optional.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "null for an optional field reads as absent."
+    },
+    {
+      "file": "files_read.request.end-before-start.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "Not a request error (cross-field, not schema-expressible): the document returns no lines."
+    },
+    {
+      "file": "files_read.request.invalid-path-syntax.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "Path syntax is answered per item as invalidPath, so schema and boundary both accept the request."
+    },
+    {
+      "file": "files_read.request.max-length-non-ascii.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "1024 four-byte characters: at maxLength in code points. A validator counting bytes rejects it."
+    },
+    {
+      "file": "files_read.request.over-length-ascii.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "One character over maxLength."
+    },
+    {
+      "file": "files_read.request.over-length-non-ascii.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "One four-byte character over maxLength."
+    },
+    {
+      "file": "files_read.request.empty-path.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Below minLength."
+    },
+    {
+      "file": "files_read.request.no-documents.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Below minItems."
+    },
+    {
+      "file": "files_read.request.too-many-documents.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "One over maxItems."
+    },
+    {
+      "file": "files_read.request.missing-documents.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Required field absent."
+    },
+    {
+      "file": "files_read.request.null-documents.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "null where an array is required."
+    },
+    {
+      "file": "files_read.request.unknown-field.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Unknown input field: deny_unknown_fields and additionalProperties false."
+    },
+    {
+      "file": "files_read.request.misspelled-nested-field.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Unknown field inside a document (and path missing)."
+    },
+    {
+      "file": "files_read.request.unknown-source.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Not a ReadSource."
+    },
+    {
+      "file": "files_read.request.integer-beyond-2-53.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An integer beyond 2^53-1 (written as literal JSON so it is not rounded)."
+    },
+    {
+      "file": "files_read.request.start-line-zero.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Lines are 1-based."
+    },
+    {
+      "file": "files_read.request.max-bytes-over-ceiling.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "One byte over the per-document ceiling."
+    },
+    {
+      "file": "files_read.request.max-bytes-zero.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Below the minimum."
+    },
+    {
+      "generated": "overByteBudget",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "limit": true,
+      "errorCode": "limitExceeded",
+      "note": "Schema-valid (every path at maxLength) but over the 64 KiB encoded budget."
+    },
+    {
+      "file": "files_read.result.line-cut-omitted.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "accept",
+      "note": "lineCut is defaulted when read (always written)."
+    },
+    {
+      "file": "files_read.result.additive-field.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "accept",
+      "note": "Outputs are read tolerantly: unknown fields are ignored."
+    },
+    {
+      "file": "files_read.result.unknown-kind.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An unfamiliar outcome kind must never read as a known one."
+    },
+    {
+      "file": "files_read.result.null-revision.json",
+      "operation": "litria_files_read",
+      "message": "result",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Revisions are strings, never null."
+    }
+  ]
+}

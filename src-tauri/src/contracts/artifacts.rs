@@ -17,13 +17,13 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::error::ContractError;
-use super::project_api::{catalog, API_VERSION, FAMILY};
+use super::project_api::{catalog, API_VERSION, FAMILY, STATUS};
 
 pub(crate) const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 pub(crate) const CATALOG_FILE: &str = "catalog.json";
 pub(crate) const ERROR_FILE: &str = "error.schema.json";
 pub(crate) const FIXTURES_DIR: &str = "fixtures";
-const UPDATE_ENV: &str = "LITRIA_UPDATE_CONTRACTS";
+pub(crate) const UPDATE_ENV: &str = "LITRIA_UPDATE_CONTRACTS";
 
 /// What Rust accepts.
 pub(crate) fn inbound_schema<T: JsonSchema>() -> Schema {
@@ -91,7 +91,7 @@ pub(crate) fn generate() -> BTreeMap<String, String> {
         render(&json!({
             "family": FAMILY,
             "apiVersion": API_VERSION,
-            "status": "ADR-033 S0 exemplar: illustrative shapes, not the Project API contract (ADR-031 owns it).",
+            "status": STATUS,
             "error": ERROR_FILE,
             "operations": operations,
         })),
@@ -190,7 +190,7 @@ pub(crate) fn assert_self_contained(name: &str, schema: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::project_api::FilesReadResult;
+    use crate::contracts::project_api::files_read::FilesReadResult;
 
     #[test]
     fn committed_artifacts_match_generation() {
@@ -264,14 +264,14 @@ mod tests {
         }
     }
 
-    /// The directions differ exactly where serde does: `dirty` is defaulted
+    /// The directions differ exactly where serde does: `lineCut` is defaulted
     /// when read, so optional inbound, but always written, so required outbound.
     #[test]
     fn directional_schemas_differ_where_serde_does() {
         let inbound = Value::from(inbound_schema::<FilesReadResult>());
         let outbound = Value::from(outbound_schema::<FilesReadResult>());
-        assert!(!read_variant_requires(&inbound, "dirty"), "inbound should not require `dirty`");
-        assert!(read_variant_requires(&outbound, "dirty"), "outbound should require `dirty`");
+        assert!(!read_variant_requires(&inbound, "lineCut"), "inbound should not require `lineCut`");
+        assert!(read_variant_requires(&outbound, "lineCut"), "outbound should require `lineCut`");
         assert_ne!(inbound, outbound);
     }
 

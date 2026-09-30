@@ -7,7 +7,7 @@ pub(crate) mod types;
 use crate::errors::CommandError;
 use rusqlite::{Connection, DatabaseName, ErrorCode, OpenFlags};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -211,6 +211,12 @@ static PROJECT_DB: OnceLock<Mutex<Option<OpenWorkspace>>> = OnceLock::new();
 
 struct OpenWorkspace {
     epoch: String,
+    /// The canonical project root this epoch was opened for (Project API
+    /// contract brief §4.1). Recorded so the Project API resolves roots from
+    /// Rust's own binding rather than from request arguments. `None` only if
+    /// canonicalizing a root that just opened fails; the API then answers
+    /// `notReady`, and every `db_*` path is unaffected.
+    root: Option<PathBuf>,
     conn: Connection,
 }
 
@@ -267,6 +273,8 @@ pub(crate) fn open_workspace_db(project_root: &Path) -> Result<(bool, String), D
 
     // The epoch is minted and published under the SAME lock that installs the
     // connection, so no request can observe a connection without its identity.
+    // Canonicalize before taking the lock: no filesystem work under it.
+    let root = std::fs::canonicalize(project_root).ok();
     let epoch = mint_epoch();
     let lock = project_db_lock();
     let mut guard = lock
@@ -274,9 +282,19 @@ pub(crate) fn open_workspace_db(project_root: &Path) -> Result<(bool, String), D
         .map_err(|_| "Project database lock poisoned.".to_string())?;
     *guard = Some(OpenWorkspace {
         epoch: epoch.clone(),
+        root,
         conn,
     });
     Ok((read_only, epoch))
+}
+
+/// The open workspace's epoch and canonical root, copied out under the lock
+/// (Project API contract brief §4.1, §4.3). The caller does its file work
+/// after the lock is released and re-checks the epoch before answering; it
+/// never holds this lock across I/O or while waiting on the frontend.
+pub(crate) fn workspace_binding() -> Option<(String, Option<PathBuf>)> {
+    let guard = project_db_lock().lock().ok()?;
+    guard.as_ref().map(|open| (open.epoch.clone(), open.root.clone()))
 }
 
 /// Close the currently open workspace database.
@@ -560,6 +578,29 @@ mod tests {
             .expect_err("the previous session's epoch must stay dead");
         assert_eq!(command_error(err).code(), CODE_WORKSPACE_CHANGED);
         with_workspace_db(&second, |_conn| Ok(())).expect("the current epoch works");
+
+        close_workspace_db().unwrap();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Project API contract brief §4.1: Rust records the canonical root with
+    /// the epoch, clears it on close, and a reopen keeps the root under a new
+    /// epoch.
+    #[test]
+    fn the_binding_records_the_canonical_root_with_its_epoch() {
+        let _serial = serial_guard();
+        let root = temp_dir("binding");
+        let canonical = fs::canonicalize(&root).unwrap();
+
+        let (_ro, first) = open_workspace_db(&root).expect("open");
+        assert_eq!(workspace_binding(), Some((first.clone(), Some(canonical.clone()))));
+
+        close_workspace_db().unwrap();
+        assert_eq!(workspace_binding(), None, "closing clears the binding");
+
+        let (_ro, second) = open_workspace_db(&root).expect("reopen");
+        assert_ne!(first, second);
+        assert_eq!(workspace_binding(), Some((second, Some(canonical))));
 
         close_workspace_db().unwrap();
         fs::remove_dir_all(&root).ok();

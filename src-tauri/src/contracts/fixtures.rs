@@ -14,11 +14,12 @@ use std::fs;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::artifacts::{family_dir, validator, FIXTURES_DIR};
+use super::artifacts::{family_dir, validator, FIXTURES_DIR, UPDATE_ENV};
 use super::boundary::MAX_REQUEST_BYTES;
 use super::catalog::OperationEntry;
 use super::error::ErrorCode;
-use super::project_api::{catalog, API_VERSION, FAMILY, MAX_PATH_LENGTH, MAX_READ_PATHS};
+use super::project_api::files_read::{MAX_DOCUMENTS, MAX_PATH_LENGTH};
+use super::project_api::{catalog, API_VERSION, FAMILY};
 
 const MANIFEST: &str = "manifest.json";
 
@@ -83,8 +84,8 @@ fn generated_fixture(name: &str) -> Vec<u8> {
         // roughly 80 KiB encoded — over the byte budget.
         "overByteBudget" => {
             let path = "😀".repeat(MAX_PATH_LENGTH);
-            let paths = vec![path; MAX_READ_PATHS];
-            let raw = serde_json::to_vec(&serde_json::json!({ "paths": paths })).unwrap();
+            let documents: Vec<_> = (0..MAX_DOCUMENTS).map(|_| serde_json::json!({ "path": path })).collect();
+            let raw = serde_json::to_vec(&serde_json::json!({ "documents": documents })).unwrap();
             assert!(raw.len() > MAX_REQUEST_BYTES, "the fixture must exceed the byte budget");
             raw
         }
@@ -174,7 +175,8 @@ mod outbound {
     use super::*;
     use crate::contracts::artifacts::outbound_schema;
     use crate::contracts::error::ContractError;
-    use crate::contracts::project_api::{samples, FilesReadResult, ProjectContext};
+    use crate::contracts::project_api::files_read::FilesReadResult;
+    use crate::contracts::project_api::samples;
     use schemars::JsonSchema;
     use serde::Serialize;
 
@@ -189,38 +191,35 @@ mod outbound {
         instance
     }
 
-    /// What Rust emits conforms to the outbound schema.
+    /// What Rust emits conforms to the outbound schema, for every outcome kind.
     #[test]
     fn emitted_values_conform_to_their_outbound_schemas() {
-        let without_selection = assert_conforms("project context", &samples::project_context(false));
-        assert!(without_selection.get("selection").is_none(), "an empty selection is omitted");
-        assert_conforms("project context with selection", &samples::project_context(true));
-        assert_conforms("files read", &samples::files_read_result());
+        let files_read = assert_conforms("files read", &samples::files_read_result());
+        let empty = &files_read["documents"][2];
+        assert_eq!(empty["kind"], "read");
+        assert!(empty.get("range").is_none(), "an absent range is omitted");
         assert_conforms(
             "error",
             &ContractError::new(ErrorCode::LimitExceeded, "request is too large"),
         );
     }
 
-    /// The result fixtures the JavaScript suite reads are exactly what Rust
-    /// emits, so JavaScript is tested against real output, not hand-made shapes.
+    /// The committed result fixture is exactly what Rust emits, so readers
+    /// are tested against real output, not hand-made shapes.
     #[test]
     fn result_fixtures_are_what_rust_emits() {
-        let cases: [(&str, Value); 3] = [
-            ("project_context.result.json", serde_json::to_value(samples::project_context(false)).unwrap()),
-            (
-                "project_context.result.with-selection.json",
-                serde_json::to_value(samples::project_context(true)).unwrap(),
-            ),
-            ("files_read.result.json", serde_json::to_value(samples::files_read_result()).unwrap()),
-        ];
-        for (file, emitted) in cases {
-            let text = fs::read_to_string(family_dir().join(FIXTURES_DIR).join(file)).unwrap();
-            let committed: Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(committed, emitted, "{file} differs from what Rust emits");
+        let emitted = serde_json::to_value(samples::files_read_result()).unwrap();
+        let path = family_dir().join(FIXTURES_DIR).join("files_read.result.json");
+        // Regenerated with the schemas, so it can only ever be Rust's output.
+        if std::env::var(UPDATE_ENV).is_ok_and(|value| value == "1") {
+            let mut text = serde_json::to_string_pretty(&emitted).unwrap();
+            text.push('\n');
+            fs::write(&path, text).unwrap();
         }
-        // Round trip: what Rust emits, its own bridge side reads back.
-        let _: ProjectContext = serde_json::from_value(serde_json::to_value(samples::project_context(true)).unwrap()).unwrap();
-        let _: FilesReadResult = serde_json::from_value(serde_json::to_value(samples::files_read_result()).unwrap()).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let committed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(committed, emitted, "files_read.result.json differs from what Rust emits");
+        // Round trip: what Rust emits, a tolerant reader of the contract reads back.
+        let _: FilesReadResult = serde_json::from_value(emitted).unwrap();
     }
 }
