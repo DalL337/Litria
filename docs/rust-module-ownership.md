@@ -25,6 +25,24 @@ Scope: `src-tauri/src/*`
   - Project tree traversal and relative path normalization.
 - `project_types.rs`
   - Shared serializable payload structs for command responses.
+- `contracts/` *(added 2026-09-30, Project API build plan P1)*
+  - ADR-033 contract types and machinery: the three-layer inbound boundary, the
+    typed operation catalog and dispatcher, call contexts, contract errors, and
+    one submodule per contract family (`project_api/`).
+  - Contract types derive `JsonSchema` only under `cfg(test)`; schema
+    generation, drift, fixture and MCP-proof modules are test-only. Committed
+    artifacts live in `src-tauri/contracts/<family>/v<N>/`.
+- `project_api/` *(added 2026-09-30, Project API build plan P1)*
+  - The ADR-031 Project API service behind the `project-api` contract family:
+    the workspace fence, API path validation, the disclosure policy, bounded
+    reads. Design: `docs/plans/agent-integration/brief-project-api-contract.md`.
+  - Calls `path_guard` and `db` directly, never the Tauri command adapters.
+    Its only command adapter today is the debug-only `project_api_dev_call`.
+
+> **Note (2026-09-30):** this document predates the `db`, `lsp`, `crash`,
+> `preferences` and `platform` modules, which define their commands in their
+> own files and are registered directly in `lib.rs`. Only the entries above
+> were refreshed; a full refresh is outstanding.
 
 ## Extension Rules
 1. Add new Tauri commands in `commands.rs` and keep wrappers thin.

@@ -198,6 +198,7 @@ The workspace epoch is **not** returned. The channel is already bound, and expos
 - `notText`;
 - `tooLarge` — with the limit;
 - `invalidPath`;
+- `unreadable` — the file exists but could not be read, for example a lock or a permission failure *(added 2026-09-30 by build plan P1; the list above had no outcome for an I/O failure other than not-found)*;
 - `skipped` — the total response budget ran out before this document.
 
 Per ADR-033 §6, a reader that meets an unfamiliar `kind` treats that one document as unknown and never as `read`.
