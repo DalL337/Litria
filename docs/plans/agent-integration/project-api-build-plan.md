@@ -233,6 +233,9 @@ Codex could not run commands (its sandbox asked for extra authentication), so th
   - delete after open (Windows);
   - a file deleted behind an open handle reads as unlinked (all platforms);
   - the Linux marker.
+- **CI on the fix:** Linux passed 399 and macOS passed 398, each with 3 ignored. Both logs show the unlink-after-open regression test and the direct unlinked-handle test as `ok`, and the Linux log also shows the marker test.
+  - That macOS pass is the first evidence of how `F_GETPATH` behaves for a deleted file.
+  - The Architecture Guard also passed.
 
 **Security review** (security policy Rule 1: a new command touching the filesystem):
 - `project_api_dev_call` exists only in debug builds.
