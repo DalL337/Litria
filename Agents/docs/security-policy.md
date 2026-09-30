@@ -45,6 +45,11 @@ together; compatibility verification does not waive the trust rules below.
   posture statement lists what is NOT covered. User-facing safety claims
   follow the forbidden-claims discipline and get test-enforced where
   possible (ADR-021 §5 and its posture-note test are the model).
+- **Attack your own enforcement code before review** (added 2026-09-30):
+  a slice that creates or changes an enforcement point runs the budgeted
+  [adversarial check](adversarial-check-policy.md) before it is called done.
+  Two high-severity bypasses shipped past tests and planted mistakes in
+  PR #86; that policy records them.
 
 ## Rule 3 — Deliverables
 
