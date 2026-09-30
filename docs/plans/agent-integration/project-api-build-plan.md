@@ -210,6 +210,7 @@ A fifth plant, an uncapped read, was malformed and failed to compile, so it prov
 - `Cargo.lock`: unchanged.
 - Guards: all seven pass.
 - `windows` gains the `Win32_Storage_FileSystem` feature. Another crate already enables it on `windows` 0.61.3, so nothing new compiles.
+- **CI on the fix commits:** Linux and macOS each passed 396 tests with 3 ignored. `a_file_swapped_for_a_symlink_after_resolution_is_denied` passed on both. Every read test there goes through the new post-open path query, so these runs are also the evidence that `/proc/self/fd` (Linux) and `F_GETPATH` (macOS) work.
 
 **Security review** (security policy Rule 1: a new command touching the filesystem):
 - `project_api_dev_call` exists only in debug builds.
