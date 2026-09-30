@@ -15,7 +15,9 @@ pub(crate) const MAX_PATH_LENGTH: usize = 1024;
 /// Generous for any file under the hard cap; explicit so the schema bounds
 /// line numbers and keeps every integer well below 2^53.
 pub(crate) const MAX_LINE_NUMBER: u32 = 16_777_216;
-pub(crate) const MIN_BYTES_PER_DOCUMENT: u32 = 1;
+/// The largest UTF-8 character: budgets are strict, and any budget at least
+/// this large holds one character, so a cut line always makes progress.
+pub(crate) const MIN_BYTES_PER_DOCUMENT: u32 = 4;
 /// Ceiling on the per-document text budget a caller may ask for.
 pub(crate) const MAX_BYTES_PER_DOCUMENT: u32 = 256 * 1024;
 /// The budget when the caller does not ask for one.

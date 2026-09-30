@@ -6,15 +6,21 @@ fn is_mixed_separator_path(value: &str) -> bool {
 }
 
 pub(crate) fn validate_relative_path(relative_path: &str) -> Result<PathBuf, String> {
-    let trimmed = relative_path.trim();
-    if trimmed.is_empty() {
+    validate_relative_path_exact(relative_path.trim())
+}
+
+/// `validate_relative_path` without the trim: whitespace at either end is
+/// part of the name. The Project API resolves exactly what was requested
+/// (" notes.txt" is not "notes.txt"); the legacy commands keep trimming.
+fn validate_relative_path_exact(relative_path: &str) -> Result<PathBuf, String> {
+    if relative_path.is_empty() {
         return Err("Relative path is required.".into());
     }
-    if is_mixed_separator_path(trimmed) {
+    if is_mixed_separator_path(relative_path) {
         return Err("Invalid relative path.".into());
     }
 
-    let rel = Path::new(trimmed);
+    let rel = Path::new(relative_path);
     for component in rel.components() {
         match component {
             Component::Normal(_) => {}
@@ -81,21 +87,24 @@ impl ResolveError {
     }
 }
 
-/// Typed sibling of `resolve_existing_relative_path`: same checks, same
-/// canonical result, but the failure stays an enum.
+/// Typed sibling of `resolve_existing_relative_path`: same checks and the same
+/// canonical result, but the failure stays an enum and the path is taken
+/// EXACTLY as given — no trimming, so the file resolved is the file named.
 pub(crate) fn resolve_existing_relative_path_typed(
     root: &Path,
     relative_path: &str,
 ) -> Result<PathBuf, ResolveError> {
-    let relative = validate_relative_path(relative_path).map_err(ResolveError::Invalid)?;
+    let relative = validate_relative_path_exact(relative_path).map_err(ResolveError::Invalid)?;
     let joined = root.join(relative);
     let canonical_target = fs::canonicalize(&joined).map_err(ResolveError::Io)?;
     ensure_within_root(root, &canonical_target).map_err(|_| ResolveError::OutsideRoot)?;
     Ok(canonical_target)
 }
 
+/// The legacy resolver: trims, then resolves exactly (its messages and
+/// results are unchanged by the typed split).
 pub(crate) fn resolve_existing_relative_path(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
-    resolve_existing_relative_path_typed(root, relative_path).map_err(ResolveError::legacy_message)
+    resolve_existing_relative_path_typed(root, relative_path.trim()).map_err(ResolveError::legacy_message)
 }
 
 pub(crate) fn resolve_relative_path_for_write(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
@@ -264,6 +273,16 @@ mod tests {
         assert!(resolve_existing_relative_path(&root, "missing.txt")
             .unwrap_err()
             .starts_with("Unable to resolve path: "));
+
+        // The typed resolver takes the name exactly; the legacy one trims.
+        assert!(matches!(
+            resolve_existing_relative_path_typed(&root, " present.txt"),
+            Err(ResolveError::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+        assert_eq!(
+            resolve_existing_relative_path(&root, " present.txt").unwrap(),
+            root.join("present.txt")
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

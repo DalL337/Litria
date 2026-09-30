@@ -6,7 +6,7 @@
 
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -34,12 +34,20 @@ pub(crate) enum DiskRead {
 /// Read a project file for the API: syntax, policy, typed resolution, policy
 /// again on the canonical target, then a capped read.
 pub(crate) fn read_disk(root: &Path, path: &str) -> DiskRead {
-    read_disk_with(root, path, HARD_CAP_BYTES, || {})
+    read_disk_with(root, path, HARD_CAP_BYTES, || {}, || {})
 }
 
-/// `read_disk` with the cap and a hook that runs after the handle's checks
-/// and before the read — the window in which a file can grow. Tests use both.
-fn read_disk_with(root: &Path, path: &str, cap: u64, after_checks: impl FnOnce()) -> DiskRead {
+/// `read_disk` with the cap and two hooks for the race windows tests probe:
+/// `before_open` runs between path resolution and the open (a file or parent
+/// can be swapped for a link there); `after_checks` runs between the handle's
+/// checks and the read (a file can grow there).
+fn read_disk_with(
+    root: &Path,
+    path: &str,
+    cap: u64,
+    before_open: impl FnOnce(),
+    after_checks: impl FnOnce(),
+) -> DiskRead {
     if !is_valid_api_path(path) {
         return DiskRead::InvalidPath;
     }
@@ -67,10 +75,22 @@ fn read_disk_with(root: &Path, path: &str, cap: u64, after_checks: impl FnOnce()
         Err(error) => return io_outcome(error.kind()),
     }
     // …then open once, and check the handle, which cannot change underneath us.
+    before_open();
     let file = match open_for_read(&target) {
         Ok(file) => file,
         Err(error) => return io_outcome(error.kind()),
     };
+    // Authorize what was OPENED, not what was resolved earlier: a file or a
+    // parent directory can be swapped for a link between the two (the
+    // classic check/use race). The handle's own path cannot change underneath
+    // us, so containment and the policy run again on it.
+    let Some(opened) = opened_path(&file) else {
+        return DiskRead::Unreadable; // fail closed when the OS cannot say
+    };
+    match canonical_relative(root, &opened) {
+        Some(relative) if classify(&relative) != Class::Denied => {}
+        _ => return DiskRead::Denied,
+    }
     let metadata = match file.metadata() {
         Ok(metadata) => metadata,
         Err(error) => return io_outcome(error.kind()),
@@ -116,6 +136,68 @@ fn open_for_read(path: &Path) -> std::io::Result<File> {
 #[cfg(not(unix))]
 fn open_for_read(path: &Path) -> std::io::Result<File> {
     File::open(path)
+}
+
+/// The path of the object an open handle refers to, as the OS resolves it
+/// now — links already followed. Implementation-policy Rule 2: one `#[cfg]`
+/// per platform; anything else fails closed (`None`).
+#[cfg(windows)]
+fn opened_path(file: &File) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED};
+
+    let handle = HANDLE(file.as_raw_handle());
+    let mut buffer = vec![0u16; 512];
+    // At most two calls: the first reports the size needed if it is too small.
+    for _ in 0..2 {
+        // SAFETY: `handle` belongs to `file`, which outlives the call, and the
+        // slice passes its own length. FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
+        // (both 0) is the form `fs::canonicalize` produces, so the result is
+        // comparable with the canonical root.
+        let length = unsafe { GetFinalPathNameByHandleW(handle, &mut buffer, FILE_NAME_NORMALIZED) } as usize;
+        if length == 0 {
+            return None;
+        }
+        if length < buffer.len() {
+            buffer.truncate(length);
+            return Some(PathBuf::from(OsString::from_wide(&buffer)));
+        }
+        buffer.resize(length + 1, 0);
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn opened_path(file: &File) -> Option<PathBuf> {
+    use std::os::unix::io::AsRawFd;
+    fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn opened_path(file: &File) -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+
+    const MAXPATHLEN: usize = 1024; // <sys/param.h>; F_GETPATH requires it
+    let mut buffer = [0 as libc::c_char; MAXPATHLEN];
+    // SAFETY: F_GETPATH writes a NUL-terminated path of at most MAXPATHLEN
+    // bytes into `buffer`, which lives across the call.
+    let status = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) };
+    if status == -1 {
+        return None;
+    }
+    // SAFETY: on success the buffer holds a NUL-terminated string.
+    let path = unsafe { CStr::from_ptr(buffer.as_ptr()) };
+    Some(PathBuf::from(OsStr::from_bytes(path.to_bytes())))
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn opened_path(_file: &File) -> Option<PathBuf> {
+    None
 }
 
 fn io_outcome(kind: ErrorKind) -> DiskRead {
@@ -165,15 +247,27 @@ pub(crate) struct Slice {
     pub line_cut: bool,
 }
 
-/// Slice lines `start..=end` of `text` within `budget` UTF-8 bytes.
+/// Lines as `split_inclusive('\n')` yields them, counted without collecting:
+/// a file of newlines must not cost a slice per line (Codex review finding 3).
+fn count_lines(text: &str) -> u32 {
+    let newlines = text.bytes().filter(|byte| *byte == b'\n').count();
+    let partial_last = usize::from(!text.is_empty() && !text.ends_with('\n'));
+    (newlines + partial_last) as u32
+}
+
+/// Slice lines `start..=end` of `text` within `budget` UTF-8 bytes. The
+/// budget is strict: nothing returned ever exceeds it.
 ///
 /// Lines keep their terminators, so text is returned as stored. A read that
 /// does not fit stops at a line boundary (`truncated`). If the FIRST line
-/// alone exceeds the budget, it is cut at a character boundary (`lineCut`),
-/// keeping at least one character, so every read makes progress (brief §5).
+/// alone exceeds the budget, it is cut at a character boundary (`lineCut`).
+/// If not even one character fits, nothing is returned (`range: None`,
+/// `truncated`); callers keep every budget at least `MIN_BYTES_PER_DOCUMENT`
+/// (the largest UTF-8 character) where progress is owed (brief §5).
+///
+/// Memory: O(returned text). Lines are walked by iterator, never collected.
 pub(crate) fn slice(text: &str, start_line: u32, end_line: Option<u32>, budget: usize) -> Slice {
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let total_lines = lines.len() as u32;
+    let total_lines = count_lines(text);
     let start = start_line.max(1);
     let end = end_line.unwrap_or(total_lines).min(total_lines);
     let empty = |truncated| Slice {
@@ -187,13 +281,17 @@ pub(crate) fn slice(text: &str, start_line: u32, end_line: Option<u32>, budget: 
         return empty(false);
     }
 
-    let wanted = &lines[(start - 1) as usize..end as usize];
-    let first = wanted[0];
+    let mut wanted = text
+        .split_inclusive('\n')
+        .skip((start - 1) as usize)
+        .take((end - start + 1) as usize);
+    let Some(first) = wanted.next() else {
+        return empty(false);
+    };
     if first.len() > budget {
-        let mut cut = floor_char_boundary(first, budget);
+        let cut = floor_char_boundary(first, budget);
         if cut == 0 {
-            // Keep at least one character even if it overshoots a tiny budget.
-            cut = first.chars().next().map_or(0, char::len_utf8);
+            return empty(true);
         }
         return Slice {
             text: first[..cut].to_owned(),
@@ -204,8 +302,8 @@ pub(crate) fn slice(text: &str, start_line: u32, end_line: Option<u32>, budget: 
         };
     }
 
-    let mut out = String::new();
-    let mut last = start - 1;
+    let mut out = String::from(first);
+    let mut last = start;
     for line in wanted {
         if out.len() + line.len() > budget {
             break;
@@ -263,7 +361,7 @@ mod tests {
         let root = temp_root("cap");
         fs::write(root.join("big.txt"), "0123456789ABCDEF!").unwrap(); // 17 bytes
         let reached_read = Cell::new(false);
-        let outcome = read_disk_with(&root, "big.txt", 16, || reached_read.set(true));
+        let outcome = read_disk_with(&root, "big.txt", 16, || {}, || reached_read.set(true));
         assert_eq!(outcome, DiskRead::TooLarge);
         assert!(!reached_read.get(), "the size check refuses before reading");
         let _ = fs::remove_dir_all(&root);
@@ -276,7 +374,7 @@ mod tests {
         let root = temp_root("grow");
         let path = root.join("grow.txt");
         fs::write(&path, "0123456789").unwrap(); // 10 bytes, under the cap
-        let outcome = read_disk_with(&root, "grow.txt", 16, || {
+        let outcome = read_disk_with(&root, "grow.txt", 16, || {}, || {
             let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
             file.write_all(b"much more than six more bytes").unwrap();
         });
@@ -378,6 +476,131 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    // --- replacement races (Codex review of PR #86, finding 1) --------------
+    //
+    // The path is authorized, then something swaps a parent directory or the
+    // file itself for a link BEFORE the open. The reader must authorize what
+    // it actually opened, not the path it resolved earlier.
+
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J");
+    }
+
+    /// Windows: `sub/` is swapped for a junction into `.git` after `sub/config`
+    /// was resolved and authorized.
+    #[cfg(windows)]
+    #[test]
+    fn a_parent_swapped_for_a_junction_after_resolution_is_denied() {
+        let root = temp_root("race-parent");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/config"), "allowed\n").unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/config"), "SECRET\n").unwrap();
+        let outcome = read_disk_with(
+            &root,
+            "sub/config",
+            HARD_CAP_BYTES,
+            || {
+                fs::rename(root.join("sub"), root.join("sub-real")).unwrap();
+                junction(&root.join("sub"), &root.join(".git"));
+            },
+            || {},
+        );
+        fs::remove_dir(root.join("sub")).unwrap(); // the junction itself
+        assert_eq!(outcome, DiskRead::Denied, "read through a swapped-in junction");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Windows: the same swap, into a directory OUTSIDE the project.
+    #[cfg(windows)]
+    #[test]
+    fn a_parent_swapped_for_a_junction_outside_the_project_is_denied() {
+        let root = temp_root("race-outside");
+        let outside = temp_root("race-outside-target");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/notes.txt"), "allowed\n").unwrap();
+        fs::write(outside.join("notes.txt"), "OUTSIDE\n").unwrap();
+        let outcome = read_disk_with(
+            &root,
+            "sub/notes.txt",
+            HARD_CAP_BYTES,
+            || {
+                fs::rename(root.join("sub"), root.join("sub-real")).unwrap();
+                junction(&root.join("sub"), &outside);
+            },
+            || {},
+        );
+        fs::remove_dir(root.join("sub")).unwrap();
+        assert_eq!(outcome, DiskRead::Denied, "read outside the project through a swapped-in junction");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    /// Unix: the file itself is swapped for a symlink to a denied file, and
+    /// (second case) to a file outside the project.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_swapped_for_a_symlink_after_resolution_is_denied() {
+        let root = temp_root("race-file");
+        let outside = temp_root("race-file-outside");
+        fs::write(root.join("notes.txt"), "allowed\n").unwrap();
+        fs::write(root.join(".env"), "SECRET=1\n").unwrap();
+        fs::write(outside.join("secret.txt"), "OUTSIDE\n").unwrap();
+        for target in [root.join(".env"), outside.join("secret.txt")] {
+            fs::write(root.join("notes.txt"), "allowed\n").unwrap();
+            let outcome = read_disk_with(
+                &root,
+                "notes.txt",
+                HARD_CAP_BYTES,
+                || {
+                    fs::remove_file(root.join("notes.txt")).unwrap();
+                    std::os::unix::fs::symlink(&target, root.join("notes.txt")).unwrap();
+                },
+                || {},
+            );
+            assert_eq!(outcome, DiskRead::Denied, "read through a swapped-in link to {}", target.display());
+            fs::remove_file(root.join("notes.txt")).unwrap();
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    // --- exact names (Codex review finding 2) -------------------------------
+
+    /// A leading space is part of the filename. The API reads exactly what
+    /// was requested, never a trimmed neighbour.
+    #[test]
+    fn leading_whitespace_selects_exactly_that_file() {
+        let root = temp_root("exact");
+        fs::write(root.join("notes.txt"), "plain\n").unwrap();
+        fs::write(root.join(" notes.txt"), "spaced\n").unwrap();
+        let DiskRead::Text { text, .. } = read_disk(&root, " notes.txt") else { panic!() };
+        assert_eq!(text, "spaced\n");
+        let DiskRead::Text { text, .. } = read_disk(&root, "notes.txt") else { panic!() };
+        assert_eq!(text, "plain\n");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// ` .env` is a different (missing) file. The answer must not depend on
+    /// whether the denied `.env` exists, or existence would leak.
+    #[test]
+    fn a_whitespace_prefixed_denied_name_does_not_reveal_existence() {
+        let root = temp_root("exact-denied");
+        let absent = read_disk(&root, " .env");
+        fs::write(root.join(".env"), "SECRET=1\n").unwrap();
+        let present = read_disk(&root, " .env");
+        assert_eq!(absent, present, "the answer changed with the denied file's existence");
+        assert_eq!(present, DiskRead::NotFound);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     // --- slicing -----------------------------------------------------------
 
     #[test]
@@ -419,8 +642,32 @@ mod tests {
         assert!(cut.text.chars().all(|c| c == 'é'), "cut at a character boundary");
         let next = slice(&long, 2, None, 256 * 1024);
         assert_eq!(next.text, "next\n");
-        // Even a budget smaller than one character returns that character.
-        let tiny = slice("😀😀\n", 1, None, 1);
-        assert_eq!((tiny.text.as_str(), tiny.line_cut), ("😀", true));
+    }
+
+    /// Budgets are strict (Codex review finding 4): a character that does not
+    /// fit is not returned, whatever its size.
+    #[test]
+    fn a_character_that_does_not_fit_the_budget_is_not_returned() {
+        let tiny = slice("😀😀\n", 1, None, 3);
+        assert!(tiny.text.len() <= 3, "returned {} bytes against a 3-byte budget", tiny.text.len());
+        assert_eq!((tiny.range, tiny.truncated), (None, true), "nothing fit, and it says so");
+        let exact = slice("😀😀\n", 1, None, 4);
+        assert_eq!((exact.text.as_str(), exact.line_cut), ("😀", true));
+    }
+
+    /// Codex review finding 3: many short lines are counted and sliced
+    /// without a per-line allocation, and the answers stay exact.
+    #[test]
+    fn many_short_lines_slice_correctly() {
+        let text = "\n".repeat(1_000_000) + "last";
+        let tail = slice(&text, 1_000_000, None, 1024);
+        assert_eq!(tail.total_lines, 1_000_001);
+        assert_eq!((tail.text.as_str(), tail.range, tail.truncated), ("\nlast", Some((1_000_000, 1_000_001)), false));
+        let head = slice(&text, 1, Some(3), 1024);
+        assert_eq!((head.text.as_str(), head.range), ("\n\n\n", Some((1, 3))));
+        assert_eq!(count_lines(""), 0);
+        assert_eq!(count_lines("\n"), 1);
+        assert_eq!(count_lines("a\nb"), 2);
+        assert_eq!(count_lines("a\nb\n"), 2);
     }
 }

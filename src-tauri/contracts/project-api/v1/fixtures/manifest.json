@@ -164,6 +164,21 @@
       "note": "Below the minimum."
     },
     {
+      "file": "files_read.request.max-bytes-below-minimum.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Below 4 bytes, the largest UTF-8 character: budgets are strict, so a smaller one could return nothing."
+    },
+    {
+      "file": "files_read.request.max-bytes-at-minimum.json",
+      "operation": "litria_files_read",
+      "message": "request",
+      "expect": "accept",
+      "note": "Exactly the largest UTF-8 character."
+    },
+    {
       "generated": "overByteBudget",
       "operation": "litria_files_read",
       "message": "request",

@@ -12,7 +12,7 @@ use crate::contracts::context::CallContext;
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::files_read::{
     DocumentOutcome, DocumentRequest, DocumentSource, FilesReadRequest, FilesReadResult, LineRange, ReadSource,
-    DEFAULT_BYTES_PER_DOCUMENT,
+    DEFAULT_BYTES_PER_DOCUMENT, MIN_BYTES_PER_DOCUMENT,
 };
 
 /// Raw text returned per response, across all documents (brief §10).
@@ -99,8 +99,10 @@ pub(crate) fn read_documents(root: &Path, request: &FilesReadRequest, ceiling: u
     FilesReadResult { documents }
 }
 
-/// A `read` outcome no larger than `room` encoded bytes, or `None`. With
-/// `shrink`, the text budget halves until it fits; one character always does.
+/// A `read` outcome within `budget` raw bytes and `room` encoded bytes, or
+/// `None` (the caller answers `skipped`). With `shrink`, the budget halves
+/// until the outcome fits, but never below `MIN_BYTES_PER_DOCUMENT` — the
+/// largest UTF-8 character — so the first document always returns something.
 fn fit_read(
     document: &DocumentRequest,
     text: &str,
@@ -109,8 +111,13 @@ fn fit_read(
     room: usize,
     shrink: bool,
 ) -> Option<DocumentOutcome> {
+    let floor = MIN_BYTES_PER_DOCUMENT as usize;
     loop {
         let slice = reader::slice(text, document.start_line.unwrap_or(1), document.end_line, budget);
+        if slice.range.is_none() && slice.truncated {
+            // Lines were wanted but not one character fits the budget left.
+            return None;
+        }
         let outcome = DocumentOutcome::Read {
             path: document.path.clone(),
             source: DocumentSource::Disk,
@@ -125,10 +132,10 @@ fn fit_read(
         if encoded_len(&outcome) <= room {
             return Some(outcome);
         }
-        if !shrink || budget <= 1 {
+        if !shrink || budget <= floor {
             return None;
         }
-        budget /= 2;
+        budget = (budget / 2).max(floor);
     }
 }
 
@@ -221,6 +228,31 @@ mod tests {
         let paths: Vec<&str> = names.iter().map(String::as_str).collect();
         let result = read_documents(&root, &request(&paths, Some(64 * 1024)), MAX_RESPONSE_BYTES);
         assert_eq!(kinds(&result), ["read", "read", "read", "read", "skipped", "skipped"]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Codex review finding 4: 262,143 ASCII bytes leave 1 byte of the
+    /// response budget; a following emoji must be skipped, not squeezed in.
+    #[test]
+    fn the_response_text_budget_is_never_exceeded_by_a_multibyte_character() {
+        let root = temp_root("multibyte");
+        fs::write(root.join("big.txt"), "a".repeat(MAX_TEXT_PER_RESPONSE - 1)).unwrap();
+        fs::write(root.join("emoji.txt"), "😀").unwrap();
+        let result = read_documents(
+            &root,
+            &request(&["big.txt", "emoji.txt"], Some(256 * 1024)),
+            MAX_RESPONSE_BYTES,
+        );
+        let returned: usize = result
+            .documents
+            .iter()
+            .map(|document| match document {
+                DocumentOutcome::Read { text, .. } => text.len(),
+                _ => 0,
+            })
+            .sum();
+        assert!(returned <= MAX_TEXT_PER_RESPONSE, "{returned} bytes against {MAX_TEXT_PER_RESPONSE}");
+        assert_eq!(kinds(&result), ["read", "skipped"]);
         let _ = fs::remove_dir_all(&root);
     }
 

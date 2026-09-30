@@ -1,0 +1,8 @@
+{
+  "documents": [
+    {
+      "path": "a"
+    }
+  ],
+  "maxBytesPerDocument": 4
+}

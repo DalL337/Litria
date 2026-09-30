@@ -21,7 +21,7 @@
       "format": "uint32",
       "default": null,
       "maximum": 262144,
-      "minimum": 1
+      "minimum": 4
     },
     "source": {
       "description": "Which text to return. Defaults to the effective text.",

@@ -58,7 +58,10 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 win32job = "2"
-windows = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Win32_Storage_FileSystem: GetFinalPathNameByHandleW for the Project API
+# reader's post-open check (already enabled on windows 0.61.3 by another
+# crate in the graph, so it compiles nothing new).
+windows = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Storage_FileSystem"] }
 # Crash system hook #4 (WebView2 ProcessFailed). These MUST stay on the same
 # versions tauri/wry pin (webview2-com 0.38 / windows-core 0.61) or the COM
 # wrapper types from with_webview won't unify. Re-check on tauri bumps:
