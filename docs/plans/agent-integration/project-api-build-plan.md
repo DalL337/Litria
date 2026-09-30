@@ -212,6 +212,28 @@ A fifth plant, an uncapped read, was malformed and failed to compile, so it prov
 - `windows` gains the `Win32_Storage_FileSystem` feature. Another crate already enables it on `windows` 0.61.3, so nothing new compiles.
 - **CI on the fix commits:** Linux and macOS each passed 396 tests with 3 ignored. `a_file_swapped_for_a_symlink_after_resolution_is_denied` passed on both. Every read test there goes through the new post-open path query, so these runs are also the evidence that `/proc/self/fd` (Linux) and `F_GETPATH` (macOS) work.
 
+**Re-review by Codex (2026-09-30, commit `b85b6f0`).** Codex confirmed the three medium fixes and raised one more high finding. On Linux, `/proc/self/fd` reports an unlinked file as `<path> (deleted)`. That name matches no deny rule, while the open handle still reads the contents.
+
+Codex could not run commands (its sandbox asked for extra authentication), so the finding was reproduced here:
+- **Environment:** Docker Desktop, image `rust:1-bookworm`, kernel `6.6.87.2-microsoft-standard-WSL2`.
+- **Code under test:** the real `path_guard`, `project_tree`, `project_types`, `paths`, `policy` and `reader` modules, copied unmodified (verified with `cmp`) into a throwaway crate.
+- **Kernel behavior:** a shell check showed `readlink` returning `…/.env (deleted)` after the unlink, while the handle still read the secret.
+- **The reader:** the new test `a_denied_file_unlinked_after_opening_is_still_withheld` returned the `.env` contents against the unfixed reader.
+
+**Fix.** After the path query, the reader checks that the opened object still has a name, and fails closed (`unreadable`) if it has none. Brief §5 step 3 records this.
+- On Unix it checks for a link count of 0, and on Linux also for the ` (deleted)` marker.
+- **Windows** gets the equivalent check (`NumberOfLinks` of 0, or `DeletePending`). This came from our own analysis while fixing: with POSIX delete semantics, a deleted file's path moves to `\$Extend\$Deleted\…`, which is inside a project stored at a drive root.
+
+**Results after the fix:**
+- Linux, in the same container: all 42 tests of the copied modules pass, including the one that failed before the fix.
+- Windows: `cargo test` gives 405 passed and 3 ignored.
+- `cargo check --release`: zero warnings.
+- New tests:
+  - unlink after open, for `.env` and a `.pem` (Unix);
+  - delete after open (Windows);
+  - a file deleted behind an open handle reads as unlinked (all platforms);
+  - the Linux marker.
+
 **Security review** (security policy Rule 1: a new command touching the filesystem):
 - `project_api_dev_call` exists only in debug builds.
 - It reads nothing the webview cannot already read through `read_project_file`.
