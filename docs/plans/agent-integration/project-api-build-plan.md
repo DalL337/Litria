@@ -193,6 +193,24 @@ A fifth plant, an uncapped read, was malformed and failed to compile, so it prov
 - The Windows junction test ran locally.
 - The Architecture Guard also passed on the PR.
 
+**Peer review by Codex (2026-09-30, commit `c03d22e`).** Codex reported four findings. Each was verified with a reproduction test written against the unfixed code before anything changed:
+
+| Finding | Verified | Fix |
+|---|---|---|
+| **High.** The reader authorized the resolved path and then opened it separately, so a file or parent swapped for a link in between was read. | **Reproduced** on Windows: with `sub/` swapped for a junction into `.git`, the read returned `.git/config`'s content; a junction to a directory outside the project returned the outside file. (The Unix symlink variant runs in CI.) | After opening, the reader asks the handle for its real path (`GetFinalPathNameByHandleW`, `/proc/self/fd`, `F_GETPATH`; any other platform fails closed) and repeats containment and the policy on it. Brief §5 step 3 and §6 are amended. |
+| **Medium.** The typed resolver reused the legacy validator, which trims. | **Reproduced:** `" notes.txt"` returned `notes.txt`'s content. `" .env"` answered `denied` or `notFound` depending on whether `.env` existed, leaking existence. | The typed resolver takes names exactly. The legacy resolver trims first and then delegates, so its results and messages are unchanged (tested). |
+| **Medium.** Slicing collected every line into a `Vec<&str>`. | Confirmed from the code: 16 bytes per line, so an 8 MiB file of newlines costs about 128 MiB. | Lines are counted and walked by iterator, and memory is proportional to the returned text. A new test covers a million short lines. |
+| **Medium.** One character was kept even when it exceeded the budget. | **Reproduced:** 4 bytes were returned against a 3-byte budget, and 262,147 bytes against the 262,144-byte response budget. | Budgets are strict. The minimum per-document budget rises from 1 to 4 bytes, the largest UTF-8 character, which changes the contract schema and adds two fixtures. A later document whose next character cannot fit is `skipped`. |
+
+**Checks after the fixes:**
+- `cargo test`: 403 passed, 3 ignored. That is the 396 above plus 7 new tests that run on Windows; the Unix race test runs in CI.
+- Contract tests: 25 pass.
+- `cargo build` and `cargo check --release`: zero warnings.
+- Host normal graph: identical.
+- `Cargo.lock`: unchanged.
+- Guards: all seven pass.
+- `windows` gains the `Win32_Storage_FileSystem` feature. Another crate already enables it on `windows` 0.61.3, so nothing new compiles.
+
 **Security review** (security policy Rule 1: a new command touching the filesystem):
 - `project_api_dev_call` exists only in debug builds.
 - It reads nothing the webview cannot already read through `read_project_file`.
@@ -201,6 +219,8 @@ A fifth plant, an uncapped read, was malformed and failed to compile, so it prov
 Residual risks:
 - The policy's denied list is not a confidentiality guarantee (brief §6).
 - A FIFO swapped in between the stat and the non-blocking open is answered as `notFile`. On Windows, named pipes are not reachable through project paths.
+- A hard link to a denied file under an allowed name is read like a copy of that file (brief §6).
+- Platforms other than Windows, Linux and macOS fail closed (`unreadable`), because they have no post-open path query.
 
 ## P2. Owner bridge and effective reads
 
