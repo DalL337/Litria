@@ -1,6 +1,6 @@
 # Project API contract: operations, identity and the owner bridge
 
-**Status:** Proposed design brief (2026-09-30; revised the same day after peer review by Codex, see §16). No code yet; the [build plan](project-api-build-plan.md) owns delivery.
+**Status:** Accepted design brief (2026-09-30 — owner ruling on PR #85). Proposed 2026-09-30 and revised the same day after peer review by Codex (§16). No code yet; the [build plan](project-api-build-plan.md) owns delivery.
 **Decision records:** [ADR-031](031-agent-integration-and-lifecycle.md) owns the Project API's semantics. [ADR-033](../../adrs/033-contract-schema-source-of-truth.md) owns how its contracts are written and checked. [ADR-032](../../adrs/032-workspace-epoch-fencing-and-write-truthfulness.md) owns the workspace epoch.
 **Parent design:** [agent integration brief §7](brief-agent-integration.md#7-project-api-and-mcp-contract), which names the tool family and asks for "exact schemas, error codes and measured budgets" in implementation planning. This brief makes the read half of §7 implementable. Where §7 and this brief disagree, §7 wins until it is amended.
 **Owner direction (2026-09-29/30):** build order is contract → bounded reads → one version-checked buffer edit → conditional disk writes and receipts. `litria_files_search` stays in the first read set.

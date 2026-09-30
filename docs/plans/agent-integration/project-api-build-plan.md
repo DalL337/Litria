@@ -1,6 +1,6 @@
 # Project API build plan
 
-Status: Proposed, 2026-09-30; revised the same day with the brief after peer review by Codex. **All slices are pending. No code has been delivered.**
+Status: Accepted, 2026-09-30 (owner ruling on PR #85). Proposed the same day and revised with the brief after peer review by Codex. **All slices are pending. No code has been delivered.**
 
 Decisions: [ADR-031](031-agent-integration-and-lifecycle.md) (semantics), [ADR-033](../../adrs/033-contract-schema-source-of-truth.md) (contract pipeline), [ADR-032](../../adrs/032-workspace-epoch-fencing-and-write-truthfulness.md) (workspace epoch).
 Canonical contract design: [Project API contract brief](brief-project-api-contract.md). Parent design: [agent integration brief](brief-agent-integration.md).
@@ -374,7 +374,9 @@ Then:
 
 A separate plan owns these once a runtime is chosen. No P or W slice may add a listener, socket or external process.
 
-## On acceptance of the brief
+## Acceptance record
+
+Done on acceptance (2026-09-30, PR #85). The items below are kept as written:
 
 - **Amend the [agent integration brief §10](brief-agent-integration.md#10-implementation-gates-and-unresolved-choices) sequencing explicitly**, with a dated addendum. Its closing paragraphs list choices to settle "before coding" (including the helper transport and the native-tool capability set). They also put runtime qualification first in the "sensible implementation order", and place the build plan after the runtime spike. The owner's direction now builds the runtime-independent Project API (the P and W tracks) first, while every external exposure stays behind the qualification gates (track T). A pointer under §7 would leave that conflict standing.
 - Add dated pointer notes to:
