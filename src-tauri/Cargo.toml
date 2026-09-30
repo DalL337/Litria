@@ -39,6 +39,15 @@ zip = "2"
 flate2 = "1"
 tar = "0.4"
 
+# ADR-033 S0 (contract schemas) — test-only, nothing ships. schemars derives
+# the committed JSON Schema artifacts from the Rust contract types; jsonschema
+# checks fixture verdicts and outbound conformance against them. jsonschema's
+# default features resolve remote `$ref`s over HTTP (reqwest + a TLS stack),
+# which MCP forbids by default and these tests never need — keep them off.
+[dev-dependencies]
+schemars = "1.2.2"
+jsonschema = { version = "0.58.2", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 win32job = "2"
 windows = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

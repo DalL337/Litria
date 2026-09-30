@@ -485,6 +485,13 @@ lands as its own effort well before extensions, and the sandbox window simply ri
    converge on one registry serving menus + keys + widgets. Needs its own consolidation pass.
 4. **IDL format** — actual WIT, or a plainer schema file feeding the codegen? Decide when the
    walking skeleton starts; the commitment is to *an* IDL, not a specific one.
+   > **Answered at the contract layer (2026-09-30, ADR-033 accepted):** the interface definition
+   > is the Rust contract types plus an exported operation catalog. JSON Schema 2020-12 is
+   > generated from them, and the shim and author declarations derive from those artifacts. WIT
+   > was not chosen. Dispatch stays hand-written but is bound to the catalog by typed
+   > registration. See [ADR-033](../../adrs/033-contract-schema-source-of-truth.md) and the
+   > [contract schemas brief §7](../contracts/brief-contract-schemas.md#7-operation-catalog).
+   > Open question 6 (`engines.litria`) stays with this design.
 5. **Event topic taxonomy** — the initial sketch needs a pass against real extension use cases
    before it calcifies into the IDL.
 6. **Broker API versioning** — `engines.litria` semantics when the capability vocabulary grows;

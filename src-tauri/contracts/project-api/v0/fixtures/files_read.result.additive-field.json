@@ -1,0 +1,19 @@
+{
+  "documents": [
+    {
+      "kind": "read",
+      "path": "src/auth.ts",
+      "documentId": "doc-9007199254740993",
+      "revision": "rev-42",
+      "source": "editor",
+      "dirty": true,
+      "text": "export function signIn() {}\n",
+      "encoding": "utf-8"
+    },
+    {
+      "kind": "notFound",
+      "path": "src/missing.ts"
+    }
+  ],
+  "truncated": false
+}

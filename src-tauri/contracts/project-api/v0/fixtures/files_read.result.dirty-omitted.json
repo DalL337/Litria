@@ -1,0 +1,12 @@
+{
+  "documents": [
+    {
+      "kind": "read",
+      "path": "src/auth.ts",
+      "documentId": "doc-1",
+      "revision": "rev-1",
+      "source": "editor",
+      "text": "x\n"
+    }
+  ]
+}
