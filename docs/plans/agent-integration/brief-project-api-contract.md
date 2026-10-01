@@ -189,6 +189,10 @@ Rules:
 >   - loaded on first use and replaced when Preferences saves the key; a hand edit of the preferences file applies on the next launch;
 >   - the context summary lists the class while anything is withheld, never the patterns.
 > - **`.gitignore` joins the unindexed side (Q2; §7.3 addendum).** It narrows what search enumerates and is never a disclosure rule. Ignored files stay readable by explicit path. It cannot widen access: the policy decides first, so a `!` pattern re-includes nothing the policy withholds or leaves unindexed. Reading `.gitignore` files is the first policy input taken from the repository, and it can only narrow search.
+>
+> **Corrected (2026-10-01, peer review by Codex, branch `fix/codex-review-1`).** Two fixes to the addendum above. Both were reproduced on `main` (84d5e6e) and verified fixed (build plan, "Peer review of the gate work").
+> - **The user's preference fails closed.** If `apiWithheldPaths` exists but cannot be used, **everything is withheld** until it is fixed, and the summary names the class. That covers a preferences file that cannot be read or parsed, a value that is not text, an invalid pattern, and an unknown preferences folder. A missing file, a missing key or a `null` value still means no restriction. Before the fix, each of these meant "no restriction".
+> - **A directory is judged as a directory.** A name withheld only as a directory is withheld from reads and from the context summary: a `private/` pattern, or a directory named like an environment template. Such a name is readable only as a regular file. Anything else at that path, missing or a directory, answers `denied`, so its existence is not revealed. That holds under the requested name and under the name a link resolves to.
 
 ## 7. The read family: `project-api` v1
 

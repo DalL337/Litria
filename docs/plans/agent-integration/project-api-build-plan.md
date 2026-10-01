@@ -732,6 +732,25 @@ Done on acceptance (2026-09-30, PR #85). The items below are kept as written:
   - the [agent integration brief §7](brief-agent-integration.md#7-project-api-and-mcp-contract), pointing to the contract brief;
   - the [contract schemas brief §10](../contracts/brief-contract-schemas.md#10-open-questions), questions 2, 4, 5 and 6, pointing to the contract brief §12.
 
+## Peer review of the gate work (Codex, 2026-10-01)
+
+At the owner's request, Codex reviewed the gate work merged on 2026-10-01 (PRs #91, #93, #94, #95, #96; range `97ce1f5..84d5e6e`). It ran headless (`codex exec`, read-only sandbox, model `gpt-6.1-sol`) against the adversarial check policy. It reported six findings, all `suspected` because they came from reading. Each was reproduced here with a failing test before it was fixed, on branch `fix/codex-review-1`.
+
+| Finding | Status |
+|---|---|
+| **F1 (high).** The user's withheld-path preference failed open. An unreadable or unparseable preferences file, a value that is not text, or an invalid pattern all meant "no restriction". | **Reproduced** by extracting the production loader (`load_user_exclusions`) and testing it against each broken form; the test fails with the old behaviour planted back. **Verified fixed:** any of these now withholds everything (brief §6 correction). |
+| **F2 (medium).** Reads and `identity` judged every final path component as a file. A directory named like a template got the file exception, and a `private/` pattern missed the directory itself. A read answered `notFile` (or `notFound` if missing), revealing existence, and the context summary named the withheld folder. | **Reproduced** by `a_name_withheld_only_as_a_directory_is_denied_whether_or_not_it_exists` (reader) and `a_withheld_selected_folder_is_not_named` (context). **Verified fixed:** such a name is readable only as a regular file, and is otherwise `denied`. |
+| **F3 (medium).** A directory swapped for a link mid-walk let the `.gitignore` counts count entries inside `.git` or outside the project. P3's fix (F2 there) dropped only the names. | **Reproduced** on Windows (junction) by `a_directory_swapped_for_a_link_mid_walk_adds_nothing_to_the_counts`: counts `(1, 1)`. **Verified fixed:** a directory's listing and counts are used only if it resolves to exactly itself before and after listing. Residual: a link swapped in and out between those two checks, as P3 accepted for names. |
+| **F4 (high).** JavaScript and TypeScript share one edit language, so a `.js`, `.jsx`, `.mjs` or `.cjs` target could receive `import { type Config }`, which is TypeScript syntax, written to disk for a closed file. | **Reproduced** for all four extensions. **Verified fixed:** type-only symbols (type aliases, interfaces, `export type`) are refused for plain JavaScript targets and never offered to them; TypeScript targets are unchanged. |
+| **F5 (medium).** Moving a file open with unsaved edits re-indexed its saved disk text at the new path, and the editor's rename did not register the buffer, so unsaved definitions vanished from the index. This regression came from PR #93. | **Reproduced** in both orders (editor rename before or after the manager's disk read). **Verified fixed:** the rename registers the live buffer, and the manager indexes from disk only a path the domain does not already hold (`registerFileIfAbsent`). |
+| **F6 (medium).** A pick refused for its languages, and a pick whose write failed, both reported a successful no-op, and the picker said "Already imported". | **Reproduced** by two adapter tests. **Verified fixed:** a refusal returns `status: unsupported` with its reason (the picker explains it), and a failed write returns `error`. |
+
+Codex's "checked, no finding" list and residuals are in the session journal. The residuals:
+- the P4 carry-overs, already assigned;
+- production cache concurrency, which the unit tests cannot exercise;
+- project-switch races without a serialization fence;
+- the accepted disclosure residuals.
+
 ## Side findings (outside this plan)
 
 These were found during the 2026-09-30 inspection and are tracked separately. They are not scheduled here:
