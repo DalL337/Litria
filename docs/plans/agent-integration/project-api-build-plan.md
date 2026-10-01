@@ -36,7 +36,7 @@ This document owns sequencing, executable evidence and completion status. It own
 |---|---|---|---|
 | P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | Done: PR #86, merged 2026-09-30 (see [P1 record](#p1-record)) |
 | P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Done: PR #89, merged 2026-09-30 (see [P2 record](#p2-record)) |
-| P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Built, branch `feat/project-api-p3` (see [P3 record](#p3-record)) |
+| P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | In review: PR #90 (see [P3 record](#p3-record)) |
 | P4 | `litria_graph_query` | P2 | Pending |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Pending |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
@@ -453,7 +453,7 @@ An agent can orient itself (`litria_project_context`), read (P1–P2) and search
 
 ### P3 record
 
-**2026-09-30 to 10-01, branch `feat/project-api-p3`,** a worktree off `main` `a13055f`. Environment: Windows 10, Node 24.14.0, the P2 Rust toolchain.
+**2026-09-30 to 10-01, branch `feat/project-api-p3`, PR #90,** a worktree off `main` `a13055f`. Environment: Windows 10, Node 24.14.0, the P2 Rust toolchain.
 
 **Delivered, as tasked above:**
 - `litria_project_context` (`project_api/context.rs`): the project name from the workspace's `project` row, through the epoch-checked connection; selection, folder, active and open documents and the dirty count, all filtered by the policy before anything is listed or counted; the capability matrix; the operations the grant permits; the server's limits; the policy summary. No epoch and no absolute path.
@@ -552,7 +552,10 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
 | The repository copy as a project, end to end | Full walk 859 ms; common word 28 ms (45 KB); prefix search `scope: prefix` |
 | Three concurrent searches | Two ran (about 850 ms each); the third returned `busy` in 4 ms |
 
-**Platform coverage:** the link, swap, odd-name and dangling-link tests ran on Windows (junctions, verbatim paths). Their symlink variants, and the unreadable-directory test, run in the Linux and macOS CI jobs: *pending until the pull request runs CI.*
+**Platform coverage:** the link, swap, odd-name and dangling-link tests ran on Windows (junctions, verbatim paths). Their symlink variants, and the unreadable-directory test, ran in CI on PR #90 (2026-10-01):
+- `cargo test (linux-x86_64)` passed 494 and `cargo test (macos-aarch64)` passed 493, each with 4 ignored; the Architecture Guard passed.
+- Both logs show these tests as `ok`: `a_directory_swapped_for_a_link_mid_walk_discloses_no_names`, `a_denied_name_the_api_cannot_address_is_not_counted`, `a_buffer_behind_a_dangling_link_is_withheld`, both `links_are_not_followed`, `a_file_symlink_is_not_walked`, `an_unreadable_directory_is_counted_and_skipped` and `denied_files_are_listed_and_counted_nowhere`. F2, F3 and F4 are therefore verified fixed on Linux and macOS as well.
+- **Limit of this evidence:** a test that cannot create a link returns early with a note, and the log cannot show which branch ran. Symlink creation needs no privilege on these runners, so those early returns cannot be what happened there. The unreadable-directory test also returns early when run as root; the runners use an unprivileged account (inferred, not shown in the log).
 
 **Security review** (security policy Rule 1): no new command and no new process. The two new operations are reachable only through the debug-only development call until track T. Every new surface (context lists, search results and counts, previews, bridge replies) passes the disclosure policy in Rust, and the review's findings are the table above.
 
