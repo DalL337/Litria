@@ -61,6 +61,7 @@ function setup({ root = '/proj', files = {}, pieces = [] } = {}) {
     removeConnectionsForPieces: () => {},
     unregisterFile: domain.commands.unregisterFile,
     notifyFileChanged: domain.commands.notifyFileChanged,
+    registerFileIfAbsent: domain.commands.registerFileIfAbsent,
     bumpScaffoldRefresh: () => {},
     normalizePath,
     getBasename,
@@ -181,3 +182,82 @@ test('after a move, the editor\'s rename rewrites the importer and the wire reso
   const edge = ctx.domain.selectors.getSyntaxEdgeForPair('/proj/src/core.ts', '/proj/src/app.ts');
   assert.equal(edge?.status, 'resolved');
 });
+
+// ---------------------------------------------------------------------------
+// Codex review F5 (2026-10-01): moving a file that is OPEN with unsaved edits.
+// The manager re-indexes the new path from disk; the editor's rename moved
+// the model but never re-registered its text, so the unsaved definitions
+// vanished from the index — whichever of the two landed first.
+// ---------------------------------------------------------------------------
+
+function deferredDisk(ctx) {
+  const pending = [];
+  const original = ctx.disk;
+  return {
+    pending,
+    read: async (_root, path) => new Promise((resolve) => pending.push(() => resolve(original.get(path) ?? null))),
+  };
+}
+
+for (const order of ['rename-then-read', 'read-then-rename']) {
+  test(`moving an open file with unsaved edits keeps the buffer indexed (${order})`, async () => {
+    const saved = 'export const saved = 1;\n';
+    const unsaved = 'export const saved = 1;\nexport const unsaved = 2;\n';
+    const domain = createSyntaxDomain();
+    const disk = new Map(Object.entries({ 'src/utils.ts': saved }));
+    const pieces = [{ id: 1, filename: 'src/utils.ts', label: 'utils.ts' }];
+    const ctx = { disk };
+    const slow = deferredDisk(ctx);
+    const manager = createFilesystemWriteManager({
+      moveProjectPath: async (_root, from, to) => { disk.set(to, disk.get(from)); disk.delete(from); return true; },
+      writeProjectFile: async (_root, path, contents) => { disk.set(path, contents); return true; },
+      deleteProjectPath: async () => true,
+      removeEmptyDirectory: async () => true,
+      createProjectDirectory: async () => true,
+      readProjectFile: slow.read,
+      getRootPath: () => '/proj',
+      getPiecesById: () => new Map(pieces.map((p) => [p.id, p])),
+      getPiecesByFilename: () => new Map(pieces.map((p) => [p.filename, p])),
+      getPieces: () => pieces,
+      getGroups: () => [],
+      getGroupByPieceId: () => new Map(),
+      getGroupDomain: () => null,
+      updatePieceFilenames: () => {},
+      deletePieces: () => {},
+      updateTabFilename: () => {},
+      closeTab: () => {},
+      removePiecesFromGroups: () => {},
+      removeConnectionsForPieces: () => {},
+      unregisterFile: domain.commands.unregisterFile,
+      notifyFileChanged: domain.commands.notifyFileChanged,
+      registerFileIfAbsent: domain.commands.registerFileIfAbsent,
+      bumpScaffoldRefresh: () => {},
+      normalizePath,
+      getBasename,
+    });
+    const adapter = createSyntaxAdapter({
+      syntaxDomain: domain,
+      projectRoot: '/proj',
+      readProjectFile: async (_root, rel) => disk.get(rel) ?? null,
+      writeProjectFile: async (_root, rel, text) => { disk.set(rel, text); return true; },
+    });
+    const model = { getValue: () => unsaved, getLineCount: () => 3, getLineMaxColumn: () => 1, pushEditOperations: () => {} };
+    adapter.onFileOpened('/proj/src/utils.ts', unsaved, model);
+
+    const moving = manager.moveFile('src/utils.ts', 'src/core.ts');
+    // Let the manager reach its disk read of the new path.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (order === 'rename-then-read') {
+      await adapter.onFileRenamed('/proj/src/utils.ts', '/proj/src/core.ts');
+      while (slow.pending.length) slow.pending.shift()();
+      await moving;
+    } else {
+      while (slow.pending.length) slow.pending.shift()();
+      await moving;
+      await adapter.onFileRenamed('/proj/src/utils.ts', '/proj/src/core.ts');
+    }
+
+    const names = domain.selectors.getDefinitionsForFile('/proj/src/core.ts').map((d) => d.name).sort();
+    assert.deepEqual(names, ['saved', 'unsaved']);
+  });
+}

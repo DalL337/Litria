@@ -101,6 +101,7 @@ export function useFilesystemWriteManager({
     removeConnectionsForPieces: (ids) => connectionDomain.commands.removeConnectionsForPieces(ids),
     unregisterFile: syntaxDomain?.commands?.unregisterFile ?? null,
     notifyFileChanged: syntaxDomain?.commands?.notifyFileChanged ?? null,
+    registerFileIfAbsent: syntaxDomain?.commands?.registerFileIfAbsent ?? null,
     bumpScaffoldRefresh,
     normalizePath,
     getBasename,

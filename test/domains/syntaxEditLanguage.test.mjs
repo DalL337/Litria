@@ -162,3 +162,70 @@ test('same-language wires still write: a TS stub, and a Python import', async ()
   });
   assert.match(py.disk.get('src/main.py'), /^from utils import helper$/m);
 });
+
+// ---------------------------------------------------------------------------
+// Codex review (2026-10-01). F4: JavaScript and TypeScript share the `jsts`
+// edit language, but a type-only symbol can only be imported into
+// TypeScript — `import { type Config }` is not JavaScript. F6: a refused
+// edit must not be reported as a successful no-op ("Already imported").
+// ---------------------------------------------------------------------------
+
+const TYPES_TS = 'export const helper = 1;\nexport type Config = { key: string };\n';
+
+for (const target of ['src/app.js', 'src/app.jsx', 'src/app.mjs', 'src/app.cjs']) {
+  test(`a TypeScript type is never imported into ${target.split('.').pop()} code`, async () => {
+    const ctx = setup({ 'src/types.ts': TYPES_TS, [target]: 'console.log(helper);\n' });
+    const res = await draw(ctx, 'src/types.ts', target);
+    ctx.writes.length = 0;
+
+    const both = await ctx.adapter.handleResolveMultipleSymbols({
+      edgeId: res.edgeId,
+      symbolIds: [symbolId(ctx, 'src/types.ts', 'helper'), symbolId(ctx, 'src/types.ts', 'Config')],
+    });
+
+    const written = ctx.disk.get(target);
+    assert.equal(written.includes('type '), false, `TypeScript syntax in ${target}:\n${written}`);
+    assert.match(written, /\bhelper\b/, 'the value symbol is still imported');
+    assert.equal(both.success, true);
+    const offered = ctx.domain.selectors.getAvailableSymbolsForEdge(`${ROOT}/src/types.ts`, res.edgeId).map((s) => s.name);
+    assert.equal(offered.includes('Config'), false, 'the picker does not offer a type to a JS file');
+  });
+}
+
+test('a TypeScript type is still imported into a TypeScript file', async () => {
+  const ctx = setup({ 'src/types.ts': TYPES_TS, 'src/app.ts': 'console.log(1);\n' });
+  const res = await draw(ctx, 'src/types.ts', 'src/app.ts');
+  await ctx.adapter.handleResolveMultipleSymbols({
+    edgeId: res.edgeId,
+    symbolIds: [symbolId(ctx, 'src/types.ts', 'helper'), symbolId(ctx, 'src/types.ts', 'Config')],
+  });
+  assert.match(ctx.disk.get('src/app.ts'), /type Config/);
+});
+
+test('a pick refused for its languages is reported as unsupported, not as already imported', async () => {
+  const ctx = setup({ 'src/utils.py': 'def helper():\n    pass\n', 'src/app.ts': 'console.log(1);\n' });
+  const res = await draw(ctx, 'src/utils.py', 'src/app.ts');
+  const outcome = await ctx.adapter.handleResolveMultipleSymbols({
+    edgeId: res.edgeId,
+    symbolIds: [symbolId(ctx, 'src/utils.py', 'helper')],
+  });
+  assert.equal(outcome.status, 'unsupported');
+  assert.equal(outcome.success, false);
+});
+
+test('a pick whose write fails is reported as an error, not as a no-op', async () => {
+  const domain = createSyntaxDomain();
+  const disk = new Map(Object.entries({ 'src/utils.ts': 'export function helper() {}\n', 'src/app.ts': 'console.log(1);\n' }));
+  const adapter = createSyntaxAdapter({
+    syntaxDomain: domain,
+    projectRoot: ROOT,
+    readProjectFile: async (_root, rel) => disk.get(rel) ?? null,
+    writeProjectFile: async () => false, // every write fails
+  });
+  for (const [rel, text] of disk) domain.commands.registerFile(`${ROOT}/${rel}`, text);
+  const res = await adapter.handleConnect({ connectionId: 'c1', sourceFilePath: `${ROOT}/src/utils.ts`, targetFilePath: `${ROOT}/src/app.ts` });
+  const helperId = domain.selectors.getDefinitionsForFile(`${ROOT}/src/utils.ts`).find((d) => d.name === 'helper').symbolId;
+  const outcome = await adapter.handleResolveMultipleSymbols({ edgeId: res.edgeId, symbolIds: [helperId] });
+  assert.equal(outcome.status, 'error');
+  assert.equal(outcome.success, false);
+});

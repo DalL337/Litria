@@ -301,12 +301,16 @@ test('getAvailableSymbolsForEdge filters out connected symbols', () => {
   const { domain, srcPath, tgtPath } = setupDomain();
 
   const { edgeId } = domain.commands.connect({ connectionId: 'conn-1', sourceFilePath: srcPath, targetFilePath: tgtPath });
-  const allDefs = domain.selectors.getDefinitionsForFile(srcPath);
+  // The target is a .js file, so the fixture's `type Config` is never offered
+  // (Codex review F4, 2026-10-01: a TypeScript type cannot be imported into
+  // JavaScript).
+  const allDefs = domain.selectors.getDefinitionsForFile(srcPath).filter((d) => d.name !== 'Config');
   const helperSym = domain.selectors.getExportCandidates(srcPath).find((s) => s.name === 'helper');
 
-  // Before adding any symbols — all definitions available
+  // Before adding any symbols — every importable definition available
   const beforeAvail = domain.selectors.getAvailableSymbolsForEdge(srcPath, edgeId);
   assert.equal(beforeAvail.length, allDefs.length);
+  assert.ok(!beforeAvail.some((d) => d.name === 'Config'));
 
   // After adding helper — it should be filtered out
   domain.commands.resolveSymbolsMetadata({ edgeId, symbolIds: [helperSym.symbolId] });

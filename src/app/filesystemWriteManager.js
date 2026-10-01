@@ -293,6 +293,7 @@ export function createFilesystemWriteManager(deps) {
     // Syntax domain mutations
     unregisterFile,
     notifyFileChanged,
+    registerFileIfAbsent,
 
     // Scaffold refresh
     bumpScaffoldRefresh,
@@ -320,6 +321,14 @@ export function createFilesystemWriteManager(deps) {
   function notifySyntaxFile(relativePath, contents) {
     const key = toProjectAbsPath(getRootPath(), relativePath);
     if (notifyFileChanged && key) notifyFileChanged(key, contents);
+  }
+
+  // Index a path from disk only if the domain holds nothing for it: an open
+  // file's live buffer, registered by the editor's rename, must never be
+  // overwritten by its saved text (Codex review F5, 2026-10-01).
+  function indexSyntaxFileIfAbsent(relativePath, contents) {
+    const key = toProjectAbsPath(getRootPath(), relativePath);
+    if (registerFileIfAbsent && key) registerFileIfAbsent(key, contents);
   }
 
   // ---- Delete journal ------------------------------------------------------
@@ -512,7 +521,7 @@ export function createFilesystemWriteManager(deps) {
         } catch (_) {
           // Discovery's re-run on the scaffold refresh indexes it instead.
         }
-        if (typeof text === 'string') notifySyntaxFile(entry.path, text);
+        if (typeof text === 'string') indexSyntaxFileIfAbsent(entry.path, text);
       }));
     }
 
