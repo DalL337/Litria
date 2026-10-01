@@ -49,7 +49,7 @@ const DENIED: &[DeniedRule] = &[
         prefixes: &[],
         suffixes: &[],
     },
-    // Every `.env.*`, templates included in v1.
+    // Every `.env.*` except the template FILES in `ENV_TEMPLATES`.
     DeniedRule {
         class: DeniedClass::EnvironmentFiles,
         names: &[".env"],
@@ -75,6 +75,13 @@ const DENIED: &[DeniedRule] = &[
         suffixes: &[],
     },
 ];
+
+/// Environment templates, readable by default (owner ruling 2026-10-01, brief
+/// §15 Q3): they document which variables exist and normally hold no secrets.
+/// Exact names only, and only as a file name: `.env.example.local`, a
+/// directory named `.env.example`, and every other `.env.*` stay denied. A
+/// link named like a template is still judged by its target.
+const ENV_TEMPLATES: &[&str] = &[".env.example", ".env.sample", ".env.template", ".env.dist"];
 
 /// The denied classes, in table order.
 pub(crate) fn denied_classes() -> Vec<DeniedClass> {
@@ -124,9 +131,19 @@ pub(crate) fn classify_directory(path: &str) -> Class {
     classify_segments(path, true)
 }
 
+/// Whether a FILE name is one of the readable environment templates.
+fn is_env_template(segment: &str) -> bool {
+    let lower = effective_segment(segment).to_ascii_lowercase();
+    ENV_TEMPLATES.contains(&lower.as_str())
+}
+
 fn classify_segments(path: &str, last_is_directory: bool) -> Class {
     let segments: Vec<&str> = path.split('/').collect();
-    if segments.iter().any(|segment| is_denied_segment(segment)) {
+    let last = segments.len() - 1;
+    let denied = segments.iter().enumerate().any(|(index, segment)| {
+        is_denied_segment(segment) && !(index == last && !last_is_directory && is_env_template(segment))
+    });
+    if denied {
         return Class::Denied;
     }
     let directories = if last_is_directory {
@@ -159,7 +176,8 @@ mod tests {
             ".svn/entries",
             ".env",
             ".env.local",
-            ".env.example",
+            ".env.example.local",
+            ".env.production",
             ".npmrc",
             ".pypirc",
             ".netrc",
@@ -219,6 +237,36 @@ mod tests {
         }
         assert_eq!(classify_directory("node_modules."), Class::Unindexed);
         assert_eq!(classify("notes."), Class::Allowed);
+    }
+
+    /// Brief §15 Q3 (owner ruling 2026-10-01): environment templates are
+    /// readable — as a file, by exact name, at any depth and in any case.
+    /// Everything near them stays denied.
+    #[test]
+    fn environment_templates_are_readable_and_nothing_else_is() {
+        for path in [
+            ".env.example",
+            ".env.sample",
+            ".env.template",
+            ".env.dist",
+            "services/api/.env.example",
+            ".ENV.EXAMPLE",
+            ".env.example.",
+        ] {
+            assert_eq!(classify(path), Class::Allowed, "{path:?}");
+        }
+        for path in [
+            ".env",
+            ".env.examples",
+            ".env.example.local",
+            ".env.example.bak",
+            "env.example/../.env",
+            ".env.example/secrets.txt",
+            ".env.local.example",
+        ] {
+            assert_eq!(classify(path), Class::Denied, "{path:?}");
+        }
+        assert_eq!(classify_directory(".env.example"), Class::Denied, "a directory, not a template file");
     }
 
     /// A directory is unindexed by its own name, not only by its parents'.

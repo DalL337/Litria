@@ -229,7 +229,8 @@ pub(crate) enum DeniedClass {
     LitriaState,
     /// `.git`, `.hg/`, `.svn/`.
     VersionControl,
-    /// `.env` and `.env.*`.
+    /// `.env` and `.env.*`, except the template files `.env.example`,
+    /// `.env.sample`, `.env.template` and `.env.dist`.
     EnvironmentFiles,
     /// `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`.
     KeyMaterial,

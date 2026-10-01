@@ -80,7 +80,7 @@
           "const": "versionControl"
         },
         {
-          "description": "`.env` and `.env.*`.",
+          "description": "`.env` and `.env.*`, except the template files `.env.example`,\n`.env.sample`, `.env.template` and `.env.dist`.",
           "type": "string",
           "const": "environmentFiles"
         },
