@@ -28,7 +28,9 @@ Scope: `src-tauri/src/*`
 - `contracts/` *(added 2026-09-30, Project API build plan P1)*
   - ADR-033 contract types and machinery: the three-layer inbound boundary, the
     typed operation catalog and dispatcher, call contexts, contract errors, and
-    one submodule per contract family (`project_api/`).
+    one submodule per contract family (`project_api/`; `project_api_bridge/`
+    since P2, whose direction is reversed: Rust emits its requests and reads
+    its replies through the same boundary).
   - Contract types derive `JsonSchema` only under `cfg(test)`; schema
     generation, drift, fixture and MCP-proof modules are test-only. Committed
     artifacts live in `src-tauri/contracts/<family>/v<N>/`.
@@ -38,6 +40,11 @@ Scope: `src-tauri/src/*`
     reads. Design: `docs/plans/agent-integration/brief-project-api-contract.md`.
   - Calls `path_guard` and `db` directly, never the Tauri command adapters.
     Its only command adapter today is the debug-only `project_api_dev_call`.
+  - `bridge.rs` *(P2)*: the owner bridge client — attach generations, the
+    pending-request map, deadlines and the reply hand-off. Its debug-only
+    commands are `project_api_bridge_attach`, `project_api_bridge_detach` and
+    `project_api_bridge_reply`; requests go to the main window as
+    `project-api://bridge-request`.
 
 > **Note (2026-09-30):** this document predates the `db`, `lsp`, `crash`,
 > `preferences` and `platform` modules, which define their commands in their

@@ -1,0 +1,112 @@
+{
+  "kind": "result",
+  "result": {
+    "documents": [
+      {
+        "kind": "notBuffered",
+        "path": "f0.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f1.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f2.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f3.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f4.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f5.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f6.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f7.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f8.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f9.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f10.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f11.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f12.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f13.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f14.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f15.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f16.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f17.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f18.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f19.ts",
+        "state": "none"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "f20.ts",
+        "state": "none"
+      }
+    ]
+  }
+}

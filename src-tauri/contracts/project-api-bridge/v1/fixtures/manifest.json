@@ -1,0 +1,201 @@
+{
+  "family": "project-api-bridge",
+  "apiVersion": 1,
+  "fixtures": [
+    {
+      "file": "editor.documents.request.json",
+      "operation": "editor.documents",
+      "message": "request",
+      "expect": "accept",
+      "sample": "documents",
+      "note": "Every entry kind but deferred, exactly as Rust emits it; the JavaScript tests answer it with editor.documents.reply.json."
+    },
+    {
+      "file": "editor.bufferIndex.request.json",
+      "operation": "editor.bufferIndex",
+      "message": "request",
+      "expect": "accept",
+      "sample": "bufferIndex",
+      "note": "Exactly as Rust emits it; the JavaScript tests answer it with editor.bufferIndex.reply.json."
+    },
+    {
+      "file": "editor.documents.reply.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "accept",
+      "note": "What the JavaScript bridge answers to editor.documents.request.json (asserted in projectApiBridge.test.mjs)."
+    },
+    {
+      "file": "editor.documents.reply.deferred.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "accept",
+      "note": "A full page defers the rest; Rust asks again from the first deferred document."
+    },
+    {
+      "file": "editor.documents.reply.workspace-changed.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "accept",
+      "note": "The epoch check refused the request (asserted in projectApiBridge.test.mjs)."
+    },
+    {
+      "file": "editor.documents.reply.unknown-operation.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "accept",
+      "note": "An operation the bridge does not know is refused, never served as a known one."
+    },
+    {
+      "file": "editor.documents.reply.range-null.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "accept",
+      "note": "An absent range may also be null; the JavaScript bridge omits it."
+    },
+    {
+      "file": "editor.bufferIndex.reply.json",
+      "operation": "editor.bufferIndex",
+      "message": "reply",
+      "expect": "accept",
+      "note": "What the JavaScript bridge answers to editor.bufferIndex.request.json: open and unsaved buffers, in path order."
+    },
+    {
+      "file": "editor.documents.reply.unknown-field.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Replies are read strictly: an unknown field in an entry."
+    },
+    {
+      "file": "editor.documents.reply.unknown-entry-kind.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An entry kind the contract does not define."
+    },
+    {
+      "file": "editor.documents.reply.unknown-reply-kind.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "A reply kind other than result or error."
+    },
+    {
+      "file": "editor.documents.reply.revision-as-number.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Revisions are opaque strings, never numbers."
+    },
+    {
+      "file": "editor.documents.reply.empty-revision.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "A buffer revision is never empty."
+    },
+    {
+      "file": "editor.documents.reply.no-documents.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "At least one entry: one per requested document."
+    },
+    {
+      "file": "editor.documents.reply.too-many-documents.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "At most 20 entries."
+    },
+    {
+      "file": "editor.documents.reply.missing-total-lines.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "totalLines is required."
+    },
+    {
+      "file": "editor.documents.reply.total-lines-beyond-u32.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Line counts are u32, and the schema bounds them explicitly."
+    },
+    {
+      "file": "editor.documents.reply.line-zero.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Lines are 1-based."
+    },
+    {
+      "file": "editor.documents.reply.null-text.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Text is a string, never null."
+    },
+    {
+      "file": "editor.documents.reply.path-over-length.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Paths are at most 1024 characters."
+    },
+    {
+      "file": "editor.documents.reply.long-error-message.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Error messages are bounded (1000 characters)."
+    },
+    {
+      "file": "editor.documents.reply.unknown-error-code.json",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An error code the contract does not define."
+    },
+    {
+      "file": "editor.bufferIndex.reply.unknown-field.json",
+      "operation": "editor.bufferIndex",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "Replies are read strictly: an unknown field."
+    },
+    {
+      "generated": "bufferIndexOverCount",
+      "operation": "editor.bufferIndex",
+      "message": "reply",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "One entry more than the 500 the buffer index allows."
+    },
+    {
+      "generated": "overReplyCeiling",
+      "operation": "editor.documents",
+      "message": "reply",
+      "expect": "reject",
+      "limit": true,
+      "errorCode": "limitExceeded",
+      "note": "Schema-valid, but over the 512 KiB reply ceiling: rejected before parsing."
+    }
+  ]
+}

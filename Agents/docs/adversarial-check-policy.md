@@ -55,6 +55,10 @@ The check must stay cheap enough to be done every time it applies:
 - **Stay inside the slice.** Do not re-audit enforcement code the slice did
   not touch. A pre-existing hole found in passing is reported to the owner
   separately (security-policy Rule 3), not fixed silently mid-slice.
+  **Unless the slice's guarantee rests on it:** if a new enforcement point
+  trusts the old code's output (a readiness signal that trusts a restore, a
+  fence that trusts a key), the old code is part of the enforcement point,
+  and its holes are this slice's. *(Flaw 8.)*
 
 ## Rule 3 — The Procedure
 
@@ -105,7 +109,9 @@ and for the list of attacks. Each one names the flaw that taught it.
    trailing dots or spaces, links, hard links, alternate data streams, device
    names)? Can one input reach a different object than intended? Read every
    reused helper's normalization (trimming, case folding, separators) before
-   relying on it. *(Flaw 3.)*
+   relying on it. Ask the same of keys a fence relies on: is an "id" unique
+   per session, or stored with the data, so that a copy or a reopen
+   presents it again? *(Flaws 3 and 7.)*
 3. **Bounds on what is consumed.** Is each limit enforced on what is
    actually read, allocated and emitted? That includes encoded size and
    escaping, memory proportional to input (a vector per line, per match or
@@ -240,3 +246,35 @@ Each entry comes from a real finding and records its final status.
    parent directory swapped for a link while the operation runs. That needs
    a process with the user's own write access, which could already delete
    those files itself.*
+7. **A persisted id stood in for "this session"** (2026-09-30, Project API
+   build plan P2, high: wrong content). The editor session reset only when
+   the project's `instanceId` changed. That id is stored in the project's own
+   database, so a folder copy of a project, or the project reopened, kept the
+   previous session: the copy showed the original's buffers under "All
+   Saved", and the new owner bridge served them as the copy's (a save would
+   also write them into the copy — by inspection, not exercised). The fix
+   resets the session
+   per load (the open's own state object). Found by this pass, by asking
+   what the bridge's readiness signal was keyed on.
+   *Status: reproduced live on Windows (a scratch project and its folder
+   copy, driven over CDP); verified fixed live on Windows with the same
+   script. The fix is JavaScript only, so no platform differs.*
+8. **A ready signal certified work it never checked** (2026-09-30, Project
+   API build plan P2, high: another project's text). The bridge's readiness
+   trusted that the editor session had been restored for the current
+   project load. The restore itself was gated on a shared "loaded" ref: a
+   project with no pieces finished loading synchronously, so the restore ran
+   with the previous render's pieces and put the previous project's piece —
+   with an edit already discarded there — into the new session as an unsaved
+   tab, which the bridge then served. The pass had found the slower sibling
+   of this race and set it aside as pre-existing, with the claim that
+   readiness did not rely on it; the peer reviewer (Codex) found the
+   synchronous variant with a harness that ran the real hook. The fix gates
+   the restore on the load's own loaded marker. Lessons: a hole the slice's
+   guarantee rests on is in the slice (Rule 2), and a test that hands a
+   consumer its signal proves the consumer, not the signal
+   ([test-authoring policy](test-authoring-policy.md) Rule 1).
+   *Status: reproduced by the reviewer's harness and rerun here (Windows),
+   on `main` without the bridge, live on Windows (debug app over CDP), and
+   by two real-hook tests that failed first; verified fixed by those tests
+   and live with the same script. JavaScript only.*

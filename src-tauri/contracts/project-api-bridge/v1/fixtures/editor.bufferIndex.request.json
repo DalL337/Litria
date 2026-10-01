@@ -1,0 +1,9 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "editor.bufferIndex",
+  "request": {
+    "maxEntries": 500
+  },
+  "requestId": "r1"
+}

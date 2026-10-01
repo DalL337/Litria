@@ -1,0 +1,37 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "editor.documents",
+  "request": {
+    "documents": [
+      {
+        "maxBytes": 65536,
+        "path": "src/open.ts"
+      },
+      {
+        "maxBytes": 65536,
+        "path": "src/closed-dirty.ts"
+      },
+      {
+        "maxBytes": 65536,
+        "path": "src/closed-clean.ts"
+      },
+      {
+        "maxBytes": 65536,
+        "path": "src/not-in-session.ts"
+      },
+      {
+        "endLine": 3,
+        "maxBytes": 65536,
+        "path": "src/lines.ts",
+        "startLine": 2
+      },
+      {
+        "maxBytes": 8,
+        "path": "dist/bundle.min.js"
+      }
+    ],
+    "maxTextBytes": 262144
+  },
+  "requestId": "r1"
+}

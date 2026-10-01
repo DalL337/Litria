@@ -10,6 +10,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -44,6 +45,8 @@ struct Fixture {
     /// Operational-limit case: schema-valid, rejected by the boundary alone.
     #[serde(default)]
     limit: bool,
+    /// Bridge request fixtures: the sample event they must equal.
+    sample: Option<String>,
     error_code: Option<ErrorCode>,
     note: String,
 }
@@ -53,6 +56,8 @@ struct Fixture {
 enum Message {
     Request,
     Result,
+    /// A bridge reply (inbound to Rust).
+    Reply,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
@@ -63,14 +68,22 @@ enum Expect {
 }
 
 fn manifest() -> Manifest {
-    let path = family_dir().join(FIXTURES_DIR).join(MANIFEST);
+    manifest_in(&family_dir())
+}
+
+fn manifest_in(dir: &Path) -> Manifest {
+    let path = dir.join(FIXTURES_DIR).join(MANIFEST);
     let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse fixture manifest: {error}"))
 }
 
 fn fixture_bytes(fixture: &Fixture) -> Vec<u8> {
+    fixture_bytes_in(&family_dir(), fixture)
+}
+
+fn fixture_bytes_in(dir: &Path, fixture: &Fixture) -> Vec<u8> {
     match (&fixture.file, &fixture.generated) {
-        (Some(file), None) => fs::read(family_dir().join(FIXTURES_DIR).join(file))
+        (Some(file), None) => fs::read(dir.join(FIXTURES_DIR).join(file))
             .unwrap_or_else(|error| panic!("read fixture {file}: {error}")),
         (None, Some(name)) => generated_fixture(name),
         _ => panic!("fixture must name exactly one of `file` or `generated`: {}", fixture.note),
@@ -88,6 +101,37 @@ fn generated_fixture(name: &str) -> Vec<u8> {
             let raw = serde_json::to_vec(&serde_json::json!({ "documents": documents })).unwrap();
             assert!(raw.len() > MAX_REQUEST_BYTES, "the fixture must exceed the byte budget");
             raw
+        }
+        // A schema-valid reply over the bridge reply ceiling: one buffer
+        // entry of four-byte characters, within maxLength code points.
+        "overReplyCeiling" => {
+            use super::project_api_bridge::MAX_REPLY_BYTES;
+            let text = "😀".repeat(MAX_REPLY_BYTES / 4 + 1);
+            let raw = serde_json::to_vec(&serde_json::json!({
+                "kind": "result",
+                "result": { "documents": [{
+                    "kind": "buffer", "path": "a.txt", "state": "open", "dirty": false,
+                    "revision": "b1-x", "text": text, "range": { "startLine": 1, "endLine": 1 },
+                    "totalLines": 1, "truncated": false, "lineCut": false
+                }]}
+            }))
+            .unwrap();
+            assert!(raw.len() > MAX_REPLY_BYTES, "the fixture must exceed the reply ceiling");
+            raw
+        }
+        // One entry more than the buffer index allows.
+        "bufferIndexOverCount" => {
+            use super::project_api_bridge::editor::MAX_INDEX_ENTRIES;
+            let entries: Vec<_> = (0..=MAX_INDEX_ENTRIES)
+                .map(|index| serde_json::json!({
+                    "path": format!("f{index}.txt"), "state": "open", "dirty": false,
+                    "revision": "b1-x", "byteLength": 1
+                }))
+                .collect();
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "result", "result": { "entries": entries, "omitted": 0 }
+            }))
+            .unwrap()
         }
         other => panic!("unknown generated fixture `{other}`"),
     }
@@ -143,6 +187,7 @@ fn boundary_verdicts_match_the_inbound_schemas() {
         let (schema, verdict) = match fixture.message {
             Message::Request => ((entry.request_schema)(), (entry.accept_request)(&raw)),
             Message::Result => ((entry.result_schema_in)(), (entry.accept_result)(&raw)),
+            Message::Reply => panic!("{name}: replies belong to the bridge family"),
         };
         let instance: Value = serde_json::from_slice(&raw).unwrap();
         let schema_accepts = validator(&Value::from(schema)).is_valid(&instance);
@@ -221,5 +266,129 @@ mod outbound {
         assert_eq!(committed, emitted, "files_read.result.json differs from what Rust emits");
         // Round trip: what Rust emits, a tolerant reader of the contract reads back.
         let _: FilesReadResult = serde_json::from_value(emitted).unwrap();
+    }
+}
+
+/// The bridge family's fixtures (build plan P2). Requests are what Rust EMITS:
+/// each request fixture must equal the sample event it names, and conform to
+/// the envelope and the operation's request schema. Replies are what Rust
+/// ACCEPTS: the reply boundary's verdict must equal the reply schema's, as
+/// for project-api requests. The JavaScript bridge is tested against the same
+/// files (test/domains/projectApiBridge.test.mjs).
+mod bridge_family {
+    use super::*;
+    use crate::contracts::artifacts::{bridge_dir, EVENT_FILE};
+    use crate::contracts::project_api_bridge::entry::BridgeEntry;
+    use crate::contracts::project_api_bridge::{catalog, samples, API_VERSION, FAMILY};
+
+    fn entry_for<'a>(catalog: &'a [BridgeEntry], operation: &str) -> &'a BridgeEntry {
+        catalog
+            .iter()
+            .find(|entry| entry.name == operation)
+            .unwrap_or_else(|| panic!("fixture names unknown bridge operation `{operation}`"))
+    }
+
+    #[test]
+    fn manifest_belongs_to_this_family() {
+        let manifest = manifest_in(&bridge_dir());
+        assert_eq!(manifest.family, FAMILY);
+        assert_eq!(manifest.api_version, API_VERSION);
+    }
+
+    #[test]
+    fn every_fixture_file_is_listed_exactly_once() {
+        let manifest = manifest_in(&bridge_dir());
+        let mut listed = BTreeSet::new();
+        for fixture in &manifest.fixtures {
+            if let Some(file) = &fixture.file {
+                assert!(listed.insert(file.clone()), "fixture listed twice: {file}");
+            }
+        }
+        let on_disk: BTreeSet<String> = fs::read_dir(bridge_dir().join(FIXTURES_DIR))
+            .expect("read fixtures directory")
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != MANIFEST)
+            .collect();
+        assert_eq!(listed, on_disk, "fixtures on disk and in the manifest differ");
+    }
+
+    #[test]
+    fn reply_verdicts_match_the_reply_schemas() {
+        let catalog = catalog();
+        let mut failures = Vec::new();
+        let mut checked = 0;
+        for fixture in manifest_in(&bridge_dir()).fixtures {
+            if fixture.message != Message::Reply {
+                continue;
+            }
+            checked += 1;
+            let name = label(&fixture);
+            let raw = fixture_bytes_in(&bridge_dir(), &fixture);
+            let entry = entry_for(&catalog, &fixture.operation);
+            let verdict = (entry.accept_reply)(&raw);
+            let instance: Value = serde_json::from_slice(&raw).unwrap();
+            let schema_accepts = validator(&Value::from((entry.reply_schema)())).is_valid(&instance);
+            let boundary_accepts = verdict.is_ok();
+            if boundary_accepts != (fixture.expect == Expect::Accept) {
+                failures.push(format!("{name}: boundary verdict {verdict:?}, expected {:?}", fixture.expect));
+            }
+            if fixture.limit {
+                if !schema_accepts {
+                    failures.push(format!("{name}: an operational-limit fixture must be schema-valid"));
+                }
+            } else if schema_accepts != boundary_accepts {
+                failures.push(format!(
+                    "{name}: schema {} but boundary {} ({verdict:?})",
+                    if schema_accepts { "accepts" } else { "rejects" },
+                    if boundary_accepts { "accepts" } else { "rejects" },
+                ));
+            }
+            if let (Some(expected), Err(error)) = (fixture.error_code, &verdict) {
+                if error.code != expected {
+                    failures.push(format!("{name}: error code {:?}, expected {expected:?}", error.code));
+                }
+            }
+        }
+        assert!(checked > 0, "no reply fixtures were checked");
+        assert!(failures.is_empty(), "reply fixture verdicts disagree:\n{}", failures.join("\n"));
+    }
+
+    /// Request fixtures are exactly what Rust emits (regenerated with the
+    /// schemas), and conform to the envelope and the operation's schema.
+    #[test]
+    fn request_fixtures_are_what_rust_emits() {
+        let catalog = catalog();
+        let envelope = validator(&crate::contracts::artifacts::committed_json_in(&bridge_dir(), EVENT_FILE));
+        let mut checked = 0;
+        for fixture in manifest_in(&bridge_dir()).fixtures {
+            if fixture.message != Message::Request {
+                continue;
+            }
+            checked += 1;
+            let file = fixture.file.clone().expect("request fixtures are committed files");
+            let sample = match fixture.sample.as_deref() {
+                Some("documents") => samples::documents_event(),
+                Some("bufferIndex") => samples::buffer_index_event(),
+                other => panic!("{file}: unknown sample {other:?}"),
+            };
+            assert_eq!(sample.op, fixture.operation, "{file}: the sample is for another operation");
+            let emitted = serde_json::to_value(&sample).unwrap();
+            let path = bridge_dir().join(FIXTURES_DIR).join(&file);
+            if std::env::var(UPDATE_ENV).is_ok_and(|value| value == "1") {
+                let mut text = serde_json::to_string_pretty(&emitted).unwrap();
+                text.push('\n');
+                fs::write(&path, text).unwrap();
+            }
+            let committed: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(committed, emitted, "{file} differs from what Rust emits");
+            assert!(envelope.is_valid(&committed), "{file}: violates the event envelope schema");
+            let request_schema = validator(&Value::from((entry_for(&catalog, &fixture.operation).request_schema)()));
+            let errors: Vec<String> = request_schema
+                .iter_errors(&committed["request"])
+                .map(|error| error.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{file}: request violates its schema: {errors:?}");
+        }
+        assert!(checked > 0, "no request fixtures were checked");
     }
 }

@@ -92,6 +92,15 @@ export function useProjectPersistence({
   // does not wipe the canvas, so a per-load pass keyed on the instance can
   // run the previous project's state against the new project's workspace.
   const [hydratedLoad, setHydratedLoad] = useState(null);
+  // The load (`_dbState`) whose file contents finished loading — set only by
+  // that load's own reader, so a slower reader from the previous load can
+  // never mark this one. (`hasLoadedPiecesRef` is a ref and is not.)
+  const [piecesLoadedFor, setPiecesLoadedFor] = useState(null);
+  // The load whose hydration is complete: contents loaded AND the editor
+  // session restored for it. Read-only signal for the Project API bridge,
+  // which may answer for a project only from this point (contract brief
+  // §4.3); it compares it with the instance's own `_dbState`.
+  const [sessionReadyFor, setSessionReadyFor] = useState(null);
 
   const normalizeId = useCallback((value) => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -177,10 +186,20 @@ export function useProjectPersistence({
     });
   }, [configurePersistence, persistSavedTab, persistSavedTabs, resolveUntitledSave, sameId, setPieces]);
 
+  // The editor session belongs to one LOAD of a project, not to its identity.
+  // `instanceId` is persisted in the project's own database, so reopening a
+  // project — or opening a folder copy of it — keeps the same id while the
+  // files on disk may differ. Keyed on the load (`_dbState`, a fresh object
+  // per open), the session resets and restores from that load's saved editor
+  // state. A session without a load (untitled, single file) keys on its id, so
+  // an untitled Save As — same id, still no load — keeps its tabs.
+  // (2026-09-30, Project API build plan P2 live pass: a folder copy showed the
+  // original's buffers, and the owner bridge served them as the copy's.)
+  const sessionKey = projectInstance?._dbState ?? projectInstance?.instanceId ?? null;
   useEffect(() => {
-    setProjectInstanceId(projectInstance?.instanceId ?? null);
+    setProjectInstanceId(sessionKey);
     hasRestoredEditorSessionRef.current = false;
-  }, [projectInstance?.instanceId, setProjectInstanceId]);
+  }, [sessionKey, setProjectInstanceId]);
 
   // ─── Hydration from SQLite ProjectState ──────────────────────────────────
   useEffect(() => {
@@ -315,7 +334,15 @@ export function useProjectPersistence({
       if (isMounted && updated.length) {
         setPieces(updated);
       }
-      hasLoadedPiecesRef.current = true;
+      // Only this load's own, still-current reader may mark it loaded. A
+      // reader cancelled by a project switch must not flip the shared flag
+      // for the next load: restoration, viewport and position persistence
+      // all read it. `piecesLoadedFor` lands in the same update as these
+      // pieces, so a render that sees it also sees this load's pieces.
+      if (isMounted) {
+        hasLoadedPiecesRef.current = true;
+        setPiecesLoadedFor(dbState);
+      }
     })();
 
     return () => { isMounted = false; };
@@ -342,14 +369,31 @@ export function useProjectPersistence({
   useEffect(() => {
     if (!projectInstance?.rootPath || !projectInstance?.instanceId) return;
     if (projectInstance.manifestPath === null) return;
-    if (hasRestoredEditorSessionRef.current) return;
-    if (!hasLoadedPiecesRef.current) return;
+    // Restore only from THIS load's own pieces: wait until its reader has
+    // marked it loaded, which happens in the same update as its pieces, so
+    // `piecesById` below is this load's. A shared "loaded" flag cannot say
+    // whose pieces are on hand — the render that installs a new project can
+    // still hold the previous one's, and an empty project restored the last
+    // project's discarded edit from them (PR #89 review, 2026-09-30).
+    const loadToken = projectInstance._dbState;
+    if (!loadToken || piecesLoadedFor !== loadToken) return;
+    // Hydration is complete for this load once its session is restored —
+    // here, or by an earlier run of this effect (contract brief §4.3; the
+    // Project API bridge waits on it).
+    const markSessionReady = () => setSessionReadyFor(loadToken);
+    if (hasRestoredEditorSessionRef.current) {
+      markSessionReady();
+      return;
+    }
     hasRestoredEditorSessionRef.current = true;
     let isMounted = true;
 
     (async () => {
       const dbState = projectInstance._dbState;
-      if (!dbState?.editorState) return;
+      if (!dbState?.editorState) {
+        if (isMounted) markSessionReady();
+        return;
+      }
 
       const es = dbState.editorState;
       const rawOpenIds = es.open_tab_piece_ids
@@ -385,12 +429,14 @@ export function useProjectPersistence({
         // The context's setter clamps/defaults — garbage restores to 50/50.
         setPaneSplitRatio(Number(es.pane_split_ratio));
       }
+      if (isMounted) markSessionReady();
     })();
 
     return () => { isMounted = false; };
   }, [
     openFromSnapshot,
     piecesById,
+    piecesLoadedFor,
     projectInstance?.instanceId,
     projectInstance?.rootPath,
     projectInstance?.manifestPath,
@@ -669,5 +715,5 @@ export function useProjectPersistence({
     });
   }, [projectInstance]);
 
-  return { persistConnectionSides, hydratedLoad };
+  return { persistConnectionSides, hydratedLoad, sessionReadyFor };
 }

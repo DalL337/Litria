@@ -1,0 +1,13 @@
+{
+  "kind": "result",
+  "result": {
+    "documents": [
+      {
+        "kind": "notBuffered",
+        "path": "a.ts",
+        "state": "none",
+        "extra": 1
+      }
+    ]
+  }
+}

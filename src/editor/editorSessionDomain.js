@@ -133,6 +133,43 @@ export function getPaneTagsByPieceId(state) {
   return map;
 }
 
+const SESSION_STATE_RANK = { closedClean: 0, closedDirty: 1, open: 2 };
+
+/**
+ * Session entries by project-relative path — the read selector the Project
+ * API bridge answers from (contract brief §5, build plan P2). Buffer truth is
+ * the session's working text, never an editor engine model, and closed
+ * entries the session still retains are included: a closed tab can still be
+ * dirty, and Save All will write it.
+ *
+ * Each entry: `{ tabId, path, state, dirty, text }`, where `state` is
+ * `open` (in a pane), `closedDirty` or `closedClean`, `dirty` follows the
+ * session's own rule (working text ≠ saved text after CRLF normalization),
+ * and `text` is the working text exactly as the session holds it. Tab ids stay
+ * inside the bridge; they never cross the API.
+ *
+ * A path can have more than one entry (a file deleted and re-created keeps
+ * its old closed entry): the open one wins, then a dirty one.
+ */
+export function getSessionDocumentsByPath(state) {
+  const open = new Set(state.openTabIds);
+  const byPath = new Map();
+  for (const tab of Object.values(state.tabsById)) {
+    const path = typeof tab?.filename === 'string'
+      ? tab.filename.replace(/\\/g, '/').replace(/^\/+/, '')
+      : '';
+    if (!path) continue;
+    const text = typeof tab.workingCode === 'string' ? tab.workingCode : '';
+    const dirty = !areEditorTextsEqual(text, tab.code);
+    const sessionState = open.has(tab.id) ? 'open' : (dirty ? 'closedDirty' : 'closedClean');
+    const existing = byPath.get(path);
+    if (!existing || SESSION_STATE_RANK[sessionState] > SESSION_STATE_RANK[existing.state]) {
+      byPath.set(path, { tabId: tab.id, path, state: sessionState, dirty, text });
+    }
+  }
+  return byPath;
+}
+
 /**
  * Serialize per-tab pane residency for persistence (ADR-017 Phase B).
  * Keys follow openTabIds order, so the string is value-stable across

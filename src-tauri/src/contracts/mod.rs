@@ -28,6 +28,7 @@ pub(crate) mod catalog;
 pub(crate) mod context;
 pub(crate) mod error;
 pub(crate) mod project_api;
+pub(crate) mod project_api_bridge;
 
 #[cfg(test)]
 mod artifacts;

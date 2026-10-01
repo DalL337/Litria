@@ -184,9 +184,12 @@ export function EditorSessionProvider({ children }) {
     };
   }, []);
 
-  const setProjectInstanceId = useCallback((instanceId) => {
-    if (projectInstanceIdRef.current === instanceId) return;
-    projectInstanceIdRef.current = instanceId;
+  // Binds the session to a key and resets it whenever the key changes. The
+  // persistence hook passes the project's LOAD (its `_dbState`), so every
+  // open starts from that load's saved editor state; see useProjectPersistence.
+  const setProjectInstanceId = useCallback((sessionKey) => {
+    if (projectInstanceIdRef.current === sessionKey) return;
+    projectInstanceIdRef.current = sessionKey;
     dispatch({ type: 'RESET_SESSION' });
     setPaneSplitRatioRaw(PANE_RATIO_DEFAULT);
   }, []);

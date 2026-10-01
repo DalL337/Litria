@@ -132,6 +132,44 @@ fn read_disk_with(
     }
 }
 
+/// The name the editor session would hold a document under, for an effective
+/// read (build plan P2).
+#[derive(Debug, PartialEq)]
+pub(crate) enum Identity {
+    InvalidPath,
+    /// Withheld by the policy, on the requested name or on what it resolves
+    /// to. Never sent to the bridge.
+    Denied,
+    /// The key to look the document up by: the canonical project-relative
+    /// path when the file exists — so a case variant on a case-insensitive
+    /// volume, or an in-project link, finds the buffer of the file it names —
+    /// otherwise the requested path itself (a buffer whose file is gone).
+    Key(String),
+}
+
+/// Syntax and policy exactly as `read_disk` applies them, then the canonical
+/// name. Only a lookup key: the disk read, if one follows, repeats every check
+/// on what it actually opens.
+pub(crate) fn identity(root: &Path, path: &str) -> Identity {
+    if !is_valid_api_path(path) {
+        return Identity::InvalidPath;
+    }
+    if classify(path) == Class::Denied {
+        return Identity::Denied;
+    }
+    match resolve_existing_relative_path_typed(root, path) {
+        Ok(target) => match canonical_relative(root, &target) {
+            Some(canonical) if classify(&canonical) != Class::Denied => Identity::Key(canonical),
+            _ => Identity::Denied,
+        },
+        Err(ResolveError::Invalid(_)) => Identity::InvalidPath,
+        Err(ResolveError::OutsideRoot) => Identity::Denied,
+        // Not on disk (or not resolvable now): the session may still hold it
+        // under exactly this name.
+        Err(ResolveError::Io(_)) => Identity::Key(path.to_owned()),
+    }
+}
+
 /// On Unix, open non-blocking, so a FIFO swapped in after the stat cannot
 /// hang the reader; regular-file reads are unaffected by the flag.
 #[cfg(unix)]

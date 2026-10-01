@@ -1,0 +1,5 @@
+{
+  "kind": "error",
+  "code": "unknownOperation",
+  "message": "the editor does not know this operation"
+}

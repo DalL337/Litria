@@ -1,0 +1,11 @@
+{
+  "kind": "result",
+  "result": {
+    "documents": [
+      {
+        "kind": "partial",
+        "path": "a.ts"
+      }
+    ]
+  }
+}

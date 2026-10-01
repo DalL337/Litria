@@ -29,13 +29,16 @@ pub(crate) trait Validate {
 
 /// The complete inbound boundary for one request.
 pub(crate) fn accept<T: DeserializeOwned + Validate>(raw: &[u8]) -> Result<T, ContractError> {
-    if raw.len() > MAX_REQUEST_BYTES {
+    accept_within(raw, MAX_REQUEST_BYTES)
+}
+
+/// The same three layers with another family's byte budget: the bridge's
+/// replies are inbound too, with a larger ceiling (contract brief §8, §10).
+pub(crate) fn accept_within<T: DeserializeOwned + Validate>(raw: &[u8], limit: usize) -> Result<T, ContractError> {
+    if raw.len() > limit {
         return Err(ContractError::new(
             ErrorCode::LimitExceeded,
-            format!(
-                "request is {} bytes; the limit is {MAX_REQUEST_BYTES}",
-                raw.len()
-            ),
+            format!("the message is {} bytes; the limit is {limit}", raw.len()),
         ));
     }
     let value: T = serde_json::from_slice(raw)

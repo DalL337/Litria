@@ -51,6 +51,7 @@ import { getRandomPieceColor } from './utils/pieceColors';
 import { normalizePath, getBasename, getDirname, toFolderSegment, isFiniteNumber } from './utils/path';
 import { createProjectDomain } from './project/projectDomain';
 import { useProjectPersistence } from './project/useProjectPersistence';
+import { useProjectApiBridge } from './app/useProjectApiBridge';
 import { usePersistenceNotices } from './project/usePersistenceNotices';
 import PersistencePill from './components/PersistencePill';
 import { createTerminalDomain } from './terminal/terminalDomain';
@@ -446,7 +447,7 @@ function App() {
   // Read-only pill + rate-limited write-failure notices (ADR-026 decision 3).
   const persistenceNotices = usePersistenceNotices({ projectInstance });
 
-  const { persistConnectionSides, hydratedLoad } = useProjectPersistence({
+  const { persistConnectionSides, hydratedLoad, sessionReadyFor } = useProjectPersistence({
     projectInstance,
     pieces,
     setPieces,
@@ -488,6 +489,8 @@ function App() {
     () => buildPersistedConnectionSides(projectInstance?._dbState?.connections),
     [projectInstance?._dbState]
   );
+
+  useProjectApiBridge({ projectInstance, sessionReadyFor });
 
   useTerminalLifecycle({
     projectInstance,

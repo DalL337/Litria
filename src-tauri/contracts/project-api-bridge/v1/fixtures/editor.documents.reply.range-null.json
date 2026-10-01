@@ -1,0 +1,19 @@
+{
+  "kind": "result",
+  "result": {
+    "documents": [
+      {
+        "kind": "buffer",
+        "path": "src/a.ts",
+        "state": "open",
+        "dirty": false,
+        "revision": "b1-x",
+        "text": "",
+        "range": null,
+        "totalLines": 0,
+        "truncated": false,
+        "lineCut": false
+      }
+    ]
+  }
+}

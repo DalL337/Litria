@@ -235,6 +235,26 @@ marked below.
 - Owns: platform-aware defaults (macOS/Windows/Linux), modifier-key detection — the
   single source of truth replacing ad-hoc `isMac` checks.
 
+19. `ProjectApiBridge` (adapter, not a domain) *(added 2026-09-30, Project API build
+    plan P2)*
+- Modules: `src/app/projectApiBridge.js` (pure factory `createProjectApiBridge`,
+  node-tested against the committed `project-api-bridge` contract fixtures) and
+  `src/app/useProjectApiBridge.js` (the hook App.jsx invokes; debug builds only until
+  the Project API's external transport, build plan track T).
+- Rust side: `src-tauri/src/project_api/bridge.rs` (attach generations, pending
+  requests, deadlines); contract family `src-tauri/contracts/project-api-bridge/v1/`.
+- Owns: answering Rust's read requests about live frontend state — attach/detach for
+  a fully hydrated load, the per-reply epoch check, buffer revisions, slicing and
+  paging within the reply ceiling. Holds no project state.
+- Does not own: the disclosure policy (Rust only), any write, the editor engine (it
+  reads the editor session, never Monaco), the app's own UI call paths (presentation
+  keeps using domain selectors and commands — contract brief §1).
+- Depends on: read-only owner selectors (EditorDomain's `getSessionDocumentsByPath`;
+  SelectionDomain, GroupDomain, SyntaxDomain and LanguageSupportDomain selectors join
+  in later slices), `dbStorage.getWorkspaceEpoch`, and the hydration signal
+  `useProjectPersistence` returns. No UI imports, no state writes.
+- Design: `docs/plans/agent-integration/brief-project-api-contract.md` §4.3, §8.
+
 ## 2.5 Presentation Layer
 
 - Owns rendering only; no domain mutation logic. Composition state helpers that exist to
@@ -292,6 +312,8 @@ marked below.
 - `LanguageSupportDomain`, `TerminalDomain` → infrastructure adapters only.
 - `SyntaxDomain` → nothing (pure); its Monaco adapter is injected by the shell.
 - `CrashDomain` pure core → nothing; capture runtime → window/Tauri APIs only.
+- `ProjectApiBridge` (adapter) → owner domains' read-only selectors, plus the
+  workspace epoch from `dbStorage`; never commands, never the editor engine.
 
 ## 3.2 Forbidden
 

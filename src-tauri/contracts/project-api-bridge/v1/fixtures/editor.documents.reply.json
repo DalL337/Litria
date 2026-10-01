@@ -1,0 +1,77 @@
+{
+  "kind": "result",
+  "result": {
+    "documents": [
+      {
+        "kind": "buffer",
+        "path": "src/open.ts",
+        "state": "open",
+        "dirty": true,
+        "revision": "b1-b7c5b586fa9b9cd71d879a6abb22dde7",
+        "text": "export const a = 1;\n",
+        "range": {
+          "startLine": 1,
+          "endLine": 1
+        },
+        "totalLines": 1,
+        "truncated": false,
+        "lineCut": false
+      },
+      {
+        "kind": "buffer",
+        "path": "src/closed-dirty.ts",
+        "state": "closedDirty",
+        "dirty": true,
+        "revision": "b1-50a288dabd9f0903cf6989aa630bc66d",
+        "text": "let x = 2;\n",
+        "range": {
+          "startLine": 1,
+          "endLine": 1
+        },
+        "totalLines": 1,
+        "truncated": false,
+        "lineCut": false
+      },
+      {
+        "kind": "notBuffered",
+        "path": "src/closed-clean.ts",
+        "state": "closedClean"
+      },
+      {
+        "kind": "notBuffered",
+        "path": "src/not-in-session.ts",
+        "state": "none"
+      },
+      {
+        "kind": "buffer",
+        "path": "src/lines.ts",
+        "state": "open",
+        "dirty": false,
+        "revision": "b1-9e8b42ce557d187ada949a6d25380a03",
+        "text": "two\nthree\n",
+        "range": {
+          "startLine": 2,
+          "endLine": 3
+        },
+        "totalLines": 4,
+        "truncated": false,
+        "lineCut": false
+      },
+      {
+        "kind": "buffer",
+        "path": "dist/bundle.min.js",
+        "state": "open",
+        "dirty": false,
+        "revision": "b1-ca89c64f9d7b52ff402305ed07b31e42",
+        "text": "!functio",
+        "range": {
+          "startLine": 1,
+          "endLine": 1
+        },
+        "totalLines": 1,
+        "truncated": true,
+        "lineCut": true
+      }
+    ]
+  }
+}
