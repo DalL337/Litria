@@ -1712,6 +1712,48 @@ mod tests {
 
     // --- Adversarial pass (P3): reproductions ---------------------------------
 
+    /// Codex review F3 (2026-10-01): P3 drops the NAMES a swapped-in link
+    /// exposes (F2, below), but the .gitignore counts came later and counted
+    /// what the walker listed through the link — entries inside `.git`, or
+    /// outside the project.
+    #[test]
+    fn a_directory_swapped_for_a_link_mid_walk_adds_nothing_to_the_counts() {
+        for (tag, target_is_outside) in [("count-swap-denied", false), ("count-swap-outside", true)] {
+            let root = temp_root(tag);
+            let outside = temp_root(&format!("{tag}-outside"));
+            put(&root, ".gitignore", "*.txt\nhidden/\n");
+            put(&root, "src/initial.ts", "x\n");
+            let target = if target_is_outside { outside.clone() } else { root.join(".git") };
+            put(&target, "leak.txt", "x\n");
+            put(&target, "hidden/x.ts", "x\n");
+            let probe = root.join("probe");
+            if !make_dir_link(&probe, &target) {
+                eprintln!("skipped: this host cannot create directory links");
+                return;
+            }
+            remove_dir_link(&probe);
+            let (swap_root, swap_target) = (root.clone(), target.clone());
+            let mut swapping = budget();
+            swapping.before_enter = Some(Box::new(move |path: &str| {
+                if path == "src" {
+                    fs::rename(swap_root.join("src"), swap_root.join("src-real")).unwrap();
+                    assert!(make_dir_link(&swap_root.join("src"), &swap_target));
+                }
+            }));
+            let paths = request(serde_json::json!({ "query": "never", "target": "path" }));
+            let result = search(&root, &paths, &mut Scripted::default(), &mut swapping).unwrap();
+            assert_eq!(
+                (result.skipped.ignored_files, result.skipped.ignored_directories),
+                (0, 0),
+                "{tag}: counted what the link exposed"
+            );
+            assert_eq!(result.skipped, SkippedCounts::default(), "{tag}");
+            remove_dir_link(&root.join("src"));
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&outside);
+        }
+    }
+
     /// F2: a directory swapped for a link between being listed and being
     /// entered. The walker then lists the link's TARGET under the allowed
     /// name; a path search reports names without reading the files, so the
