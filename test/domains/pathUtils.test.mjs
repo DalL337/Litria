@@ -10,6 +10,7 @@ import {
   splitPathAtLastSeparator,
   isFiniteNumber,
   findReservedDeviceSegment,
+  toProjectAbsPath,
 } from '../../src/utils/path.js';
 
 // ---------------------------------------------------------------------------
@@ -267,4 +268,13 @@ test('uniqueFolderSegment uniquifies against taken paths, case-insensitively', (
 test('uniqueFolderSegment normalizes taken paths before comparing', () => {
   assert.equal(uniqueFolderSegment('src', ['/src']), 'src-2');
   assert.equal(uniqueFolderSegment('My Group', ['My-Group']), 'My-Group-2');
+});
+
+test('toProjectAbsPath builds the absolute forward-slash key SyntaxDomain indexes by', () => {
+  assert.equal(toProjectAbsPath('/proj', 'src/app.ts'), '/proj/src/app.ts');
+  assert.equal(toProjectAbsPath('/proj/', 'src/app.ts'), '/proj/src/app.ts');
+  assert.equal(toProjectAbsPath('C:\\Users\\alice\\proj', 'src\\app.ts'), 'C:/Users/alice/proj/src/app.ts');
+  assert.equal(toProjectAbsPath('/proj', '/src/app.ts'), '/proj/src/app.ts');
+  assert.equal(toProjectAbsPath(null, 'src/app.ts'), null);
+  assert.equal(toProjectAbsPath('/proj', ''), null);
 });

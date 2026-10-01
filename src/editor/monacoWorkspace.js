@@ -10,6 +10,7 @@ import { didOpen as lspDidOpen, didChange as lspDidChange, didClose as lspDidClo
 import { registerPythonLspProviders } from '../lsp/pythonLspProviders';
 import { registerTypescriptLspProviders } from '../lsp/typescriptLspProviders';
 import { registerManagedLspProviders } from '../lsp/managedLspProviders';
+import { toProjectAbsPath } from '../utils/path';
 
 /**
  * Monaco workspace — the single-owner side of the editor (ADR-017).
@@ -54,13 +55,6 @@ export function toLspUri(projectRootPath, filename) {
   const file = filename.replace(/\\/g, '/').replace(/^\//, '');
   const full = `${root}/${file}`;
   return /^[a-zA-Z]:/.test(full) ? `file:///${full}` : `file://${full}`;
-}
-
-export function toAbsPath(projectRootPath, filename) {
-  const root = typeof projectRootPath === 'string' ? projectRootPath.replace(/\\/g, '/').replace(/\/$/, '') : '';
-  if (!root || !filename) return null;
-  const file = filename.replace(/\\/g, '/').replace(/^\//, '');
-  return `${root}/${file}`;
 }
 
 function lspSeverityToMonaco(severity) {
@@ -121,7 +115,7 @@ export function acquireModel(tab, { projectId, projectRootPath, syntaxAdapter })
     );
     models.set(tab.id, model);
     // Register with syntaxAdapter for export parsing + patch plan application.
-    const absPath = toAbsPath(projectRootPath, tab.filename);
+    const absPath = toProjectAbsPath(projectRootPath, tab.filename);
     if (syntaxAdapter && absPath) {
       openSyntaxTabs.set(tab.id, absPath);
       syntaxAdapter.onFileOpened(absPath, tab.workingCode ?? '', model);
@@ -178,7 +172,7 @@ export function acquireModel(tab, { projectId, projectRootPath, syntaxAdapter })
       monaco.editor.setModelLanguage(model, nextLanguage);
     }
     // Detect file rename/move: stored path differs from current filename.
-    const absPath = toAbsPath(projectRootPath, tab.filename);
+    const absPath = toProjectAbsPath(projectRootPath, tab.filename);
     const storedPath = openSyntaxTabs.get(tab.id);
     if (syntaxAdapter && absPath && storedPath && storedPath !== absPath) {
       openSyntaxTabs.set(tab.id, absPath);

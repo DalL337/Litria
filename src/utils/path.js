@@ -10,6 +10,25 @@ export function normalizePath(path) {
     : '';
 }
 
+/**
+ * The absolute, forward-slash path of a project file: the key SyntaxDomain
+ * indexes files under. The editor registers open files with it and the
+ * filesystem write manager unregisters and refreshes them with it, so the two
+ * always name the same entry. (Discovery builds the same key for the files it
+ * lists.) Returns null without a root or a filename.
+ *
+ * @param {string|null} projectRootPath - root as the app holds it (Windows
+ *   backslashes allowed)
+ * @param {string} filename - project-relative path
+ * @returns {string|null}
+ */
+export function toProjectAbsPath(projectRootPath, filename) {
+  const root = typeof projectRootPath === 'string' ? projectRootPath.replace(/\\/g, '/').replace(/\/$/, '') : '';
+  if (!root || !filename) return null;
+  const file = filename.replace(/\\/g, '/').replace(/^\//, '');
+  return `${root}/${file}`;
+}
+
 export function getBasename(path) {
   const normalized = normalizePath(path);
   const parts = normalized.split('/');

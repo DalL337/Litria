@@ -27,7 +27,7 @@
  *      docs/rfcs/filesystem-write-manager.md
  */
 import { dbUpdatePiece, dbDeletePiece, dbUpdateGroup, dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup } from '../project/dbStorage.js';
-import { findReservedDeviceSegment } from '../utils/path.js';
+import { findReservedDeviceSegment, toProjectAbsPath } from '../utils/path.js';
 import { emitPersistenceWriteFailure } from '../project/persistenceFailures.js';
 
 /**
@@ -305,6 +305,23 @@ export function createFilesystemWriteManager(deps) {
     readProjectFile,
   } = deps;
 
+  // ---- Syntax domain keys --------------------------------------------------
+  // SyntaxDomain indexes a file under its ABSOLUTE path, the key discovery and
+  // the editor register it with. This manager works in project-relative paths,
+  // and used to pass them straight through: every unregister matched nothing
+  // (a deleted file stayed indexed, its wires never went broken) and every
+  // notify registered a second, relative-keyed copy of the file (2026-10-01,
+  // P4 gate item 5).
+  function unregisterSyntaxFile(relativePath) {
+    const key = toProjectAbsPath(getRootPath(), relativePath);
+    if (unregisterFile && key) unregisterFile(key);
+  }
+
+  function notifySyntaxFile(relativePath, contents) {
+    const key = toProjectAbsPath(getRootPath(), relativePath);
+    if (notifyFileChanged && key) notifyFileChanged(key, contents);
+  }
+
   // ---- Delete journal ------------------------------------------------------
   // Stashes file content before deletion so undo can restore files to disk.
   const deleteJournal = new Map();
@@ -469,16 +486,13 @@ export function createFilesystemWriteManager(deps) {
       }
     }
 
-    // Step 6: Syntax domain — unregister old paths, re-register new paths
-    if (unregisterFile) {
-      for (const piece of affected) {
-        const oldPath = normalizePath(piece.filename);
-        unregisterFile(oldPath);
-      }
+    // Step 6: Syntax domain — unregister the old paths. Wires from a moved
+    // file go broken (its importers still name the old path) but keep their
+    // edges, so the editor's rename of an open tab (adapter.onFileRenamed)
+    // still re-points them and rewrites the importers.
+    for (const piece of affected) {
+      unregisterSyntaxFile(normalizePath(piece.filename));
     }
-    // Note: re-registration happens when the file is next opened in the editor.
-    // The syntax domain's edge reconciliation (marking edges broken on unregister)
-    // handles the connection path update concern from the PRD.
 
     // Step 7: Persistence update (SQLite — always, even in batch mode since
     // individual row updates are cheap).
@@ -487,7 +501,22 @@ export function createFilesystemWriteManager(deps) {
       dbUpdatePiece(entry.pieceId, { filePath: entry.path, label: getBasename(entry.path) }).catch(() => {});
     }
 
-    // Step 8: Scaffold refresh
+    // Step 8: Syntax domain — index the new paths from disk, so a rewritten
+    // importer resolves against the moved file at once instead of staying
+    // broken until discovery re-runs. An unreadable file is left to that run.
+    if (readProjectFile) {
+      await Promise.all(updates.map(async (entry) => {
+        let text = null;
+        try {
+          text = await readProjectFile(rootPath, entry.path);
+        } catch (_) {
+          // Discovery's re-run on the scaffold refresh indexes it instead.
+        }
+        if (typeof text === 'string') notifySyntaxFile(entry.path, text);
+      }));
+    }
+
+    // Step 9: Scaffold refresh
     if (!opts.skipScaffold) bumpScaffoldRefresh();
 
     return { success: true, persistence: dispatchedPersistence ? 'dispatched' : 'none', updates };
@@ -549,7 +578,7 @@ export function createFilesystemWriteManager(deps) {
     if (piece) {
       updatePieceFilenames([{ pieceId: piece.id, path: normalizedDest }]);
       if (updateTabFilename) updateTabFilename(piece.id, normalizedDest);
-      if (unregisterFile) unregisterFile(normalizePath(piece.filename));
+      unregisterSyntaxFile(normalizePath(piece.filename));
       dispatchedPersistence = true;
       dbUpdatePiece(piece.id, { filePath: normalizedDest, label: getBasename(normalizedDest) }).catch(() => {});
 
@@ -600,7 +629,7 @@ export function createFilesystemWriteManager(deps) {
         }
       }
     }
-    if (notifyFileChanged) notifyFileChanged(normalizedDest, contents);
+    notifySyntaxFile(normalizedDest, contents);
 
     if (!opts.skipScaffold) bumpScaffoldRefresh();
     return { success: true, persistence: dispatchedPersistence ? 'dispatched' : 'none', materialized: true };
@@ -695,10 +724,8 @@ export function createFilesystemWriteManager(deps) {
     }
 
     // Step 5: Syntax domain cleanup
-    if (unregisterFile) {
-      for (const piece of affected) {
-        unregisterFile(normalizePath(piece.filename));
-      }
+    for (const piece of affected) {
+      unregisterSyntaxFile(normalizePath(piece.filename));
     }
 
     // Step 6: Remove pieces from state (with filesystem restore on undo)
@@ -911,10 +938,8 @@ export function createFilesystemWriteManager(deps) {
     const written = await writeProjectFile(rootPath, filePath, contents);
     if (!written) return fail(`Cannot write "${filePath}"`, 'fs.write_failed');
 
-    // If this file maps to a piece, notify syntax domain
-    if (notify && notifyFileChanged) {
-      notifyFileChanged(normalizePath(filePath), contents);
-    }
+    // Refresh the syntax index with the written text
+    if (notify) notifySyntaxFile(normalizePath(filePath), contents);
 
     if (!skipScaffold) bumpScaffoldRefresh();
     return ok('none');
