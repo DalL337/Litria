@@ -186,7 +186,14 @@ export function useSyntaxPickerActions({
     const { edgeId, connectionId } = syntaxPickerState;
     const notify = (res) => {
       if (res?.status === 'noop') showToast('Already imported', { severity: 'info' });
-      else if (res?.status === 'error') showToast("Couldn't write import — file unreadable", { severity: 'error' });
+      else if (res?.status === 'unsupported') {
+        showToast(
+          res.reason === 'typeIntoJavaScript'
+            ? "TypeScript types can't be imported into a JavaScript file"
+            : "These files can't import from each other",
+          { severity: 'info' }
+        );
+      } else if (res?.status === 'error') showToast("Couldn't write the import", { severity: 'error' });
     };
     if (edgeId && symbolIds.length) {
       Promise.resolve(syntaxAdapter?.handleResolveMultipleSymbols({ edgeId, symbolIds })).then(notify).catch(() => {});

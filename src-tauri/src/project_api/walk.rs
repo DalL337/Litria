@@ -27,7 +27,7 @@ use ignore::Match;
 
 use super::paths::is_valid_api_path;
 use super::policy::{classify, classify_directory, Class};
-use super::reader::{read_disk_capped, DiskRead};
+use super::reader::{read_disk_capped, resolves_to_itself, DiskRead};
 
 /// A `.gitignore` larger than this is not honoured: its rules are compiled on
 /// every walk, so a hostile repository could make one arbitrarily expensive.
@@ -59,6 +59,25 @@ impl Child {
         match self.kind {
             Kind::File => self.name.clone(),
             Kind::Directory => format!("{}/", self.name),
+        }
+    }
+}
+
+/// What one directory's listing adds to the walker's counts, kept apart
+/// until the directory is known to be genuine (see `Walker::enter`).
+#[derive(Default)]
+struct Counts {
+    unreadable_files: u32,
+    unreadable_directories: u32,
+    ignored_files: u32,
+    ignored_directories: u32,
+}
+
+impl Counts {
+    fn unaddressable(&mut self, kind: Kind) {
+        match kind {
+            Kind::File => self.unreadable_files += 1,
+            Kind::Directory => self.unreadable_directories += 1,
         }
     }
 }
@@ -143,6 +162,17 @@ impl Walker {
         } else {
             self.root.join(&relative)
         };
+        // Only a directory that resolves to exactly itself is listed and
+        // counted: one swapped for a link after its parent was listed would
+        // be listed through the link, and its entries — inside `.git`, or
+        // outside the project — must add nothing, not even to a count (Codex
+        // review F3; P3 finding F2 for names). Checked before listing and
+        // again after; a link swapped in and out between the two checks is
+        // the residual P3 accepted for names.
+        let genuine = |walker: &Self| relative.is_empty() || resolves_to_itself(&walker.root, &relative);
+        if !genuine(self) {
+            return;
+        }
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(_) => {
@@ -156,6 +186,8 @@ impl Walker {
         // everything below it.
         let ignore = if self.honour_gitignore { self.load_gitignore(&relative) } else { None };
         let mut children = Vec::new();
+        let mut counts = Counts::default();
+        let mut scope_found = false;
         for entry in entries {
             self.examined += 1;
             if self.examined > self.max_examined {
@@ -164,12 +196,12 @@ impl Walker {
                 return;
             }
             let Ok(entry) = entry else {
-                self.unreadable_files += 1;
+                counts.unreadable_files += 1;
                 continue;
             };
             // The entry's own type: a link reports itself, never its target.
             let Ok(file_type) = entry.file_type() else {
-                self.unreadable_files += 1;
+                counts.unreadable_files += 1;
                 continue;
             };
             if file_type.is_symlink() {
@@ -208,26 +240,34 @@ impl Walker {
             // a `.gitignore` excludes it.
             if wanted.is_none() && self.is_ignored(&path, kind == Kind::Directory, &relative, ignore.as_ref()) {
                 match kind {
-                    Kind::File => self.ignored_files += 1,
-                    Kind::Directory => self.ignored_directories += 1,
+                    Kind::File => counts.ignored_files += 1,
+                    Kind::Directory => counts.ignored_directories += 1,
                 }
                 continue;
             }
             let Ok(name) = file_name.into_string() else {
-                self.count_unaddressable(kind);
+                counts.unaddressable(kind);
                 continue;
             };
             if !is_valid_api_path(&path) {
-                self.count_unaddressable(kind);
+                counts.unaddressable(kind);
                 continue;
             }
             if wanted.is_some() && depth + 1 == self.scope.len() {
-                self.scope_found = true;
+                scope_found = true;
             } else if wanted.is_some() && kind == Kind::File {
                 continue; // a file cannot contain the rest of the scope
             }
             children.push(Child { name, kind });
         }
+        if !genuine(self) {
+            return;
+        }
+        self.unreadable_files += counts.unreadable_files;
+        self.unreadable_directories += counts.unreadable_directories;
+        self.ignored_files += counts.ignored_files;
+        self.ignored_directories += counts.ignored_directories;
+        self.scope_found |= scope_found;
         children.sort_by_key(|child| std::cmp::Reverse(child.key()));
         self.stack.push(Frame { relative, children, ignore });
     }
@@ -273,12 +313,7 @@ impl Walker {
         false
     }
 
-    fn count_unaddressable(&mut self, kind: Kind) {
-        match kind {
-            Kind::File => self.unreadable_files += 1,
-            Kind::Directory => self.unreadable_directories += 1,
-        }
-    }
+
 }
 
 impl Iterator for Walker {

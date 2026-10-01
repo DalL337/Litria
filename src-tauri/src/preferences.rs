@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::{CommandError, CommandResult};
 use crate::write_ops;
 
-const GLOBAL_FILE: &str = "global.litria.toml";
+pub(crate) const GLOBAL_FILE: &str = "global.litria.toml";
 const SCHEMA_VERSION: i64 = 1;
 const FILE_HEADER: &str =
     "# Litria global preferences — hand-editable.\n# Values here are how Litria behaves for you, across all projects.\n\n";
@@ -150,12 +150,23 @@ pub(crate) fn load_global(dir: &Path, legacy: &HashMap<String, String>) -> Resul
 }
 
 /// One global preference as text, read without side effects: no folder or
-/// file is created and nothing migrates. None when the file, the key or a
-/// string value is absent, or the file cannot be parsed.
-pub(crate) fn global_text(dir: &Path, key: &str) -> Option<String> {
-    let content = std::fs::read_to_string(dir.join(GLOBAL_FILE)).ok()?;
-    let prefs = parse_doc(&content, GLOBAL_FILE).ok()?;
-    prefs.get(key)?.as_str().map(str::to_owned)
+/// file is created and nothing migrates. `Ok(None)` when the file or the key
+/// is absent; an error when the file exists but cannot be read or parsed, or
+/// the value is not text. A disclosure rule reads its preference through this
+/// and fails closed on the error (Codex review F1, 2026-10-01).
+pub(crate) fn global_text(dir: &Path, key: &str) -> Result<Option<String>, String> {
+    let path = dir.join(GLOBAL_FILE);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Failed to read global preferences: {error}")),
+    };
+    let prefs = parse_doc(&content, GLOBAL_FILE)?;
+    match prefs.get(key) {
+        None => Ok(None),
+        Some(toml::Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(format!("{GLOBAL_FILE}: {key} is not text")),
+    }
 }
 
 /// Persist one preference into the global file (read-modify-write, atomic).
@@ -368,7 +379,7 @@ pub(crate) fn prefs_save_global(key: String, value: serde_json::Value) -> Comman
     // The Project API's disclosure policy holds the user's own withheld
     // patterns in memory; a saved change applies from the next call on.
     if key == crate::project_api::policy::USER_EXCLUSIONS_KEY {
-        crate::project_api::policy::set_user_exclusions(value.as_str().unwrap_or(""));
+        crate::project_api::policy::set_user_exclusions_value(&value);
     }
     Ok(())
 }
@@ -436,14 +447,19 @@ mod tests {
     #[test]
     fn global_text_reads_one_string_and_creates_nothing() {
         let dir = temp_dir("global-text");
-        assert_eq!(global_text(&dir, "apiWithheldPaths"), None);
+        assert_eq!(global_text(&dir, "apiWithheldPaths"), Ok(None));
         assert!(!dir.exists(), "reading created the folder");
 
         save_global(&dir, "apiWithheldPaths", &serde_json::json!("secrets/, *.sqlite")).unwrap();
         save_global(&dir, "splashScreen", &serde_json::json!(false)).unwrap();
-        assert_eq!(global_text(&dir, "apiWithheldPaths").as_deref(), Some("secrets/, *.sqlite"));
-        assert_eq!(global_text(&dir, "splashScreen"), None, "not a string");
-        assert_eq!(global_text(&dir, "missing"), None);
+        assert_eq!(global_text(&dir, "apiWithheldPaths"), Ok(Some("secrets/, *.sqlite".to_owned())));
+        assert!(global_text(&dir, "splashScreen").is_err(), "not text is an error, not absence");
+        assert_eq!(global_text(&dir, "missing"), Ok(None));
+
+        // A file that exists but cannot be parsed is an error, never absence:
+        // a disclosure rule reading it must not mistake it for "no rule".
+        std::fs::write(dir.join(GLOBAL_FILE), "[preferences]\napiWithheldPaths = \"private/\"\nunrelated = [\n").unwrap();
+        assert!(global_text(&dir, "apiWithheldPaths").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

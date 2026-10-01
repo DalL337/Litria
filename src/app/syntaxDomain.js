@@ -29,6 +29,24 @@ import { addToExportBlock, removeFromExportBlock } from './exportBlockManager.js
 
 const JSTS_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']);
 
+const TS_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
+
+/** TypeScript proper: the JS/TS files that may import a type. */
+function _isTypeScript(filePath) {
+  const dot = filePath.lastIndexOf('.');
+  return dot !== -1 && TS_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
+}
+
+/**
+ * A symbol only TypeScript can import: a type alias, an interface, or
+ * anything exported with `export type`. Writing one into a .js/.jsx/.mjs/
+ * .cjs file produces `import { type X }`, which is not JavaScript (Codex
+ * review F4, 2026-10-01). Enums are values and stay importable.
+ */
+function _isTypeOnly(sym, def) {
+  return sym?.exportKind === 'type' || def?.definitionKind === 'type' || def?.definitionKind === 'interface';
+}
+
 function _isJsTs(filePath) {
   const dot = filePath.lastIndexOf('.');
   if (dot === -1) return false;
@@ -968,6 +986,21 @@ export function createSyntaxDomain() {
     },
 
     /**
+     * Register a file only if the domain holds no text for it yet. The
+     * filesystem write manager re-indexes a moved file from DISK with this:
+     * when the file is open, the editor registers its live buffer text at the
+     * new path, and the saved text must never overwrite it, whichever lands
+     * first (Codex review F5, 2026-10-01).
+     *
+     * @returns {boolean} whether the text was registered
+     */
+    registerFileIfAbsent(filePath, text) {
+      if (fileTextCache.has(filePath)) return false;
+      commands.registerFile(filePath, text);
+      return true;
+    },
+
+    /**
      * Unregister a file and mark dependent edges broken.
      *
      * @param {string} filePath
@@ -1252,8 +1285,13 @@ export function createSyntaxDomain() {
       // No code can express this edge (mixed languages, or a target that is
       // neither JS/TS nor Python): fail closed WITHOUT adding the symbols, so
       // the edge never claims an import the code does not have.
+      // `refused` says why nothing was written, so the caller can say so
+      // instead of "Already imported" (Codex review F6, 2026-10-01).
       const language = _editLanguage(edge);
-      if (language == null) return { edits: [], edge: { ...edge, symbols: [...edge.symbols] } };
+      if (language == null) {
+        return { edits: [], edge: { ...edge, symbols: [...edge.symbols] }, refused: 'language' };
+      }
+      const typesAllowed = language !== 'jsts' || _isTypeScript(edge.targetFilePath);
 
       const sourceSymbols = symbolIndex.get(edge.sourceFilePath) ?? [];
       const sourceDefs = definitionIndex.get(edge.sourceFilePath) ?? [];
@@ -1261,11 +1299,17 @@ export function createSyntaxDomain() {
       // Filter to symbols not already on the edge, resolving each to its info.
       const onEdge = new Set(edge.symbols.map((s) => s.symbolId));
       const newlyAdded = [];
+      let refusedTypes = 0;
       for (const symbolId of symbolIds) {
         if (onEdge.has(symbolId)) continue;
+        const def = sourceDefs.find((d) => d.symbolId === symbolId);
         let sym = sourceSymbols.find((s) => s.symbolId === symbolId);
-        if (!sym) sym = sourceDefs.find((d) => d.symbolId === symbolId);
+        if (!sym) sym = def;
         if (!sym) continue;
+        if (!typesAllowed && _isTypeOnly(sym, def)) {
+          refusedTypes++;
+          continue;
+        }
         onEdge.add(symbolId); // guard against duplicate symbolIds in the input
         const edgeSym = {
           symbolId,
@@ -1275,6 +1319,9 @@ export function createSyntaxDomain() {
         };
         edge.symbols.push(edgeSym);
         newlyAdded.push(edgeSym);
+      }
+      if (newlyAdded.length === 0 && refusedTypes > 0) {
+        return { edits: [], edge: { ...edge, symbols: [...edge.symbols] }, refused: 'typeIntoJavaScript' };
       }
 
       edge.status = _aggregateEdgeStatus(edge);
@@ -1748,7 +1795,9 @@ export function createSyntaxDomain() {
       if (!edge) return definitions;
 
       const onEdge = new Set(edge.symbols.map((s) => s.symbolId));
-      return definitions.filter((d) => !onEdge.has(d.symbolId));
+      // A plain JavaScript file is never offered a TypeScript type (F4).
+      const typesAllowed = _editLanguage(edge) !== 'jsts' || _isTypeScript(edge.targetFilePath);
+      return definitions.filter((d) => !onEdge.has(d.symbolId) && (typesAllowed || !_isTypeOnly(d, d)));
     },
 
     /** Get the edge ID for a canvas connection ID. */

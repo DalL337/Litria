@@ -26,23 +26,76 @@ pub(crate) const USER_EXCLUSIONS_KEY: &str = "apiWithheldPaths";
 /// commas or new lines, matched against the project-relative path and every
 /// parent directory. ASCII case-insensitive on every platform, like the
 /// built-in rules: this is a disclosure rule, so it errs toward withholding.
+///
+/// `Unavailable` (the preference exists but cannot be read, parsed or
+/// compiled, including one invalid pattern) withholds EVERYTHING until it is
+/// fixed. The user meant to withhold something; failing open would disclose
+/// it (Codex review F1, 2026-10-01).
 #[derive(Default)]
-struct UserExclusions {
-    rules: Option<Gitignore>,
+enum UserExclusions {
+    #[default]
+    Absent,
+    Rules(Gitignore),
+    Unavailable,
+}
+
+impl UserExclusions {
+    /// Whether anything is withheld: the summary names the class then.
+    fn active(&self) -> bool {
+        !matches!(self, UserExclusions::Absent)
+    }
+
+    /// Judged by the names Windows would open (trailing dots and spaces
+    /// removed), like the built-in rules. A path that cannot be judged is
+    /// withheld.
+    fn withholds(&self, segments: &[&str], is_dir: bool) -> bool {
+        let rules = match self {
+            UserExclusions::Absent => return false,
+            UserExclusions::Unavailable => return true,
+            UserExclusions::Rules(rules) => rules,
+        };
+        let path = segments.iter().map(|segment| effective_segment(segment)).collect::<Vec<_>>().join("/");
+        if path.is_empty() || Path::new(&path).has_root() {
+            return true;
+        }
+        matches!(rules.matched_path_or_any_parents(&path, is_dir), Match::Ignore(_))
+    }
 }
 
 fn compile_user_exclusions(text: &str) -> UserExclusions {
     let mut builder = GitignoreBuilder::new("");
     if builder.case_insensitive(true).is_err() {
-        return UserExclusions::default();
+        return UserExclusions::Unavailable;
     }
     let mut any = false;
     for pattern in text.split([',', '\n']).map(str::trim).filter(|pattern| !pattern.is_empty()) {
-        // A pattern that is not a valid glob is skipped, as git skips it.
-        any |= builder.add_line(None, pattern).is_ok();
+        if builder.add_line(None, pattern).is_err() {
+            return UserExclusions::Unavailable;
+        }
+        any = true;
     }
-    UserExclusions {
-        rules: if any { builder.build().ok().filter(|rules| !rules.is_empty()) } else { None },
+    if !any {
+        return UserExclusions::Absent;
+    }
+    match builder.build() {
+        Ok(rules) if rules.is_empty() => UserExclusions::Absent, // comments only
+        Ok(rules) => UserExclusions::Rules(rules),
+        Err(_) => UserExclusions::Unavailable,
+    }
+}
+
+/// The preference as found in the preferences folder: absent (no file, no
+/// key, or a null value) means no restriction; text compiles; anything else
+/// (unreadable or unparseable file, a non-text value, no known folder) is
+/// `Unavailable`.
+fn load_user_exclusions(dir: Option<&Path>) -> UserExclusions {
+    let Some(dir) = dir else {
+        return UserExclusions::Unavailable;
+    };
+    match crate::preferences::global_text(dir, USER_EXCLUSIONS_KEY) {
+        Ok(None) => UserExclusions::Absent,
+        Ok(Some(text)) => compile_user_exclusions(&text),
+        Err(_) => UserExclusions::Unavailable,
     }
 }
 
@@ -53,11 +106,8 @@ fn compile_user_exclusions(text: &str) -> UserExclusions {
 fn user_exclusions_cell() -> &'static std::sync::RwLock<UserExclusions> {
     static CELL: std::sync::OnceLock<std::sync::RwLock<UserExclusions>> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
-        let text = crate::preferences::preferences_dir()
-            .ok()
-            .and_then(|dir| crate::preferences::global_text(&dir, USER_EXCLUSIONS_KEY))
-            .unwrap_or_default();
-        std::sync::RwLock::new(compile_user_exclusions(&text))
+        let dir = crate::preferences::preferences_dir().ok();
+        std::sync::RwLock::new(load_user_exclusions(dir.as_deref()))
     })
 }
 
@@ -80,31 +130,34 @@ fn with_user_exclusions<R>(read: impl FnOnce(&UserExclusions) -> R) -> R {
     }
 }
 
-/// Replace the user's withheld patterns (the preference's text).
-pub(crate) fn set_user_exclusions(text: &str) {
-    let compiled = compile_user_exclusions(text);
+fn replace_user_exclusions(next: UserExclusions) {
     #[cfg(test)]
-    TEST_USER_EXCLUSIONS.with(|cell| *cell.borrow_mut() = compiled);
+    TEST_USER_EXCLUSIONS.with(|cell| *cell.borrow_mut() = next);
     #[cfg(not(test))]
     {
-        *user_exclusions_cell().write().unwrap_or_else(|poisoned| poisoned.into_inner()) = compiled;
+        *user_exclusions_cell().write().unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
     }
 }
 
-/// Whether the user's patterns withhold a path whose segments are given.
-/// Judged by the names Windows would open (trailing dots and spaces removed),
-/// like the built-in rules. A path that cannot be judged is withheld.
+/// Replace the user's withheld patterns with a saved preference value: text
+/// compiles, null clears, any other value is `Unavailable` (withholds all).
+pub(crate) fn set_user_exclusions_value(value: &serde_json::Value) {
+    replace_user_exclusions(match value {
+        serde_json::Value::String(text) => compile_user_exclusions(text),
+        serde_json::Value::Null => UserExclusions::Absent,
+        _ => UserExclusions::Unavailable,
+    });
+}
+
+/// Replace the user's withheld patterns with text (tests; production saves go
+/// through `set_user_exclusions_value`).
+#[cfg(test)]
+pub(crate) fn set_user_exclusions(text: &str) {
+    replace_user_exclusions(compile_user_exclusions(text));
+}
+
 fn is_user_excluded(segments: &[&str], is_dir: bool) -> bool {
-    with_user_exclusions(|user| {
-        let Some(rules) = &user.rules else {
-            return false;
-        };
-        let path = segments.iter().map(|segment| effective_segment(segment)).collect::<Vec<_>>().join("/");
-        if path.is_empty() || Path::new(&path).has_root() {
-            return true;
-        }
-        matches!(rules.matched_path_or_any_parents(&path, is_dir), Match::Ignore(_))
-    })
+    with_user_exclusions(|user| user.withholds(segments, is_dir))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,7 +235,7 @@ const ENV_TEMPLATES: &[&str] = &[".env.example", ".env.sample", ".env.template",
 /// the summary names it, never the patterns themselves.
 pub(crate) fn denied_classes() -> Vec<DeniedClass> {
     let mut classes: Vec<DeniedClass> = DENIED.iter().map(|rule| rule.class).collect();
-    if with_user_exclusions(|user| user.rules.is_some()) {
+    if with_user_exclusions(UserExclusions::active) {
         classes.push(DeniedClass::UserExclusions);
     }
     classes
@@ -377,6 +430,53 @@ pub(crate) mod tests {
         for path in [".env", "id_rsa", ".git/config"] {
             assert_eq!(classify(path), Class::Denied, "{path}");
         }
+    }
+
+    /// Codex review F1 (2026-10-01): a withheld-paths preference that exists
+    /// but cannot be read must withhold everything, not nothing.
+    #[test]
+    fn a_user_preference_that_cannot_be_read_withholds_everything() {
+        let dir = std::env::temp_dir().join(format!("litria-policy-prefs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let anything = ["src", "a.ts"];
+
+        assert!(!load_user_exclusions(Some(&dir)).withholds(&anything, false), "no file: no restriction");
+        assert!(load_user_exclusions(None).withholds(&anything, false), "no known folder: withhold");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(crate::preferences::GLOBAL_FILE);
+        for (content, what) in [
+            ("[preferences]\napiWithheldPaths = \"private/\"\nunrelated = [\n", "unparseable file"),
+            ("[preferences]\napiWithheldPaths = [\"private/\"]\n", "a value that is not text"),
+            ("[preferences]\napiWithheldPaths = \"private/, {unclosed\"\n", "an invalid pattern"),
+        ] {
+            std::fs::write(&file, content).unwrap();
+            let loaded = load_user_exclusions(Some(&dir));
+            assert!(loaded.withholds(&anything, false), "{what}: must withhold everything");
+            assert!(loaded.active(), "{what}: the summary must name the class");
+        }
+
+        std::fs::write(&file, "[preferences]\napiWithheldPaths = \"private/\"\n").unwrap();
+        let loaded = load_user_exclusions(Some(&dir));
+        assert!(loaded.withholds(&["private"], true));
+        assert!(!loaded.withholds(&anything, false));
+
+        std::fs::write(&file, "[preferences]\nsplashScreen = false\n").unwrap();
+        assert!(!load_user_exclusions(Some(&dir)).active(), "key absent: no restriction");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The save hook: text compiles, null clears, anything else withholds all.
+    #[test]
+    fn a_saved_value_that_is_not_text_withholds_everything() {
+        let _clear = Withholding::patterns("");
+        set_user_exclusions_value(&serde_json::json!(["private/"]));
+        assert_eq!(classify("src/a.ts"), Class::Denied);
+        set_user_exclusions_value(&serde_json::Value::Null);
+        assert_eq!(classify("src/a.ts"), Class::Allowed);
+        set_user_exclusions_value(&serde_json::json!("private/"));
+        assert_eq!(classify_directory("private"), Class::Denied);
+        assert_eq!(classify("src/a.ts"), Class::Allowed);
     }
 
     #[test]

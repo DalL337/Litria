@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::paths::is_valid_api_path;
-use super::policy::{classify, Class};
+use super::policy::{classify, classify_directory, Class};
 use crate::path_guard::{resolve_existing_relative_path_typed, ResolveError};
 
 /// Files larger than this are never read (brief §10).
@@ -63,23 +63,34 @@ fn read_disk_with(
     if classify(path) == Class::Denied {
         return DiskRead::Denied;
     }
+    // A name withheld only as a DIRECTORY (a user `private/` pattern, a
+    // directory named like an environment template) is readable only as a
+    // regular file. Anything else it could be (missing, a directory) answers
+    // `denied`, so whether it exists is never revealed (Codex review F2).
+    let denied_as_directory = classify_directory(path) == Class::Denied;
+    let withheld = |outcome: DiskRead| if denied_as_directory { DiskRead::Denied } else { outcome };
     let target = match resolve_existing_relative_path_typed(root, path) {
         Ok(target) => target,
         Err(ResolveError::Invalid(_)) => return DiskRead::InvalidPath,
         // A link that leaves the project is withheld like any denied path.
         Err(ResolveError::OutsideRoot) => return DiskRead::Denied,
-        Err(ResolveError::Io(error)) => return io_outcome(error.kind()),
+        Err(ResolveError::Io(error)) => return withheld(io_outcome(error.kind())),
     };
-    match canonical_relative(root, &target) {
-        Some(canonical) if classify(&canonical) != Class::Denied => {}
+    let canonical = match canonical_relative(root, &target) {
+        Some(canonical) if classify(&canonical) != Class::Denied => canonical,
         _ => return DiskRead::Denied,
-    }
+    };
     // Stat the path first, so a directory or FIFO is answered without opening
     // it (opening a FIFO blocks until a writer appears)…
     match fs::metadata(&target) {
         Ok(metadata) if metadata.is_file() => {}
-        Ok(_) => return DiskRead::NotFile,
-        Err(error) => return io_outcome(error.kind()),
+        // A directory is judged as one, under its own name and the name it
+        // resolves to.
+        Ok(metadata) if metadata.is_dir() && classify_directory(&canonical) == Class::Denied => {
+            return DiskRead::Denied;
+        }
+        Ok(_) => return withheld(DiskRead::NotFile),
+        Err(error) => return withheld(io_outcome(error.kind())),
     }
     // …then open once, and check the handle, which cannot change underneath us.
     before_open();
@@ -163,11 +174,22 @@ pub(crate) fn identity(root: &Path, path: &str) -> Identity {
     if classify(path) == Class::Denied {
         return Identity::Denied;
     }
+    // Withheld only as a directory: an identity only for a regular file
+    // (Codex review F2; see `read_disk_with`).
+    let denied_as_directory = classify_directory(path) == Class::Denied;
     match resolve_existing_relative_path_typed(root, path) {
         Ok(target) => match canonical_relative(root, &target) {
-            Some(canonical) if classify(&canonical) != Class::Denied => Identity::Key(canonical),
+            Some(canonical) if classify(&canonical) != Class::Denied => {
+                let is_dir = fs::metadata(&target).map(|metadata| metadata.is_dir()).unwrap_or(false);
+                if is_dir && (denied_as_directory || classify_directory(&canonical) == Class::Denied) {
+                    Identity::Denied
+                } else {
+                    Identity::Key(canonical)
+                }
+            }
             _ => Identity::Denied,
         },
+        Err(ResolveError::Io(_)) if denied_as_directory => Identity::Denied,
         Err(ResolveError::Invalid(_)) => Identity::InvalidPath,
         Err(ResolveError::OutsideRoot) => Identity::Denied,
         // Not on disk (or not resolvable now): the session may still hold it
@@ -919,6 +941,30 @@ mod tests {
         assert!(matches!(read_disk(&root, "private/plan.md"), DiskRead::Denied));
         assert!(matches!(read_disk(&root, "private/missing.md"), DiskRead::Denied), "existence is not revealed");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Codex review F2 (2026-10-01): a name withheld only as a DIRECTORY (a
+    /// `private/` pattern, a directory named like an environment template)
+    /// must be denied whether or not it exists. Answering `notFile` for the
+    /// directory and `notFound` without it revealed that it exists.
+    #[test]
+    fn a_name_withheld_only_as_a_directory_is_denied_whether_or_not_it_exists() {
+        let _user = crate::project_api::policy::tests::Withholding::patterns("private/");
+        let root = temp_root("dir-only");
+        for name in ["private", ".env.example", "nested/private"] {
+            assert!(matches!(read_disk(&root, name), DiskRead::Denied), "{name}: absent");
+            fs::create_dir_all(root.join(name)).unwrap();
+            assert!(matches!(read_disk(&root, name), DiskRead::Denied), "{name}: a directory");
+        }
+        // The same names as FILES: `private/` withholds directories only, and
+        // the template exception is for files.
+        let files = temp_root("dir-only-files");
+        for name in ["private", ".env.example"] {
+            fs::write(files.join(name), "x\n").unwrap();
+            assert!(matches!(read_disk(&files, name), DiskRead::Text { .. }), "{name}: a file");
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&files);
     }
 
     #[cfg(unix)]

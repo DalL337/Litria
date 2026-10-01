@@ -232,9 +232,10 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
     if (res == null) return { success: false, patchesApplied: 0, syntaxConn: null, status: 'error' };
 
     return {
-      success: res.status !== 'error',
+      success: res.status === 'written' || res.status === 'noop',
       patchesApplied: res.written,
       status: res.status,
+      reason: res.reason,
       syntaxConn: syntaxDomain.selectors.getSyntaxConnection(connectionId),
     };
   }
@@ -255,9 +256,10 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
     if (res == null) return { success: false, patchesApplied: 0, edge: null, status: 'error' };
 
     return {
-      success: res.status !== 'error',
+      success: res.status === 'written' || res.status === 'noop',
       patchesApplied: res.written,
       status: res.status,
+      reason: res.reason,
       edge: syntaxDomain.selectors.getSyntaxEdge(edgeId),
     };
   }
@@ -290,8 +292,14 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
       sourceText,
     });
     if (!result) return null;
+    // Refused by the domain (languages that cannot import each other, a
+    // TypeScript type into JavaScript): say so, never "nothing to do" (Codex
+    // review F6, 2026-10-01).
+    if (result.refused) return { status: 'unsupported', reason: result.refused, written: 0 };
 
     const written = await _applyEdits(result.edits);
+    // A write that failed is an error, not a no-op.
+    if (written < result.edits.length) return { status: 'error', written };
     return { status: written > 0 ? 'written' : 'noop', written };
   }
 
@@ -411,6 +419,14 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
     }
 
     const result = syntaxDomain.commands.renameFile(oldPath, newPath);
+
+    // An open file is indexed from its live buffer, unsaved edits included.
+    // The filesystem write manager may already have unregistered the old path
+    // and indexed the new one from DISK; the buffer wins either way (Codex
+    // review F5, 2026-10-01).
+    if (model) {
+      syntaxDomain.commands.notifyFileChanged(newPath, model.getValue());
+    }
 
     // Group rename patch plans by file and apply them to authoritative text.
     const byFile = new Map();
