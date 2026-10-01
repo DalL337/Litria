@@ -1,6 +1,6 @@
 # Project API build plan
 
-Status: Accepted, 2026-09-30 (owner ruling on PR #85). Proposed the same day and revised with the brief after peer review by Codex. **All slices are pending. No code has been delivered.**
+Status: Accepted, 2026-09-30 (owner ruling on PR #85). Proposed the same day and revised with the brief after peer review by Codex. **All slices are pending. No code has been delivered.** *(Superseded 2026-09-30: P1 merged as PR #86; P2 is built — the slice map holds each slice's status.)*
 
 Decisions: [ADR-031](031-agent-integration-and-lifecycle.md) (semantics), [ADR-033](../../adrs/033-contract-schema-source-of-truth.md) (contract pipeline), [ADR-032](../../adrs/032-workspace-epoch-fencing-and-write-truthfulness.md) (workspace epoch).
 Canonical contract design: [Project API contract brief](brief-project-api-contract.md). Parent design: [agent integration brief](brief-agent-integration.md).
@@ -34,8 +34,8 @@ This document owns sequencing, executable evidence and completion status. It own
 
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
-| P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | In review (see [P1 record](#p1-record)) |
-| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Pending |
+| P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | Done: PR #86, merged 2026-09-30 (see [P1 record](#p1-record)) |
+| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Built 2026-09-30 (see [P2 record](#p2-record)) |
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Pending |
 | P4 | `litria_graph_query` | P2 | Pending |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Pending |
@@ -320,6 +320,80 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 - All tests, standard checks and the live pass pass.
 - The editor-engine guard is unchanged: the bridge reads no Monaco state.
 - The Domain Register and the shell manifest are updated in the same pull request.
+
+### P2 record
+
+**2026-09-30, branch `feat/project-api-p2`,** a worktree off `main` `835e4dd`. Environment: Windows 10, rustc 1.97.1, Node 24.14.0. The pull request is linked from the branch.
+
+**Delivered, as tasked above:**
+- the `project-api-bridge` v1 family: `editor.documents` and `editor.bufferIndex`, the request event envelope, and the reply union, with artifacts and 25 fixtures (two generated) in `src-tauri/contracts/project-api-bridge/v1/`. The test-only artifact and fixture machinery now serves two families;
+- the Rust bridge client (`project_api/bridge.rs`): minted request ids, a pending map of at most 32, a 2 s deadline, attach generations, the reply ceiling checked before parsing, and a reply command that never waits;
+- the JavaScript factory `src/app/projectApiBridge.js` and the hook `src/app/useProjectApiBridge.js`; EditorDomain's read selector `getSessionDocumentsByPath`; the hydration signal `sessionReadyFor` from `useProjectPersistence`; one hook call in `App.jsx`, with its shell-manifest line and a Domain Register entry;
+- effective `litria_files_read`: buffers for `open` and `closedDirty` session entries, disk otherwise, with `source` and `dirty` reported.
+
+**Deviations, each recorded where it applies (contract brief §4.3 and §8 carry dated notes):**
+- **Debug builds only.** The three bridge commands and the hook exist only in debug builds, like `project_api_dev_call`, their only consumer before track T.
+- **Requests fail fast when their generation ends** (`ownerUnavailable`), instead of timing out.
+- **A page protocol for `editor.documents`:** `notBuffered`, `buffer` and `deferred` entries; the first entry of a page is never deferred. Rust checks every reply against its request (paths, order, budgets, ranges) and fails the call on a mismatch.
+- **Buffer lookups use the document's canonical path,** so a case variant or an in-project link finds the buffer of the file it names.
+- **`editor.bufferIndex` has no consumer yet.** Its contract, owner port and client call land here; `litria_files_search` (P3) consumes it. The Rust items carry per-item `dead_code` allows naming that consumer.
+- **Two fixes beyond the tasks,** both found while verifying this slice:
+  - **The editor session now resets per project load, not per project identity** (`useProjectPersistence`, `EditorSessionContext`). A project's `instanceId` is stored in its own database, so a folder copy of a project, or the project reopened, kept the previous session: the copy showed the original's buffers under "All Saved", and the bridge served them as the copy's (a save would also write them into the copy — by inspection, not exercised). Reproduced and verified below.
+  - **A request that arrives while the bridge's attach is resolving is held, then answered.** Rust records an attach before the frontend's call returns; such a request used to be ignored and time out after 2 s.
+
+**Checks (all run in the worktree):**
+
+| Command | Outcome |
+|---|---|
+| `cargo build` | zero warnings |
+| `cargo check --release` | zero warnings; the bridge commands compile out |
+| `cargo test` | 445 passed, 3 ignored (pre-existing) |
+| `LITRIA_UPDATE_CONTRACTS=1 cargo test contracts:: -- --test-threads=1`, then `cargo test contracts::` | 30 contract tests pass against the committed artifacts of both families; the `project-api` v1 artifacts are unchanged |
+| `npm run check:architecture` | all seven guards pass; the editor-engine guard is unchanged |
+| `npm run test:domains` | 1339 of 1339 (1316 before; 20 bridge tests and 3 session-selector tests added) |
+| `npm run build` | pass |
+| `cargo tree -e normal`, before and after | identical (814 lines); no manifest or lockfile changes |
+
+**Planted mistakes, each caught and then restored** (verified identical by content):
+
+| Planted mistake | Caught by |
+|---|---|
+| JavaScript: `totalLine` instead of `totalLines` | the committed-reply test and the ceiling test |
+| JavaScript: the request id echoed as a number | both committed-reply tests and the attach-window test |
+| JavaScript: an unfamiliar operation served as `editor.documents` | the unfamiliar-operation test |
+| JavaScript: no check against the frontend's current epoch | the epoch-check test and the project-switch test |
+| Rust: a request sent to a bridge attached for another epoch | `an_attachment_for_another_epoch_is_owner_unavailable` |
+| Rust: a reply accepted from any generation | `a_reply_from_a_stale_generation_is_refused` |
+| Rust: no policy check on the canonical identity | `a_link_to_a_denied_directory_never_reaches_the_bridge` |
+| Rust: a buffer entry accepted for another path | `a_reply_that_misanswers_the_page_fails_the_call` |
+| Rust: an attach accepted for a workspace that is not open | `attach_requires_the_current_workspace` |
+
+**Adversarial check** ([policy](../../../Agents/docs/adversarial-check-policy.md)). Guarantees: a reply never describes another project; a reply is accepted only for a pending request, from the generation it was addressed to; Rust never parses more than 512 KiB of reply and accepts only replies that answer exactly what was asked; a denied path, requested or resolved, never reaches the bridge; pending requests are capped and every wait ends. Findings:
+
+| Finding | Status |
+|---|---|
+| **High.** The editor session survived a switch to a folder copy (or a reopen), so the bridge served the previous load's buffers. | **Reproduced** live on Windows (a copy of the scratch project opened showing, and reading back, the original's `main.ts`). **Verified fixed** live on Windows with the same script. The fix is in JavaScript only. |
+| **Low (liveness).** A request emitted inside the attach window timed out after 2 s. | **Reproduced** live on Windows (three of three read loops stalled 2 s right after a switch); the JavaScript test written for it failed first. **Verified fixed** live with the same burst (no stall) and by the test. |
+| A case variant on macOS, or a different Unicode normalization, may miss the buffer and read disk. | **Suspected.** Not a disclosure path. The case test detects case-insensitive volumes at runtime, so the macOS CI job exercises it. |
+| A hard link to a buffered file under another name reads disk. | Accepted residual, as for P1's hard-link note. |
+| The IPC layer allocates a reply string before the ceiling check. | Accepted residual: the reply comes from the application's own webview, and the ceiling bounds what Rust parses. |
+
+**Live pass** (debug build from the worktree, CDP, app data redirected to a scratch folder, scratch projects only):
+
+| Check | Outcome |
+|---|---|
+| Effective read right after opening a project | `ownerUnavailable` while it hydrates (about 0.4 s), then answers |
+| Typing without saving | effective read: the buffer, `source: editor`, `dirty: true`; disk read: the saved text; revision stable across calls |
+| Closing the dirty tab | effective read still returns the buffer |
+| A switch during a call (debugger pause inside the bridge's handler, workspace switched in Rust, resumed) | `workspaceChanged`; the old project's answer was discarded |
+| Calls issued immediately after opening another project (three concurrent loops, both directions) | `notReady`, then `ownerUnavailable`, then the new project's text; never the old project's |
+| Reloading the webview | the old listener's request times out; after reopening, calls work again |
+
+**Platform coverage:** the Unix-symlink variant of the link-alias test and the case-variant test on a case-insensitive macOS volume run in the Linux and macOS CI jobs; the junction variant and the case test ran locally on Windows.
+
+**Security review** (security policy Rule 1: new commands): the three bridge commands exist only in debug builds and touch no filesystem; replies are accepted only for pending requests and pass the reply boundary; owner error text is never forwarded; denied paths are answered in Rust before the bridge is asked.
+
+**Found in passing, not fixed here:** a slower file-contents load from the previous project can mark the next one's contents as loaded (`hasLoadedPiecesRef` is set without the `isMounted` guard), so its session restore can open tabs with empty text. Status: suspected, confirmed by inspection. The bridge's readiness does not rely on that ref.
 
 ## P3. Project context and search — the first read set
 

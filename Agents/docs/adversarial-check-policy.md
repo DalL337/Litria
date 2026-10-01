@@ -105,7 +105,9 @@ and for the list of attacks. Each one names the flaw that taught it.
    trailing dots or spaces, links, hard links, alternate data streams, device
    names)? Can one input reach a different object than intended? Read every
    reused helper's normalization (trimming, case folding, separators) before
-   relying on it. *(Flaw 3.)*
+   relying on it. Ask the same of keys a fence relies on: is an "id" unique
+   per session, or stored with the data, so that a copy or a reopen
+   presents it again? *(Flaws 3 and 7.)*
 3. **Bounds on what is consumed.** Is each limit enforced on what is
    actually read, allocated and emitted? That includes encoded size and
    escaping, memory proportional to input (a vector per line, per match or
@@ -240,3 +242,16 @@ Each entry comes from a real finding and records its final status.
    parent directory swapped for a link while the operation runs. That needs
    a process with the user's own write access, which could already delete
    those files itself.*
+7. **A persisted id stood in for "this session"** (2026-09-30, Project API
+   build plan P2, high: wrong content). The editor session reset only when
+   the project's `instanceId` changed. That id is stored in the project's own
+   database, so a folder copy of a project, or the project reopened, kept the
+   previous session: the copy showed the original's buffers under "All
+   Saved", and the new owner bridge served them as the copy's (a save would
+   also write them into the copy — by inspection, not exercised). The fix
+   resets the session
+   per load (the open's own state object). Found by this pass, by asking
+   what the bridge's readiness signal was keyed on.
+   *Status: reproduced live on Windows (a scratch project and its folder
+   copy, driven over CDP); verified fixed live on Windows with the same
+   script. The fix is JavaScript only, so no platform differs.*
