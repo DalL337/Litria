@@ -37,6 +37,12 @@ pub(crate) fn read_disk(root: &Path, path: &str) -> DiskRead {
     read_disk_with(root, path, HARD_CAP_BYTES, || {}, || {}, || {})
 }
 
+/// `read_disk` with a smaller cap: search scans at most this many bytes per
+/// file (brief §10), with every check a read makes.
+pub(crate) fn read_disk_capped(root: &Path, path: &str, cap: u64) -> DiskRead {
+    read_disk_with(root, path, cap.min(HARD_CAP_BYTES), || {}, || {}, || {})
+}
+
 /// `read_disk` with the cap and two hooks for the race windows tests probe:
 /// `before_open` runs between path resolution and the open (a file or parent
 /// can be swapped for a link there); `after_checks` runs between the handle's
@@ -165,9 +171,42 @@ pub(crate) fn identity(root: &Path, path: &str) -> Identity {
         Err(ResolveError::Invalid(_)) => Identity::InvalidPath,
         Err(ResolveError::OutsideRoot) => Identity::Denied,
         // Not on disk (or not resolvable now): the session may still hold it
-        // under exactly this name.
+        // under exactly this name — unless the name passes through a link.
+        // A link that cannot be resolved cannot be judged by what it names,
+        // and its buffer may hold the text of a withheld file it used to
+        // name (P3 adversarial finding F4): fail closed.
+        Err(ResolveError::Io(_)) if passes_through_link(root, path) => Identity::Denied,
         Err(ResolveError::Io(_)) => Identity::Key(path.to_owned()),
     }
+}
+
+/// Whether any existing component of `path` (a valid API path) is a link or
+/// a junction. Stops at the first component that does not exist: nothing
+/// below it exists either.
+fn passes_through_link(root: &Path, path: &str) -> bool {
+    let mut current = root.to_path_buf();
+    for segment in path.split('/') {
+        current.push(segment);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => return false,
+            // Cannot tell: fail closed.
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+/// Whether `path` names an existing file that resolves to exactly itself: no
+/// link in any component, no other spelling. Search uses it before reporting a
+/// match found on disk, so a name listed through a directory swapped for a
+/// link is never reported (P3 adversarial finding F2).
+pub(crate) fn resolves_to_itself(root: &Path, path: &str) -> bool {
+    resolve_existing_relative_path_typed(root, path)
+        .ok()
+        .and_then(|target| canonical_relative(root, &target))
+        .is_some_and(|canonical| canonical == path)
 }
 
 /// On Unix, open non-blocking, so a FIFO swapped in after the stat cannot

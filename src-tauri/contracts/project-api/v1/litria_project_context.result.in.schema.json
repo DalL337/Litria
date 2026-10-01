@@ -1,0 +1,462 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectContextResult",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "description": "The `project-api` family version this server speaks.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "documents": {
+      "$ref": "#/$defs/DocumentsSummary"
+    },
+    "languages": {
+      "description": "What Litria can do for each kind of file in this session.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LanguageCapabilities"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/ServerLimits"
+    },
+    "operations": {
+      "description": "The operations this connection may call, by name.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "policy": {
+      "$ref": "#/$defs/PolicySummary"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectSummary"
+    },
+    "selection": {
+      "$ref": "#/$defs/SelectionSummary"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "project",
+    "selection",
+    "documents",
+    "languages",
+    "operations",
+    "limits",
+    "policy"
+  ],
+  "$defs": {
+    "ActiveDocument": {
+      "type": "object",
+      "properties": {
+        "dirty": {
+          "description": "Whether the editor holds unsaved changes for it.",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "dirty"
+      ]
+    },
+    "DeniedClass": {
+      "description": "A reader that meets an unfamiliar class must still treat it as withheld.",
+      "oneOf": [
+        {
+          "description": "`.litria/`, `litria.toml`.",
+          "type": "string",
+          "const": "litriaState"
+        },
+        {
+          "description": "`.git`, `.hg/`, `.svn/`.",
+          "type": "string",
+          "const": "versionControl"
+        },
+        {
+          "description": "`.env` and `.env.*`.",
+          "type": "string",
+          "const": "environmentFiles"
+        },
+        {
+          "description": "`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`.",
+          "type": "string",
+          "const": "keyMaterial"
+        },
+        {
+          "description": "`id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`.",
+          "type": "string",
+          "const": "sshKeys"
+        },
+        {
+          "description": "`.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `.ssh/`, `.aws/`,\n`.gnupg/`.",
+          "type": "string",
+          "const": "credentials"
+        }
+      ]
+    },
+    "DocumentsSummary": {
+      "type": "object",
+      "properties": {
+        "active": {
+          "description": "The document the editor shows.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActiveDocument"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "complete": {
+          "description": "False when the editor held more buffers than it listed; the counts\nabove then leave those out.",
+          "type": "boolean"
+        },
+        "dirtyCount": {
+          "description": "Documents with unsaved changes, open or closed.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "open": {
+          "description": "Documents open in the editor, in path order, at most 100.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "openOmitted": {
+          "description": "Further open documents that were not listed.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "open",
+        "openOmitted",
+        "dirtyCount",
+        "complete"
+      ]
+    },
+    "FilesReadLimits": {
+      "type": "object",
+      "properties": {
+        "defaultBytesPerDocument": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxBytesPerDocument": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxDocuments": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxFileBytes": {
+          "description": "Larger files are answered `tooLarge`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxTextBytesPerResponse": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxDocuments",
+        "defaultBytesPerDocument",
+        "maxBytesPerDocument",
+        "maxTextBytesPerResponse",
+        "maxFileBytes"
+      ]
+    },
+    "FilesSearchLimits": {
+      "type": "object",
+      "properties": {
+        "defaultResults": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxBuffers": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxBytesPerFile": {
+          "description": "Larger files and buffers are counted as too large, not searched.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxConcurrentSearches": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxFilesScanned": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxQueryLength": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxResults": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "previewLength": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "timeBudgetMs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxQueryLength",
+        "defaultResults",
+        "maxResults",
+        "previewLength",
+        "maxFilesScanned",
+        "maxBytesPerFile",
+        "maxBuffers",
+        "timeBudgetMs",
+        "maxConcurrentSearches"
+      ]
+    },
+    "LanguageCapabilities": {
+      "description": "One kind of file: a language and the exact extensions its flags hold for.",
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "description": "The editor reports errors and warnings for it now.",
+          "type": "boolean"
+        },
+        "documentAccess": {
+          "description": "Its files can be read through the API.",
+          "type": "boolean"
+        },
+        "extensions": {
+          "description": "Lower-case extensions with their dot, for example `.ts`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "language": {
+          "description": "The editor's language id, for example `typescript`.",
+          "type": "string"
+        },
+        "languageServer": {
+          "$ref": "#/$defs/LanguageServer"
+        },
+        "navigation": {
+          "description": "The editor can go to definitions or references.",
+          "type": "boolean"
+        },
+        "relationshipDiscovery": {
+          "description": "Litria discovers import relationships between its files (the canvas\ngraph).",
+          "type": "boolean"
+        },
+        "sourceTransformations": {
+          "description": "Wiring files on the canvas can write import code into them.",
+          "type": "boolean"
+        },
+        "symbols": {
+          "description": "The editor lists the symbols a file declares.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "language",
+        "extensions",
+        "languageServer",
+        "documentAccess",
+        "diagnostics",
+        "navigation",
+        "symbols",
+        "relationshipDiscovery",
+        "sourceTransformations"
+      ]
+    },
+    "LanguageServer": {
+      "description": "A reader that meets an unfamiliar value must treat the server as unknown.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "installed",
+            "notInstalled",
+            "error"
+          ]
+        },
+        {
+          "description": "Not checked yet in this session.",
+          "type": "string",
+          "const": "unknown"
+        },
+        {
+          "description": "Litria has no language server for this language.",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    },
+    "PolicySummary": {
+      "description": "What the disclosure policy withholds, by class — never a list of files.",
+      "type": "object",
+      "properties": {
+        "denied": {
+          "description": "Never disclosed on any surface.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeniedClass"
+          }
+        },
+        "gitignoreHonoured": {
+          "description": "Search does not consult `.gitignore` files.",
+          "type": "boolean"
+        },
+        "unindexedDirectories": {
+          "description": "Directory names search and the graph never enter, at any depth.\nTheir files are still readable by explicit path.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "denied",
+        "unindexedDirectories",
+        "gitignoreHonoured"
+      ]
+    },
+    "ProjectContextLimits": {
+      "type": "object",
+      "properties": {
+        "maxListedPaths": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxListedPaths"
+      ]
+    },
+    "ProjectSummary": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The project's name, as its `litria.toml` gave it.",
+          "type": "string"
+        },
+        "rootName": {
+          "description": "The name of the project's root folder (never its full path).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "rootName"
+      ]
+    },
+    "SelectionSummary": {
+      "type": "object",
+      "properties": {
+        "complete": {
+          "description": "False when the editor reported more selected files than it listed;\nthose could not be checked, so `omitted` leaves them out.",
+          "type": "boolean"
+        },
+        "folder": {
+          "description": "The selected folder group's path, when one is selected.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "omitted": {
+          "description": "Further selected files that were not listed.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "paths": {
+          "description": "Files selected on the canvas, in path order, at most 100.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "paths",
+        "omitted",
+        "complete"
+      ]
+    },
+    "ServerLimits": {
+      "description": "The server's ceilings (contract brief §10). Server ceilings are\nauthoritative: a request over one is refused or answered in part.",
+      "type": "object",
+      "properties": {
+        "filesRead": {
+          "$ref": "#/$defs/FilesReadLimits"
+        },
+        "filesSearch": {
+          "$ref": "#/$defs/FilesSearchLimits"
+        },
+        "maxInFlight": {
+          "description": "Operations one connection may have in flight at once.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxRequestBytes": {
+          "description": "Encoded request, checked before parsing.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxResponseBytes": {
+          "description": "Encoded response, any operation.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "projectContext": {
+          "$ref": "#/$defs/ProjectContextLimits"
+        }
+      },
+      "required": [
+        "maxRequestBytes",
+        "maxResponseBytes",
+        "maxInFlight",
+        "filesRead",
+        "filesSearch",
+        "projectContext"
+      ]
+    }
+  }
+}

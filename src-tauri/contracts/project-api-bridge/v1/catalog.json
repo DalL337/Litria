@@ -18,6 +18,20 @@
       "owner": "EditorDomain",
       "reply": "editor.bufferIndex.reply.schema.json",
       "request": "editor.bufferIndex.request.schema.json"
+    },
+    {
+      "description": "The project-relative paths of the files selected on the canvas (in path order, without duplicates, up to maxPaths; the rest are counted as omitted), the selected folder group's path, and the document the editor shows with its unsaved state.",
+      "name": "workspace.selection",
+      "owner": "SelectionDomain, GroupDomain, EditorDomain",
+      "reply": "workspace.selection.reply.schema.json",
+      "request": "workspace.selection.request.schema.json"
+    },
+    {
+      "description": "For each kind of file Litria recognises (a language and the exact extensions that share its flags), what is available in this session: document access, diagnostics, navigation, symbols, relationship discovery and source transformations, plus the state of its language server.",
+      "name": "languages.capabilities",
+      "owner": "LanguageSupportDomain, SyntaxDomain",
+      "reply": "languages.capabilities.reply.schema.json",
+      "request": "languages.capabilities.request.schema.json"
     }
   ],
   "replyCommand": "project_api_bridge_reply",

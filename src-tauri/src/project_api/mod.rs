@@ -12,10 +12,13 @@
 //! external transport (build plan track T) is the release consumer.
 
 pub(crate) mod bridge;
+mod context;
 mod files_read;
 mod paths;
 mod policy;
 mod reader;
+mod search;
+mod walk;
 mod workspace;
 
 use std::sync::OnceLock;
@@ -29,13 +32,15 @@ use crate::contracts::context::{CallContext, Grant, Principal};
 #[cfg(debug_assertions)]
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::files_read::FilesReadOp;
+use crate::contracts::project_api::files_search::FilesSearchOp;
+use crate::contracts::project_api::project_context::ProjectContextOp;
 #[cfg(debug_assertions)]
 use crate::contracts::project_api_bridge::{BridgeRequestEvent, REQUEST_EVENT};
 
 /// Encoded size of any operation's result (brief §10).
 pub(crate) const MAX_RESPONSE_BYTES: usize = 384 * 1024;
 
-const LIMITS: Limits = Limits {
+pub(crate) const LIMITS: Limits = Limits {
     max_in_flight_per_principal: 4,
     max_response_bytes: MAX_RESPONSE_BYTES,
 };
@@ -46,6 +51,8 @@ pub(crate) fn dispatcher() -> &'static Dispatcher {
     DISPATCHER.get_or_init(|| {
         let mut dispatcher = Dispatcher::new(LIMITS);
         dispatcher.register::<FilesReadOp>(files_read::handle);
+        dispatcher.register::<ProjectContextOp>(context::handle);
+        dispatcher.register::<FilesSearchOp>(search::handle);
         dispatcher
     })
 }

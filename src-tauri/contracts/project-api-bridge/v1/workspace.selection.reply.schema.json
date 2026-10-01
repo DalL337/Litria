@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BridgeReply",
+  "description": "A reply, as JavaScript sends it (the JSON text of the reply command's\n`reply` argument). Read strictly: unknown fields are rejected.",
+  "oneOf": [
+    {
+      "description": "The owner's answer.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "result"
+        },
+        "result": {
+          "$ref": "#/$defs/SelectionResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "result"
+      ]
+    },
+    {
+      "description": "The owner refused or failed. Never forwarded as text.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/BridgeErrorCode"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ]
+    }
+  ],
+  "$defs": {
+    "ActiveDocument": {
+      "type": "object",
+      "properties": {
+        "dirty": {
+          "description": "Whether the editor holds unsaved changes for it.",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "dirty"
+      ]
+    },
+    "BridgeErrorCode": {
+      "oneOf": [
+        {
+          "description": "The request's epoch is not the one the owner's state belongs to.",
+          "type": "string",
+          "const": "workspaceChanged"
+        },
+        {
+          "description": "The owner does not know the operation.",
+          "type": "string",
+          "const": "unknownOperation"
+        },
+        {
+          "description": "The owner could not read the request.",
+          "type": "string",
+          "const": "invalidRequest"
+        },
+        {
+          "description": "Any other failure.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "SelectionResult": {
+      "description": "JavaScript → Rust.",
+      "type": "object",
+      "properties": {
+        "activeDocument": {
+          "description": "The document the editor shows, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActiveDocument"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "folder": {
+          "description": "The selected group's folder, when the selected group is a folder group.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "omitted": {
+          "description": "Selected files that were not listed (the limit or the reply ceiling).",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0
+        },
+        "selected": {
+          "description": "Selected files, in path order, without duplicates.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1
+          },
+          "maxItems": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "selected",
+        "omitted"
+      ]
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "apiVersion": 1,
+  "project": {
+    "name": "p",
+    "rootName": "p"
+  },
+  "selection": {
+    "paths": [],
+    "omitted": 0,
+    "complete": true
+  },
+  "documents": {
+    "open": [],
+    "openOmitted": 0,
+    "dirtyCount": 0,
+    "complete": true
+  },
+  "languages": [],
+  "operations": [
+    "litria_project_context"
+  ],
+  "limits": {
+    "maxRequestBytes": 65536,
+    "maxResponseBytes": 393216,
+    "maxInFlight": 4,
+    "filesRead": {
+      "maxDocuments": 20,
+      "defaultBytesPerDocument": 65536,
+      "maxBytesPerDocument": 262144,
+      "maxTextBytesPerResponse": 262144,
+      "maxFileBytes": 8388608
+    },
+    "filesSearch": {
+      "maxQueryLength": 256,
+      "defaultResults": 50,
+      "maxResults": 200,
+      "previewLength": 200,
+      "maxFilesScanned": 20000,
+      "maxBytesPerFile": 1048576,
+      "maxBuffers": 500,
+      "timeBudgetMs": 2000,
+      "maxConcurrentSearches": 2
+    },
+    "projectContext": {
+      "maxListedPaths": 100
+    }
+  },
+  "policy": {
+    "denied": [
+      "litriaState",
+      "biometrics"
+    ],
+    "unindexedDirectories": [],
+    "gitignoreHonoured": false
+  }
+}

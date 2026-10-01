@@ -1,0 +1,25 @@
+{
+  "scope": "project",
+  "matches": [
+    {
+      "kind": "text",
+      "path": "a.ts",
+      "line": 1,
+      "column": 1,
+      "preview": "a",
+      "source": "disk",
+      "revision": null
+    }
+  ],
+  "truncated": false,
+  "truncatedBy": [],
+  "skipped": {
+    "tooLarge": 0,
+    "notText": 0,
+    "unreadable": 0,
+    "unreadableDirectories": 0,
+    "buffersNotSearched": 0
+  },
+  "filesSearched": 0,
+  "buffersSearched": 0
+}

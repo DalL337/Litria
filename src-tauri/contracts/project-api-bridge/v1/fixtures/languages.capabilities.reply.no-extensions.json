@@ -1,0 +1,18 @@
+{
+  "kind": "result",
+  "result": {
+    "languages": [
+      {
+        "language": "rust",
+        "extensions": [],
+        "languageServer": "none",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      }
+    ]
+  }
+}

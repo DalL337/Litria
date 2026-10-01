@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesSearchResult",
+  "type": "object",
+  "properties": {
+    "buffersSearched": {
+      "description": "Documents searched in the editor's buffers.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "filesSearched": {
+      "description": "Files searched on disk.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "matches": {
+      "description": "Ordered by path, then line, then column.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SearchMatch"
+      }
+    },
+    "scope": {
+      "description": "What was searched: the whole project, or the requested prefix — or why\nthe prefix could not be searched.",
+      "$ref": "#/$defs/SearchScope"
+    },
+    "skipped": {
+      "$ref": "#/$defs/SkippedCounts"
+    },
+    "truncated": {
+      "description": "The search stopped before covering everything it should have; see\n`truncatedBy`. Narrow the search (a prefix, a longer query) to see more.",
+      "type": "boolean"
+    },
+    "truncatedBy": {
+      "description": "Every limit that ended or narrowed the search, in a fixed order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TruncationReason"
+      }
+    }
+  },
+  "required": [
+    "scope",
+    "matches",
+    "truncated",
+    "truncatedBy",
+    "skipped",
+    "filesSearched",
+    "buffersSearched"
+  ],
+  "$defs": {
+    "DocumentSource": {
+      "type": "string",
+      "enum": [
+        "editor",
+        "disk"
+      ]
+    },
+    "SearchMatch": {
+      "description": "One match. A reader that meets an unfamiliar `kind` must skip that match.",
+      "oneOf": [
+        {
+          "description": "The query occurs in a document's text.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "description": "1-based, in Unicode code points.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "line": {
+              "description": "1-based.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "path": {
+              "type": "string"
+            },
+            "preview": {
+              "description": "The matching line without its line break, clipped to 200\ncharacters around the match.",
+              "type": "string"
+            },
+            "revision": {
+              "description": "The revision of the text this match was found in. A later read\nthat returns the same revision shows the same text.",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/DocumentSource"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "line",
+            "column",
+            "preview",
+            "source",
+            "revision"
+          ]
+        },
+        {
+          "description": "The query occurs in a document's project-relative path.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "path"
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "description": "`editor` when the document exists only in the editor (unsaved).",
+              "$ref": "#/$defs/DocumentSource"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "source"
+          ]
+        }
+      ]
+    },
+    "SearchScope": {
+      "description": "Where the search ran. A reader that meets an unfamiliar value must not\nassume the prefix was searched.",
+      "oneOf": [
+        {
+          "description": "No prefix: the whole project.",
+          "type": "string",
+          "const": "project"
+        },
+        {
+          "description": "The prefix names a file or directory, on disk or in the editor.",
+          "type": "string",
+          "const": "prefix"
+        },
+        {
+          "description": "The prefix is not a path the API accepts (contract brief §6).",
+          "type": "string",
+          "const": "prefixInvalid"
+        },
+        {
+          "description": "The disclosure policy withholds the prefix. Existence is not revealed.",
+          "type": "string",
+          "const": "prefixDenied"
+        },
+        {
+          "description": "The prefix is inside a directory search never enters (dependencies,\nbuild output).",
+          "type": "string",
+          "const": "prefixUnindexed"
+        },
+        {
+          "description": "Nothing searchable has that name: no such file or directory, or a link\n(links are not followed).",
+          "type": "string",
+          "const": "prefixNotFound"
+        }
+      ]
+    },
+    "SkippedCounts": {
+      "description": "Files and buffers that were not searched, by reason. Denied paths are\nnever counted.",
+      "type": "object",
+      "properties": {
+        "buffersNotSearched": {
+          "description": "Buffers the editor listed that could not be searched.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "notText": {
+          "description": "Binary, or not valid UTF-8.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tooLarge": {
+          "description": "Over the per-file scan limit.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "unreadable": {
+          "description": "Present, but could not be read through the API.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "unreadableDirectories": {
+          "description": "Directories whose entries could not be listed.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "tooLarge",
+        "notText",
+        "unreadable",
+        "unreadableDirectories",
+        "buffersNotSearched"
+      ]
+    },
+    "TruncationReason": {
+      "description": "A limit that ended or narrowed a search.",
+      "oneOf": [
+        {
+          "description": "More matches exist than `maxResults` allowed.",
+          "type": "string",
+          "const": "results"
+        },
+        {
+          "description": "The files-scanned limit was reached.",
+          "type": "string",
+          "const": "filesScanned"
+        },
+        {
+          "description": "The time budget ran out.",
+          "type": "string",
+          "const": "timeBudget"
+        },
+        {
+          "description": "Some of the editor's buffers could not be searched (`skipped.buffersNotSearched`\ncounts the ones it knows of; the editor may also hold more buffers than it listed).",
+          "type": "string",
+          "const": "bufferCoverage"
+        },
+        {
+          "description": "The encoded response ceiling was reached.",
+          "type": "string",
+          "const": "responseSize"
+        }
+      ]
+    }
+  }
+}

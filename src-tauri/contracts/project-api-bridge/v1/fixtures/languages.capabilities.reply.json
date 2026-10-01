@@ -1,0 +1,73 @@
+{
+  "kind": "result",
+  "result": {
+    "languages": [
+      {
+        "language": "typescript",
+        "extensions": [
+          ".ts",
+          ".tsx"
+        ],
+        "languageServer": "installed",
+        "documentAccess": true,
+        "diagnostics": true,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": true,
+        "sourceTransformations": true
+      },
+      {
+        "language": "python",
+        "extensions": [
+          ".py"
+        ],
+        "languageServer": "notInstalled",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": true,
+        "sourceTransformations": true
+      },
+      {
+        "language": "rust",
+        "extensions": [
+          ".rs"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "go",
+        "extensions": [
+          ".go"
+        ],
+        "languageServer": "error",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "json",
+        "extensions": [
+          ".json"
+        ],
+        "languageServer": "none",
+        "documentAccess": true,
+        "diagnostics": true,
+        "navigation": false,
+        "symbols": true,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      }
+    ]
+  }
+}

@@ -19,7 +19,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::boundary::{accept, Validate};
-use super::context::{CallContext, Principal};
+use super::context::{CallContext, Grant, Principal};
 use super::error::{ContractError, ErrorCode};
 
 pub(crate) trait Operation: 'static {
@@ -93,6 +93,16 @@ impl Dispatcher {
     /// Every capability some registered operation requires.
     pub(crate) fn capabilities(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.handlers.values().map(|registered| registered.capability)
+    }
+
+    /// The operations `grant` may call, by name, in name order: the catalog
+    /// intersected with the grant (`litria_project_context` lists them).
+    pub(crate) fn operations_for(&self, grant: &Grant) -> Vec<String> {
+        self.handlers
+            .iter()
+            .filter(|(_, registered)| grant.allows(registered.capability))
+            .map(|(name, _)| (*name).to_owned())
+            .collect()
     }
 
     pub(crate) fn dispatch(&self, context: &CallContext, name: &str, raw: &[u8]) -> Result<Value, ContractError> {
@@ -241,7 +251,6 @@ mod schema_entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::context::Grant;
     use crate::contracts::project_api::files_read::{FilesReadOp, FilesReadRequest, FilesReadResult};
     use crate::contracts::project_api::{catalog, samples, test_dispatcher};
 

@@ -1,0 +1,9 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "workspace.selection",
+  "request": {
+    "maxPaths": 1000
+  },
+  "requestId": "r1"
+}

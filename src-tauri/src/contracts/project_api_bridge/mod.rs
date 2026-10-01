@@ -19,6 +19,8 @@
 //! is tested against the fixtures beside them.
 
 pub(crate) mod editor;
+pub(crate) mod languages;
+pub(crate) mod workspace;
 
 #[cfg(test)]
 use schemars::JsonSchema;
@@ -137,6 +139,8 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
     vec![
         entry::bridge_entry::<editor::DocumentsOp>(),
         entry::bridge_entry::<editor::BufferIndexOp>(),
+        entry::bridge_entry::<workspace::SelectionOp>(),
+        entry::bridge_entry::<languages::CapabilitiesOp>(),
     ]
 }
 
@@ -145,6 +149,8 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
 #[cfg(test)]
 pub(crate) mod samples {
     use super::editor::{BufferIndexOp, BufferIndexRequest, DocumentQuery, DocumentsOp, DocumentsRequest};
+    use super::languages::{CapabilitiesOp, CapabilitiesRequest};
+    use super::workspace::{SelectionOp, SelectionRequest};
     use super::{BridgeOperation, BridgeRequestEvent};
 
     fn event<O: BridgeOperation>(request: &O::Request) -> BridgeRequestEvent {
@@ -184,6 +190,14 @@ pub(crate) mod samples {
 
     pub(crate) fn buffer_index_event() -> BridgeRequestEvent {
         event::<BufferIndexOp>(&BufferIndexRequest { max_entries: 500 })
+    }
+
+    pub(crate) fn selection_event() -> BridgeRequestEvent {
+        event::<SelectionOp>(&SelectionRequest { max_paths: 1000 })
+    }
+
+    pub(crate) fn capabilities_event() -> BridgeRequestEvent {
+        event::<CapabilitiesOp>(&CapabilitiesRequest {})
     }
 }
 

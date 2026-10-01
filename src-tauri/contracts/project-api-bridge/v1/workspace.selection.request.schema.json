@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SelectionRequest",
+  "description": "Rust → JavaScript.",
+  "type": "object",
+  "properties": {
+    "maxPaths": {
+      "description": "List at most this many selected paths.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "maxPaths"
+  ]
+}

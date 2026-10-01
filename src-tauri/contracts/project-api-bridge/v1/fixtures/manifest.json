@@ -196,6 +196,127 @@
       "limit": true,
       "errorCode": "limitExceeded",
       "note": "Schema-valid, but over the 512 KiB reply ceiling: rejected before parsing."
+    },
+    {
+      "file": "workspace.selection.request.json",
+      "operation": "workspace.selection",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits (asserted in fixtures.rs).",
+      "sample": "selection"
+    },
+    {
+      "file": "languages.capabilities.request.json",
+      "operation": "languages.capabilities",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits (asserted in fixtures.rs).",
+      "sample": "capabilities"
+    },
+    {
+      "file": "workspace.selection.reply.json",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Selected files in path order, a folder group, the active document."
+    },
+    {
+      "file": "workspace.selection.reply.empty.json",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Nothing selected, no active document: folder and activeDocument are optional."
+    },
+    {
+      "file": "workspace.selection.reply.nulls.json",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "accept",
+      "note": "null for an optional part reads as absent."
+    },
+    {
+      "file": "workspace.selection.reply.unknown-field.json",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "reject",
+      "note": "Replies are read strictly."
+    },
+    {
+      "file": "workspace.selection.reply.empty-path.json",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "reject",
+      "note": "Every path has at least one character."
+    },
+    {
+      "file": "workspace.selection.reply.negative-omitted.json",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "reject",
+      "note": "Counts are unsigned."
+    },
+    {
+      "file": "workspace.selection.reply.active-without-dirty.json",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "reject",
+      "note": "The active document always says whether it is dirty."
+    },
+    {
+      "file": "languages.capabilities.reply.json",
+      "operation": "languages.capabilities",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Every language-server state."
+    },
+    {
+      "file": "languages.capabilities.reply.matrix.json",
+      "operation": "languages.capabilities",
+      "message": "reply",
+      "expect": "accept",
+      "note": "The real matrix (src/app/languageCapabilities.js) before any language server was checked; the JavaScript tests answer exactly this."
+    },
+    {
+      "file": "languages.capabilities.reply.unknown-server-state.json",
+      "operation": "languages.capabilities",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An unfamiliar language-server state is rejected."
+    },
+    {
+      "file": "languages.capabilities.reply.no-extensions.json",
+      "operation": "languages.capabilities",
+      "message": "reply",
+      "expect": "reject",
+      "note": "A row names at least one extension."
+    },
+    {
+      "file": "languages.capabilities.reply.extension-too-short.json",
+      "operation": "languages.capabilities",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An extension is a dot and at least one character."
+    },
+    {
+      "file": "languages.capabilities.reply.missing-flag.json",
+      "operation": "languages.capabilities",
+      "message": "reply",
+      "expect": "reject",
+      "note": "Every flag is required."
+    },
+    {
+      "generated": "selectionOverCount",
+      "operation": "workspace.selection",
+      "message": "reply",
+      "expect": "reject",
+      "note": "One selected path more than a reply may list."
+    },
+    {
+      "generated": "capabilitiesOverCount",
+      "operation": "languages.capabilities",
+      "message": "reply",
+      "expect": "reject",
+      "note": "One language row more than a reply may hold."
     }
   ]
 }

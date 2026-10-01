@@ -1,0 +1,10 @@
+{
+  "kind": "result",
+  "result": {
+    "selected": [],
+    "omitted": 0,
+    "activeDocument": {
+      "path": "a.ts"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "kind": "result",
+  "result": {
+    "languages": [
+      {
+        "language": "rust",
+        "extensions": [
+          ".rs"
+        ],
+        "languageServer": "starting",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      }
+    ]
+  }
+}

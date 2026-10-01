@@ -1,0 +1,143 @@
+{
+  "apiVersion": 1,
+  "documents": {
+    "active": {
+      "dirty": true,
+      "path": "src/auth.ts"
+    },
+    "complete": true,
+    "dirtyCount": 2,
+    "open": [
+      "README.md",
+      "src/auth.ts"
+    ],
+    "openOmitted": 0
+  },
+  "languages": [
+    {
+      "diagnostics": true,
+      "documentAccess": true,
+      "extensions": [
+        ".ts",
+        ".tsx"
+      ],
+      "language": "typescript",
+      "languageServer": "installed",
+      "navigation": true,
+      "relationshipDiscovery": true,
+      "sourceTransformations": true,
+      "symbols": true
+    },
+    {
+      "diagnostics": false,
+      "documentAccess": true,
+      "extensions": [
+        ".py"
+      ],
+      "language": "python",
+      "languageServer": "notInstalled",
+      "navigation": true,
+      "relationshipDiscovery": true,
+      "sourceTransformations": true,
+      "symbols": true
+    },
+    {
+      "diagnostics": false,
+      "documentAccess": true,
+      "extensions": [
+        ".rs"
+      ],
+      "language": "rust",
+      "languageServer": "unknown",
+      "navigation": false,
+      "relationshipDiscovery": false,
+      "sourceTransformations": false,
+      "symbols": false
+    },
+    {
+      "diagnostics": false,
+      "documentAccess": true,
+      "extensions": [
+        ".go"
+      ],
+      "language": "go",
+      "languageServer": "error",
+      "navigation": false,
+      "relationshipDiscovery": false,
+      "sourceTransformations": false,
+      "symbols": false
+    },
+    {
+      "diagnostics": true,
+      "documentAccess": true,
+      "extensions": [
+        ".json"
+      ],
+      "language": "json",
+      "languageServer": "none",
+      "navigation": false,
+      "relationshipDiscovery": false,
+      "sourceTransformations": false,
+      "symbols": true
+    }
+  ],
+  "limits": {
+    "filesRead": {
+      "defaultBytesPerDocument": 65536,
+      "maxBytesPerDocument": 262144,
+      "maxDocuments": 20,
+      "maxFileBytes": 8388608,
+      "maxTextBytesPerResponse": 262144
+    },
+    "filesSearch": {
+      "defaultResults": 50,
+      "maxBuffers": 500,
+      "maxBytesPerFile": 1048576,
+      "maxConcurrentSearches": 2,
+      "maxFilesScanned": 20000,
+      "maxQueryLength": 256,
+      "maxResults": 200,
+      "previewLength": 200,
+      "timeBudgetMs": 2000
+    },
+    "maxInFlight": 4,
+    "maxRequestBytes": 65536,
+    "maxResponseBytes": 393216,
+    "projectContext": {
+      "maxListedPaths": 100
+    }
+  },
+  "operations": [
+    "litria_files_read",
+    "litria_files_search",
+    "litria_project_context"
+  ],
+  "policy": {
+    "denied": [
+      "litriaState",
+      "versionControl",
+      "environmentFiles",
+      "keyMaterial",
+      "sshKeys",
+      "credentials"
+    ],
+    "gitignoreHonoured": false,
+    "unindexedDirectories": [
+      "node_modules",
+      "dist"
+    ]
+  },
+  "project": {
+    "name": "Acme Web",
+    "rootName": "acme-web"
+  },
+  "selection": {
+    "complete": true,
+    "folder": "src",
+    "omitted": 0,
+    "paths": [
+      "src/auth.ts",
+      "src/session.ts"
+    ]
+  }
+}

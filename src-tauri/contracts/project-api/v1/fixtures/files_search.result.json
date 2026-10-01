@@ -1,0 +1,50 @@
+{
+  "buffersSearched": 3,
+  "filesSearched": 812,
+  "matches": [
+    {
+      "column": 17,
+      "kind": "text",
+      "line": 12,
+      "path": "src/auth.ts",
+      "preview": "export function signIn(user: User) {",
+      "revision": "b1-0f3a9c2e5d7b8a1c4e6f0a2b3c4d5e6f",
+      "source": "editor"
+    },
+    {
+      "column": 1,
+      "kind": "text",
+      "line": 3,
+      "path": "src/session.ts",
+      "preview": "signIn();",
+      "revision": "d1-9f86d081884c7d659a2feaa0c55ad015",
+      "source": "disk"
+    },
+    {
+      "kind": "path",
+      "path": "src/signIn.test.ts",
+      "source": "disk"
+    },
+    {
+      "kind": "path",
+      "path": "src/signInDraft.ts",
+      "source": "editor"
+    }
+  ],
+  "scope": "prefix",
+  "skipped": {
+    "buffersNotSearched": 1,
+    "notText": 2,
+    "tooLarge": 1,
+    "unreadable": 1,
+    "unreadableDirectories": 1
+  },
+  "truncated": true,
+  "truncatedBy": [
+    "results",
+    "filesScanned",
+    "timeBudget",
+    "bufferCoverage",
+    "responseSize"
+  ]
+}

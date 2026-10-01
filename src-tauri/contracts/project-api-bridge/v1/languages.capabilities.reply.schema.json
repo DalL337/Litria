@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BridgeReply",
+  "description": "A reply, as JavaScript sends it (the JSON text of the reply command's\n`reply` argument). Read strictly: unknown fields are rejected.",
+  "oneOf": [
+    {
+      "description": "The owner's answer.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "result"
+        },
+        "result": {
+          "$ref": "#/$defs/CapabilitiesResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "result"
+      ]
+    },
+    {
+      "description": "The owner refused or failed. Never forwarded as text.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/BridgeErrorCode"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ]
+    }
+  ],
+  "$defs": {
+    "BridgeErrorCode": {
+      "oneOf": [
+        {
+          "description": "The request's epoch is not the one the owner's state belongs to.",
+          "type": "string",
+          "const": "workspaceChanged"
+        },
+        {
+          "description": "The owner does not know the operation.",
+          "type": "string",
+          "const": "unknownOperation"
+        },
+        {
+          "description": "The owner could not read the request.",
+          "type": "string",
+          "const": "invalidRequest"
+        },
+        {
+          "description": "Any other failure.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "CapabilitiesResult": {
+      "description": "JavaScript → Rust.",
+      "type": "object",
+      "properties": {
+        "languages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CapabilityRow"
+          },
+          "maxItems": 32
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "languages"
+      ]
+    },
+    "CapabilityRow": {
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "type": "boolean"
+        },
+        "documentAccess": {
+          "type": "boolean"
+        },
+        "extensions": {
+          "description": "Lower-case extensions with their dot (`.ts`), for which every flag\nbelow holds.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 2
+          },
+          "maxItems": 16,
+          "minItems": 1
+        },
+        "language": {
+          "description": "The editor's language id (for example `typescript`).",
+          "type": "string",
+          "maxLength": 32,
+          "minLength": 1
+        },
+        "languageServer": {
+          "$ref": "#/$defs/LanguageServerState"
+        },
+        "navigation": {
+          "type": "boolean"
+        },
+        "relationshipDiscovery": {
+          "type": "boolean"
+        },
+        "sourceTransformations": {
+          "type": "boolean"
+        },
+        "symbols": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "extensions",
+        "languageServer",
+        "documentAccess",
+        "diagnostics",
+        "navigation",
+        "symbols",
+        "relationshipDiscovery",
+        "sourceTransformations"
+      ]
+    },
+    "LanguageServerState": {
+      "description": "The state of the language server that serves a row, as the editor knows it.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "installed",
+            "notInstalled",
+            "error"
+          ]
+        },
+        {
+          "description": "Not checked yet in this session (it is checked when a file of the\nlanguage is first shown).",
+          "type": "string",
+          "const": "unknown"
+        },
+        {
+          "description": "Litria has no language server for this language.",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    }
+  }
+}

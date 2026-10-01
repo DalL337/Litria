@@ -1,0 +1,7 @@
+{
+  "query": "sign In",
+  "target": "path",
+  "caseSensitive": true,
+  "pathPrefix": "src/auth",
+  "maxResults": 200
+}
