@@ -569,6 +569,13 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
 > - **Behaviour change, accepted by the owner (2026-10-01).** A wire from a file that is not JS/TS into a JS/TS file (CSS, JSON, Markdown into a `.tsx`) no longer writes `import { /* TODO: select symbol */ } from './styles.css';`. Those files have no symbols to pick, so the stub could never be completed. A real side-effect import (`import './styles.css'`) can be added later if wanted.
 > - **Found while fixing, assigned to P4 by the owner (2026-10-01):** renaming a file rewrites only the first line of a multi-line import of it, leaving the importer with a syntax error (see the P4 tasks).
 
+> **Status of the third item (2026-10-01, branch `fix/fsm-syntax-keys`).** Reproduced on `main` (0439a0c) by tests that run the real write manager against the real SyntaxDomain, and verified fixed by the same tests (Windows, Node).
+> - **What happened.** The write manager passed project-relative paths to SyntaxDomain, which keys files by absolute path. Every unregister matched nothing, so a deleted or moved file stayed indexed as `ok` and wires from it never went broken. Every notify (a write, a materialized piece) registered a second copy of the file under its relative path.
+> - **Fix.** The key comes from one helper, `toProjectAbsPath` (`src/utils/path.js`), which the editor now uses too, in place of its own copy. A move also re-indexes the new path from disk, as the write manager PRD intended; that half had never been built. A rewritten importer therefore resolves at once. The edges stay in place, so the editor's rename of an open tab still re-points them and rewrites the importers.
+> - **A pre-existing rename defect, fixed with it.** Symbol ids embed the file path (`${filePath}::${name}`), and a rename kept the old ids. So a renamed file's next edit turned its wires broken, and the picker offered symbols already on the edge again. `renameFile` now carries the ids to the new path and reconciles once the new path has text. Reproduced on `main`, verified fixed.
+> - **Behaviour change.** Moving a file that is not open no longer leaves its wires looking healthy. Its importers still name the old path, so the wires show broken until discovery's re-run removes them (imports are authoritative).
+> - **Found in passing, assigned to P4 by the owner (2026-10-01):** stale entries the syntax index keeps after deletes and moves (see the P4 tasks).
+
 ## P4. Graph query
 
 ### Goal
@@ -587,6 +594,11 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
   - per-node freshness from comparing each file's parsed-text revision with its effective revision;
   - the summary index state with its reasons.
 - *(Added 2026-10-01, owner decision.)* Fix the rename write that corrupts a multi-line import. `_applyRenamePlans` (`src/lsp/syntaxAdapter.js`) replaces only the first line of the import it finds (`computeImportLineForSpec` returns the statement's start line, not its end line). So renaming `utils.ts` to `core.ts` turns `import {⏎  helper,⏎  other,⏎} from './utils';` into `import { helper, other } from './core';` followed by the old statement's remaining lines, and writes that to disk for a closed file. This was reproduced on `main` (97ce1f5) by a script driving the real domain and adapter while the gate items before P4 were being fixed. It sits in the same SyntaxDomain write path P4 reads from. Reproduce it with a failing test first, then fix it.
+- *(Added 2026-10-01, owner decision.)* Clear the stale entries the syntax index keeps after deletes and moves. They were found while fixing the write manager's path keys and are confirmed by reading the code, not reproduced. Reproduce each one, then fix it or withdraw it:
+  - **Files not on the canvas are never unregistered.** The write manager unregisters only files that map to a canvas piece. Discovery registers every discoverable file and never unregisters one that vanished. A deleted file that is indexed but not on the canvas therefore stays indexed until the project reopens.
+  - **Only source-side edges are cleaned up.** `unregisterFile` breaks only edges where the file is the source. An edge where the file is the importer keeps a stale path.
+  - **Delete leaves syntax edges behind.** A delete removes the canvas connections without disconnecting their syntax edges.
+  - **Until these are fixed,** the graph must be built from pieces and pending edges, never from raw registrations, and must treat an edge's paths as possibly stale.
 
 ### Tests
 
