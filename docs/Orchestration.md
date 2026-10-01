@@ -2,8 +2,9 @@
 
 This is the living reference for Litria's frontend architecture: which domains exist, what
 each owns, how they may depend on each other, and the contract every domain must satisfy.
-The five guard scripts in `scripts/` are the enforcement of record — when this document and
-a guard disagree, the guard is the floor and this document is the one that gets fixed.
+The guard scripts, `scripts/*-guard.mjs`, are the enforcement of record. There are seven on
+2026-10-01, all run by `npm run check:architecture`. When this document and a guard disagree,
+the guard is the floor and this document is the one that gets fixed.
 
 This document began life as the execution PRD for the App.jsx de-monolith refactor. That
 refactor is complete; its history lives in the appendix and in `docs/plans/refactors/`.
@@ -262,6 +263,22 @@ marked below.
   `dbStorage.getWorkspaceEpoch`, and the hydration signal `useProjectPersistence`
   returns. No UI imports, no state writes. *(Updated 2026-09-30, build plan P3.)*
 - Design: `docs/plans/agent-integration/brief-project-api-contract.md` §4.3, §8.
+
+20. `BuildLogDomain` *(added to this register 2026-10-01, P4 gate item 8; the domain predates the entry)*
+- Module: `src/app/buildLogDomain.js`, wired via `createBuildLogDomain` in App.jsx. Persistence and clipboard IO live in `src/app/useBuildLogs.js`, so the domain stays pure, as `PillDomain` does.
+- Rust backend: `build_log.rs` (one JSONL file per scaffold run, with retention); the `build_log_*`, `crash_log_*` and `copy_to_clipboard` commands.
+- Owns:
+  - the full record of the current build or scaffold run, independent of what the UI renders;
+  - its issue counters, which survive the capped trace;
+  - the catalog of stored runs for the log viewer.
+- Does not own: the terminal, pill notifications, or crash-record capture (`CrashDomain`).
+
+21. `PreferencesDomain` *(added to this register 2026-10-01, P4 gate item 8; ADR-019)*
+- Module: `src/preferences/preferencesDomain.js`. It is pure: it resolves each preference's effective value from a valid project override, else the global value, else the registry default. Its commands return the next values for a layer and persist nothing.
+- Registry: `src/preferences/registry.js`, the only declaration of preference keys. `PREF_KEYS` is the only sanctioned way to name one, and the settings-key guard enforces that.
+- Store: `src/preferences/preferencesStore.js` (Tauri `prefs_*` commands). Rust side: `preferences.rs`.
+- Surfaces render from the registry (`entriesByRoom`, `entriesForPlace`), never from hand-placed lists: the Preferences panel and the canvas HUD's Grid widget.
+- Also read in Rust: the Project API's disclosure policy reads `apiWithheldPaths` (P4 gate item 1).
 
 ## 2.5 Presentation Layer
 
