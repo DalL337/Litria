@@ -49,7 +49,7 @@ function _isJsTs(filePath) {
  * sites fail-closed (rename rewrite + removal semantics are S3).
  */
 function _canWriteImportLine(edge) {
-  return _isJsTs(edge.targetFilePath);
+  return _editLanguage(edge) === 'jsts';
 }
 
 function _isPython(filePath) {
@@ -57,10 +57,32 @@ function _isPython(filePath) {
 }
 
 /**
+ * The language an edge's code edits are written in, or null when the edge
+ * may not edit code at all. BOTH ends must be that language: the import line
+ * goes in the target, a JS export entry goes in the source, and the module
+ * spec names the source. Every write site asks this, never the target alone.
+ *
+ * Why (2026-10-01, P4 gate item 4): the gates used to read the target only,
+ * so a wire from a .py file to a .ts file wrote `import … from './utils.py'`
+ * into the .ts and appended a JS `export { … }` to the .py, and a wire from a
+ * .ts file to a .py file wrote `from utils.ts import …`. A mixed-language
+ * wire stays on the canvas as metadata; no edit is ever computed for it.
+ *
+ * @returns {'jsts'|'python'|null}
+ */
+function _editLanguage(edge) {
+  const { sourceFilePath, targetFilePath } = edge;
+  if (_isJsTs(targetFilePath) && _isJsTs(sourceFilePath)) return 'jsts';
+  if (_isPython(targetFilePath) && _isPython(sourceFilePath)) return 'python';
+  return null;
+}
+
+/**
  * Whether wiring a file of this kind as a connection's TARGET can write
  * import code: JS/TS fully (stubs, export blocks, removals, renames); Python
  * through computeResolveEdits only (picking symbols adds a `from … import`
- * line). The Project API's capability matrix reads this
+ * line). Only for a source of the same language (`_editLanguage`). The
+ * Project API's capability matrix reads this
  * (`src/app/languageCapabilities.js`), so the rule keeps one owner.
  */
 export function writesImportsForTarget(filePath) {
@@ -1012,11 +1034,12 @@ export function createSyntaxDomain() {
         return { patchPlan: null, syntaxConn, edgeId, isNewEdge: false };
       }
 
-      // New edge — create with import stub. Non-JS targets get edge metadata
-      // only: importLine stays null so no later path (rename, disconnect,
-      // detach) has a line number to clobber in a file we must not write.
+      // New edge — create with import stub. Anything but a JS/TS → JS/TS
+      // pair gets edge metadata only: importLine stays null so no later path
+      // (rename, disconnect, detach) has a line number to clobber in a file
+      // we must not write.
       const relSpec = _stripImportExt(_computeRelativePath(targetFilePath, sourceFilePath));
-      const writable = _isJsTs(targetFilePath);
+      const writable = _editLanguage({ sourceFilePath, targetFilePath }) === 'jsts';
       const targetText = fileTextCache.get(targetFilePath) ?? '';
       const insertLine = writable ? _findImportInsertLine(targetText) : null;
 
@@ -1049,6 +1072,64 @@ export function createSyntaxDomain() {
     },
 
     /**
+     * Mirror an import that already exists in the code as an edge: discovery's
+     * connect. METADATA ONLY, and it plans no stub, so discovery has no write
+     * path at all (owner rule 2026-07-18: discovery mirrors code into wires,
+     * never wires into code).
+     *
+     * Why (2026-10-01, P4 gate item 3): discovery used to go through the
+     * write-capable `connect`, which writes a stub unless it can find the
+     * import in the target. Every import it failed to find got a TODO stub on
+     * project load: a directory import (`'./utils'` is `utils/index.ts`, but
+     * the path-derived spec is `./utils/index`), or an import deleted in an
+     * unsaved buffer while disk still had it.
+     *
+     * For a JS/TS edge the spec is kept exactly as the code writes it, so a
+     * later symbol pick merges into that import and a rename finds it.
+     *
+     * @param {{ connectionId: string, sourceFilePath: string, targetFilePath: string,
+     *           moduleSpecifier?: string, importLine?: number|null }} params
+     * @returns {{ syntaxConn: object, edgeId: string, isNewEdge: boolean } | null}
+     */
+    connectDiscovered({ connectionId, sourceFilePath, targetFilePath, moduleSpecifier, importLine = null }) {
+      if (connectionToEdge.has(connectionId)) return null; // idempotent
+      if (sourceFilePath === targetFilePath) return null;
+
+      const edgeId = _edgeKey(sourceFilePath, targetFilePath);
+      const existingEdge = syntaxEdges.get(edgeId);
+      if (existingEdge) {
+        existingEdge.connectionIds.push(connectionId);
+        connectionToEdge.set(connectionId, edgeId);
+        const syntaxConn = _deriveSyntaxConn(connectionId);
+        _notify({ portsChanged: [], connectionsChanged: [connectionId], edgesChanged: [edgeId], fileChanged: null });
+        return { syntaxConn, edgeId, isNewEdge: false };
+      }
+
+      const jsts = _editLanguage({ sourceFilePath, targetFilePath }) === 'jsts';
+      const relSpec = jsts && typeof moduleSpecifier === 'string' && moduleSpecifier
+        ? moduleSpecifier
+        : _stripImportExt(_computeRelativePath(targetFilePath, sourceFilePath));
+      const edge = {
+        edgeId,
+        sourceFilePath,
+        targetFilePath,
+        relSpec,
+        // Same rule as `connect`: only a JS/TS pair carries a line hint.
+        importLine: jsts && Number.isInteger(importLine) ? importLine : null,
+        symbols: [],
+        connectionIds: [connectionId],
+        status: 'pending',
+      };
+
+      syntaxEdges.set(edgeId, edge);
+      connectionToEdge.set(connectionId, edgeId);
+
+      const syntaxConn = _deriveSyntaxConn(connectionId);
+      _notify({ portsChanged: [], connectionsChanged: [connectionId], edgesChanged: [edgeId], fileChanged: null });
+      return { syntaxConn, edgeId, isNewEdge: true };
+    },
+
+    /**
      * Compute the final target text for writing a NEW edge's import stub,
      * from authoritative text (not the cache). Recomputes the insert position
      * and updates `edge.importLine`. Dedup-aware: if the target already imports
@@ -1066,9 +1147,10 @@ export function createSyntaxDomain() {
 
       // Import writing is JS/TS-only (ADR-020 follow-up: Python edges are
       // discovered from imports that already exist in the code — the domain
-      // must NEVER write a JS-syntax stub into a .py file). The edge itself
-      // still exists as metadata; only the file edit is gated.
-      if (!_isJsTs(edge.targetFilePath)) {
+      // must NEVER write a JS-syntax stub into a .py file), and only for a
+      // JS/TS source (`_editLanguage`). The edge itself still exists as
+      // metadata; only the file edit is gated.
+      if (_editLanguage(edge) !== 'jsts') {
         return { edits: [], edge: { ...edge, symbols: [...edge.symbols] } };
       }
 
@@ -1167,6 +1249,12 @@ export function createSyntaxDomain() {
       if (!edge) return null;
       if (!symbolIds?.length) return { edits: [], edge: { ...edge, symbols: [...edge.symbols] } };
 
+      // No code can express this edge (mixed languages, or a target that is
+      // neither JS/TS nor Python): fail closed WITHOUT adding the symbols, so
+      // the edge never claims an import the code does not have.
+      const language = _editLanguage(edge);
+      if (language == null) return { edits: [], edge: { ...edge, symbols: [...edge.symbols] } };
+
       const sourceSymbols = symbolIndex.get(edge.sourceFilePath) ?? [];
       const sourceDefs = definitionIndex.get(edge.sourceFilePath) ?? [];
 
@@ -1197,7 +1285,7 @@ export function createSyntaxDomain() {
       //     has none — the source file is never touched). Spec derivation can
       //     fail (source outside importer-dir/src/root bases) → fail closed
       //     with no write; the edge still carries the resolved symbols. ---
-      if (_isPython(edge.targetFilePath)) {
+      if (language === 'python') {
         const moduleSpec = _pyModuleSpecForEdge(edge);
         if (moduleSpec) {
           const newTargetText = _writePythonImportForEdge(targetText, edge, moduleSpec);
@@ -1249,8 +1337,10 @@ export function createSyntaxDomain() {
 
       // Python removal semantics are S3 (owner design note pending,
       // brief-python-wires) — fail closed WITHOUT mutating the edge, so the
-      // symbol chip stays honest about what the import line still says.
-      if (_isPython(edge.targetFilePath)) {
+      // symbol chip stays honest about what the import line still says. An
+      // edge no code can express (`_editLanguage` null) fails closed the
+      // same way: its "source" text is not JavaScript.
+      if (_editLanguage(edge) !== 'jsts') {
         return { edits: [], edge: { ...edge, symbols: [...edge.symbols] } };
       }
 
@@ -1360,7 +1450,7 @@ export function createSyntaxDomain() {
       // Import removal is JS/TS-only — same guard as computeConnectStubEdit.
       // (_findImportFromSpec would never match Python syntax anyway; this
       // makes the invariant explicit instead of incidental.)
-      if (!_isJsTs(edge.targetFilePath)) return { edits: [] };
+      if (_editLanguage(edge) !== 'jsts') return { edits: [] };
 
       const existing = _findImportFromSpec(targetText, edge.relSpec);
       if (!existing) return { edits: [] };

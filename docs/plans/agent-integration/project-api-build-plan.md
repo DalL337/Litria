@@ -563,6 +563,12 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
 - A failed project open (an invalid path) tears the current project down before the open fails, so the window keeps showing a project whose workspace is closed. Seen live.
 - Three inferred findings from the language-tier inspection: wire writes are gated on the target's language only; discovery may write a stub import for a directory import on load; the write manager calls `unregisterFile` with relative paths where the domain keys are absolute.
 
+> **Status (2026-10-01, PR #91).** The owner put all of these ahead of P4. The first two are fixed in one PR. Both were reproduced on `main` (97ce1f5) by tests that run the real code, then verified fixed by the same tests: locally on Windows (Node), and in CI on PR #91, where the `guard` job on `ubuntu-latest` ran the 7 guards, `test:domains` (1364 passed, 0 failed) and the build. The third is next.
+> - **Discovery wrote into user files.** On project load, a directory import (`import { helper } from './utils'`, resolving to `utils/index.ts`) got `import { /* TODO: select symbol */ } from './utils/index';` written into the importing file, closed or open. An import deleted in an unsaved buffer while disk still had it got a stub pushed back into the buffer. Cause: discovery created wires through the write-capable connect, which writes a stub whenever it cannot find the import, and it looked for a path-derived spec (`./utils/index`) instead of the one in the code. Fix: discovery now uses a metadata-only connect (`connectDiscovered`) and holds no write-capable handle. The edge keeps the spec as written, so a later symbol pick merges into that import and a rename rewrites it. Tests: `test/domains/discoveryWritesNothing.test.mjs`.
+> - **Writes checked the target's language only.** A `.py` → `.ts` wire wrote `import … from './utils.py'` into the `.ts` file, and a symbol pick appended a JS `export { helper };` to the `.py` file. A `.ts` → `.py` pick wrote `from utils.ts import helper`. A pick on a `.ts` → `README.md` wire wrote a JS import into the Markdown. Fix: one predicate (`_editLanguage`) requires both ends to be the same language at every write site. Any other wire stays on the canvas as metadata, and a symbol pick on it leaves the edge unchanged. Tests: `test/domains/syntaxEditLanguage.test.mjs`.
+> - **Behaviour change, accepted by the owner (2026-10-01).** A wire from a file that is not JS/TS into a JS/TS file (CSS, JSON, Markdown into a `.tsx`) no longer writes `import { /* TODO: select symbol */ } from './styles.css';`. Those files have no symbols to pick, so the stub could never be completed. A real side-effect import (`import './styles.css'`) can be added later if wanted.
+> - **Found while fixing, assigned to P4 by the owner (2026-10-01):** renaming a file rewrites only the first line of a multi-line import of it, leaving the importer with a syntax error (see the P4 tasks).
+
 ## P4. Graph query
 
 ### Goal
@@ -580,6 +586,7 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
   - node, edge and symbol ceilings, and the encoded response ceiling;
   - per-node freshness from comparing each file's parsed-text revision with its effective revision;
   - the summary index state with its reasons.
+- *(Added 2026-10-01, owner decision.)* Fix the rename write that corrupts a multi-line import. `_applyRenamePlans` (`src/lsp/syntaxAdapter.js`) replaces only the first line of the import it finds (`computeImportLineForSpec` returns the statement's start line, not its end line). So renaming `utils.ts` to `core.ts` turns `import {⏎  helper,⏎  other,⏎} from './utils';` into `import { helper, other } from './core';` followed by the old statement's remaining lines, and writes that to disk for a closed file. This was reproduced on `main` (97ce1f5) by a script driving the real domain and adapter while the gate items before P4 were being fixed. It sits in the same SyntaxDomain write path P4 reads from. Reproduce it with a failing test first, then fix it.
 
 ### Tests
 

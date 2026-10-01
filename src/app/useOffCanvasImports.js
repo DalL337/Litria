@@ -45,7 +45,6 @@ export function useOffCanvasImports({
   canvasToScreen,
   createPieceFromFile,
   syntaxDomain,
-  syntaxAdapter,
   connectionDomain,
   showToast,
   PIECE_WIDTH,
@@ -128,12 +127,11 @@ export function useOffCanvasImports({
       edges: satisfied,
       pathToPiece: lookup,
       syntaxDomain,
-      syntaxAdapter,
       connectionDomain,
     });
     const wired = new Set(satisfied.filter((e) => !stillPending.includes(e)));
     setPendingEdges((prev) => prev.filter((e) => !wired.has(e)));
-  }, [root, createPieceFromFile, pendingEdges, pathToPiece, syntaxDomain, syntaxAdapter, connectionDomain, showToast]);
+  }, [root, createPieceFromFile, pendingEdges, pathToPiece, syntaxDomain, connectionDomain, showToast]);
 
   return {
     onPendingEdges,

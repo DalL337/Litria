@@ -61,16 +61,13 @@ function stubDomains() {
     },
     syntaxDomain: {
       selectors: { getDefinitionsForFile: () => [] },
-    },
-    syntaxAdapter: {
-      handleConnect: async () => ({ success: true, edgeId: 'e1' }),
-      handleResolveMultipleSymbols: async () => ({ success: true }),
+      commands: { connectDiscovered: () => ({ edgeId: 'e1', isNewEdge: true }) },
     },
   };
 }
 
 test('createConnectionsForEdges wires matched edges and returns unmatched as pending', async () => {
-  const { connectionDomain, syntaxDomain, syntaxAdapter, created } = stubDomains();
+  const { connectionDomain, syntaxDomain, created } = stubDomains();
   const pathToPiece = new Map([
     ['/proj/a.py', { id: 1, x: 0, y: 0 }],
     ['/proj/b.py', { id: 2, x: 400, y: 0 }],
@@ -82,7 +79,6 @@ test('createConnectionsForEdges wires matched edges and returns unmatched as pen
     edges: [wired, offCanvas],
     pathToPiece,
     syntaxDomain,
-    syntaxAdapter,
     connectionDomain,
   });
 

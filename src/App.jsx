@@ -745,7 +745,6 @@ function App() {
     canvasToScreen: viewport.canvasToScreen,
     createPieceFromFile,
     syntaxDomain,
-    syntaxAdapter,
     connectionDomain,
     showToast,
     PIECE_WIDTH,
