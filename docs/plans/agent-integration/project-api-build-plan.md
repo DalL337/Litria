@@ -337,9 +337,10 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 - **A page protocol for `editor.documents`:** `notBuffered`, `buffer` and `deferred` entries; the first entry of a page is never deferred. Rust checks every reply against its request (paths, order, budgets, ranges) and fails the call on a mismatch.
 - **Buffer lookups use the document's canonical path,** so a case variant or an in-project link finds the buffer of the file it names.
 - **`editor.bufferIndex` has no consumer yet.** Its contract, owner port and client call land here; `litria_files_search` (P3) consumes it. The Rust items carry per-item `dead_code` allows naming that consumer.
-- **Two fixes beyond the tasks,** both found while verifying this slice:
+- **Three fixes beyond the tasks,** all found while verifying this slice (the third by peer review):
   - **The editor session now resets per project load, not per project identity** (`useProjectPersistence`, `EditorSessionContext`). A project's `instanceId` is stored in its own database, so a folder copy of a project, or the project reopened, kept the previous session: the copy showed the original's buffers under "All Saved", and the bridge served them as the copy's (a save would also write them into the copy — by inspection, not exercised). Reproduced and verified below.
   - **A request that arrives while the bridge's attach is resolving is held, then answered.** Rust records an attach before the frontend's call returns; such a request used to be ignored and time out after 2 s.
+  - **The session is restored only from the load's own pieces** (`useProjectPersistence`). The restore was gated on a shared "pieces loaded" ref. A project with no pieces finished loading synchronously, so the restore ran with the previous render's pieces: opening an empty project whose saved editor state listed a tab id restored the previous project's piece, including an edit already discarded there, as an unsaved tab, and the bridge served it. Restoration now waits for this load's own loaded marker, and only a still-current reader sets the shared ref. Found by Codex's review of PR #89; reproduced and verified below.
 
 **Checks (all run in the worktree):**
 
@@ -350,7 +351,7 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 | `cargo test` | 445 passed, 3 ignored (pre-existing) |
 | `LITRIA_UPDATE_CONTRACTS=1 cargo test contracts:: -- --test-threads=1`, then `cargo test contracts::` | 30 contract tests pass against the committed artifacts of both families; the `project-api` v1 artifacts are unchanged |
 | `npm run check:architecture` | all seven guards pass; the editor-engine guard is unchanged |
-| `npm run test:domains` | 1339 of 1339 (1316 before; 20 bridge tests and 3 session-selector tests added) |
+| `npm run test:domains` | 1341 of 1341 (1316 before; 20 bridge tests, 3 session-selector tests and 2 real-hook hydration tests added) |
 | `npm run build` | pass |
 | `cargo tree -e normal`, before and after | identical (814 lines); no manifest or lockfile changes |
 
@@ -362,6 +363,8 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 | JavaScript: the request id echoed as a number | both committed-reply tests and the attach-window test |
 | JavaScript: an unfamiliar operation served as `editor.documents` | the unfamiliar-operation test |
 | JavaScript: no check against the frontend's current epoch | the epoch-check test and the project-switch test |
+| JavaScript: restore gated on the shared loaded ref again, not on the load | the exact-sequence hydration test |
+| JavaScript: a cancelled loader sets the shared loaded ref again | **not caught.** The restore no longer reads that ref, and its other readers (viewport and position persistence) show no harm from it by inspection; the guard stays as defense in depth. The delayed-loader test fails only when both halves are removed. |
 | Rust: a request sent to a bridge attached for another epoch | `an_attachment_for_another_epoch_is_owner_unavailable` |
 | Rust: a reply accepted from any generation | `a_reply_from_a_stale_generation_is_refused` |
 | Rust: no policy check on the canonical identity | `a_link_to_a_denied_directory_never_reaches_the_bridge` |
@@ -375,6 +378,7 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 | **High.** The editor session survived a switch to a folder copy (or a reopen), so the bridge served the previous load's buffers. | **Reproduced** live on Windows (a copy of the scratch project opened showing, and reading back, the original's `main.ts`). **Verified fixed** live on Windows with the same script. The fix is in JavaScript only. |
 | **Low (liveness).** A request emitted inside the attach window timed out after 2 s. | **Reproduced** live on Windows (three of three read loops stalled 2 s right after a switch); the JavaScript test written for it failed first. **Verified fixed** live with the same burst (no stall) and by the test. |
 | A case variant on macOS, or a different Unicode normalization, may miss the buffer and read disk. | **Suspected.** Not a disclosure path. The case test detects case-insensitive volumes at runtime, so the macOS CI job exercises it. |
+| **High** (peer review, Codex, 2026-09-30). Edit a file in project A, Discard, then open an empty project B whose saved editor state lists that tab id: B restored A's discarded edit as an unsaved tab, and the bridge served it as B's file. A cancelled loader could also let B restore tabs before its own contents loaded (empty text). Present on `main` without the bridge; the readiness signal turned it into a cross-project reply. | **Reproduced**: in Codex's real-hook harness (Windows; rerun here), the same sequence on `main` 835e4dd without the bridge (B's session held A's edit, unsaved), live on Windows (debug app over CDP: an empty project with a stale saved tab id read back the other project's discarded edit), and by the two new real-hook tests, which failed first (the delayed-loader one also reproduces the empty-text variant, previously only suspected). **Verified fixed** by those tests and live with the same script on Windows. The fix is JavaScript only. |
 | A hard link to a buffered file under another name reads disk. | Accepted residual, as for P1's hard-link note. |
 | The IPC layer allocates a reply string before the ceiling check. | Accepted residual: the reply comes from the application's own webview, and the ceiling bounds what Rust parses. |
 
@@ -388,6 +392,7 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 | A switch during a call (debugger pause inside the bridge's handler, workspace switched in Rust, resumed) | `workspaceChanged`; the old project's answer was discarded |
 | Calls issued immediately after opening another project (three concurrent loops, both directions) | `notReady`, then `ownerUnavailable`, then the new project's text; never the old project's |
 | Reloading the webview | the old listener's request times out; after reopening, calls work again |
+| After the restore fix: edit and Discard in A, then open an empty project with a stale saved tab id | its session is empty, it has no unsaved changes, and the effective read returns its own file from disk (before the fix: the other project's discarded edit). The checks above were repeated on the fixed code and pass. |
 
 **Platform coverage:** the Unix-symlink variant of the link-alias test and the case-variant test on a case-insensitive macOS volume run in the Linux and macOS CI jobs; the junction variant and the case test ran locally on Windows.
 - **CI on PR #89:** `cargo test (linux-x86_64)` passed 441 and `cargo test (macos-aarch64)` passed 440, each with 3 ignored; the Architecture Guard passed. Both logs show `a_link_alias_finds_the_buffer_of_the_file_it_names` (a Unix symlink there) and `a_link_to_a_denied_directory_never_reaches_the_bridge` as `ok`.
@@ -395,7 +400,7 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 
 **Security review** (security policy Rule 1: new commands): the three bridge commands exist only in debug builds and touch no filesystem; replies are accepted only for pending requests and pass the reply boundary; owner error text is never forwarded; denied paths are answered in Rust before the bridge is asked.
 
-**Found in passing, not fixed here:** a slower file-contents load from the previous project can mark the next one's contents as loaded (`hasLoadedPiecesRef` is set without the `isMounted` guard), so its session restore can open tabs with empty text. Status: suspected, confirmed by inspection. The bridge's readiness does not rely on that ref.
+**Found in passing:** a slower file-contents load from the previous project can mark the next one's contents as loaded (`hasLoadedPiecesRef` is set without the `isMounted` guard), so its session restore can open tabs with empty text. *(Corrected 2026-09-30: this was first recorded as "not fixed here", with the claim that the bridge's readiness does not rely on that ref. That claim was wrong: readiness trusted the restore, and the restore was gated on that ref. Peer review then found a synchronous variant that leaks across projects. Both are now fixed in this slice; see the third fix above.)*
 
 ## P3. Project context and search — the first read set
 

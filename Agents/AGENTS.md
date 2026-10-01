@@ -37,6 +37,7 @@ execution error.
 | Release work: version bumps, bundling, release builds | `docs/release-policy.md` |
 | Security-relevant work: new execution/network surface, dependency changes, supply-chain features, audit passes | `docs/security-policy.md` |
 | Creating or changing an enforcement point: access/disclosure decisions, path guards, grants, trust-boundary validation and limits, check-then-act filesystem code, concurrency fences | `docs/adversarial-check-policy.md` — before calling the slice done / opening its PR (budgeted; not for UI, docs or unrelated fixes) |
+| Writing tests for code that produces or consumes a signal another module acts on (readiness, "loaded", current epoch, permission) | `docs/test-authoring-policy.md` |
 | Adding/updating dependencies; changing external tools, CLI arguments, generated-project recipes, or supported combinations; releasing recipes with moving dependencies | `docs/dependency-change-policy.md` — compatibility evidence in addition to security review |
 
 Reserved scopes — files exist but are empty; rules accumulate as lessons are
@@ -44,7 +45,7 @@ learned. An empty policy means no rules exist yet for that scope: proceed on
 general judgment and AGENTS.md, and when a lesson emerges, codify it there
 (with provenance) rather than growing this file:
 
-`planning` · `review` · `test-authoring` · `migration` · `handoff`
+`planning` · `review` · `migration` · `handoff`
 · `failure-and-recovery`
 
 A task matching multiple rows loads multiple policies (e.g. a code slice that
