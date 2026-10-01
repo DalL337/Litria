@@ -910,20 +910,28 @@ mod tests {
     }
 
     /// On a case-insensitive volume (Windows, default macOS), a case variant
-    /// names the same file, so it finds the same buffer. Skipped where the
-    /// volume is case-sensitive: there the variant is another file.
+    /// names the same file, so it finds the same buffer. On a case-sensitive
+    /// volume (Linux) the variant is another file, which does not exist.
+    /// Each OS asserts the volume kind it expects (P4 gate item 6): this test
+    /// used to return early on a case-sensitive volume, so a CI log could not
+    /// show which branch had run.
     #[test]
     fn a_case_variant_finds_the_buffer_on_a_case_insensitive_volume() {
         let root = temp_root("effective-case");
         fs::write(root.join("Readme.md"), "saved\n").unwrap();
-        if !root.join("README.MD").exists() {
-            let _ = fs::remove_dir_all(&root);
-            return; // case-sensitive volume
-        }
+        let insensitive = root.join("README.MD").exists();
+        #[cfg(any(windows, target_os = "macos"))]
+        assert!(insensitive, "expected a case-insensitive volume on this OS");
+        #[cfg(target_os = "linux")]
+        assert!(!insensitive, "expected a case-sensitive volume on this OS");
         let mut editor = Scripted::new(session(&[("Readme.md", "open", "unsaved\n")]));
         let value = effectively(&root, &effective(paths(&["README.MD"]), None), &mut editor).unwrap();
-        assert_eq!(value["documents"][0]["source"], "editor");
-        assert_eq!(value["documents"][0]["path"], "README.MD");
+        if insensitive {
+            assert_eq!(value["documents"][0]["source"], "editor");
+            assert_eq!(value["documents"][0]["path"], "README.MD");
+        } else {
+            assert_ne!(value["documents"][0]["source"], "editor", "{}", value["documents"][0]);
+        }
         let _ = fs::remove_dir_all(&root);
     }
 

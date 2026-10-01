@@ -118,9 +118,18 @@ export function EditorSessionProvider({ children }) {
     });
   }, [state.tabsById]);
 
+  // A discard resets the canvas piece's copy too. updateWorkingCode mirrors
+  // every edit onto the piece (onWorkingCodeChange); a discard that reset only
+  // the tab left the discarded text on the piece, where a tab rebuilt from it
+  // or a session restore brought it back (P2 peer-review finding F4 started
+  // there; P4 gate item 7, 2026-10-01).
   const discardTab = useCallback((tabId) => {
+    const tab = state.tabsById[tabId];
+    if (tab && !areEditorTextsEqual(tab.workingCode, tab.code)) {
+      persistenceRef.current?.onWorkingCodeChange?.(tab, tab.code);
+    }
     dispatch({ type: 'DISCARD_TAB', tabId });
-  }, []);
+  }, [state.tabsById]);
 
   const saveAllTabs = useCallback(() => {
     const dirtyTabs = Object.values(state.tabsById)
@@ -145,8 +154,13 @@ export function EditorSessionProvider({ children }) {
   }, []);
 
   const discardAllTabs = useCallback(() => {
+    for (const tab of Object.values(state.tabsById)) {
+      if (!areEditorTextsEqual(tab.workingCode, tab.code)) {
+        persistenceRef.current?.onWorkingCodeChange?.(tab, tab.code);
+      }
+    }
     dispatch({ type: 'DISCARD_ALL' });
-  }, []);
+  }, [state.tabsById]);
 
   const isTabDirty = useCallback((tabId) => {
     const tab = state.tabsById[tabId];
