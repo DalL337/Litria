@@ -213,7 +213,10 @@ pub(crate) struct PolicySummary {
     /// Directory names search and the graph never enter, at any depth.
     /// Their files are still readable by explicit path.
     pub unindexed_directories: Vec<String>,
-    /// Search does not consult `.gitignore` files.
+    /// Search skips what the project's `.gitignore` files exclude unless a
+    /// request sets `includeIgnored`, and counts what it skipped. Ignored
+    /// files stay readable by explicit path: `.gitignore` is never a
+    /// disclosure rule.
     pub gitignore_honoured: bool,
 }
 

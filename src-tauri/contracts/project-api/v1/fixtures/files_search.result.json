@@ -34,6 +34,8 @@
   "scope": "prefix",
   "skipped": {
     "buffersNotSearched": 1,
+    "ignoredDirectories": 2,
+    "ignoredFiles": 4,
     "notText": 2,
     "tooLarge": 1,
     "unreadable": 1,

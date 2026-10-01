@@ -15,7 +15,9 @@
     "notText": 0,
     "unreadable": 0,
     "unreadableDirectories": 0,
-    "buffersNotSearched": 0
+    "buffersNotSearched": 0,
+    "ignoredFiles": 0,
+    "ignoredDirectories": 0
   },
   "filesSearched": 0,
   "buffersSearched": 0,

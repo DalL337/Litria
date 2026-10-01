@@ -336,7 +336,7 @@
           }
         },
         "gitignoreHonoured": {
-          "description": "Search does not consult `.gitignore` files.",
+          "description": "Search skips what the project's `.gitignore` files exclude unless a\nrequest sets `includeIgnored`, and counts what it skipped. Ignored\nfiles stay readable by explicit path: `.gitignore` is never a\ndisclosure rule.",
           "type": "boolean"
         },
         "unindexedDirectories": {

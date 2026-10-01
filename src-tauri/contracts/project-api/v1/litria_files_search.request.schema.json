@@ -8,6 +8,11 @@
       "type": "boolean",
       "default": false
     },
+    "includeIgnored": {
+      "description": "Also search files a `.gitignore` excludes. Defaults to false: they are\nskipped and counted in `skipped`. Denied and unindexed paths are never\nsearched either way.",
+      "type": "boolean",
+      "default": false
+    },
     "maxResults": {
       "description": "At most this many matches; absent means the server default.",
       "type": [

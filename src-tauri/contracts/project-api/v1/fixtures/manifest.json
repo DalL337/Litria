@@ -259,7 +259,7 @@
       "operation": "litria_files_search",
       "message": "request",
       "expect": "accept",
-      "note": "Every field explicit, at the result ceiling."
+      "note": "Every field explicit, at the result ceiling, ignored files included."
     },
     {
       "file": "files_search.request.null-optional.json",
@@ -274,6 +274,22 @@
       "message": "request",
       "expect": "reject",
       "note": "target is defaulted when absent, never null.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.null-include-ignored.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "includeIgnored is defaulted when absent, never null.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.include-ignored-not-boolean.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "includeIgnored is a boolean.",
       "errorCode": "invalidParams"
     },
     {

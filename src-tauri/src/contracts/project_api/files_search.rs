@@ -28,8 +28,10 @@ impl Operation for FilesSearchOp {
     const DESCRIPTION: &'static str = "Search project files for a literal string, in their text (target: text) or in \
          their project-relative paths (target: path). Searches what the editor holds for documents that are open or \
          unsaved, and the saved file otherwise. Matching is literal; case folding, when on, is ASCII only. Denied and \
-         unindexed paths are never searched, links are not followed, and .gitignore is not honoured. Results are \
-         ordered by path, then line; a search that stops early says why in truncatedBy.";
+         unindexed paths are never searched and links are not followed. Files a .gitignore excludes are skipped and \
+         counted in skipped.ignoredFiles and skipped.ignoredDirectories unless includeIgnored is true; documents \
+         open in the editor are searched either way. Results are ordered by path, then line; a search that stops \
+         early says why in truncatedBy.";
     const CAPABILITY: &'static str = "project.files.search";
     type Request = FilesSearchRequest;
     type Result = FilesSearchResult;
@@ -58,6 +60,11 @@ pub(crate) struct FilesSearchRequest {
     #[serde(default)]
     #[cfg_attr(test, schemars(range(min = MIN_RESULTS, max = MAX_RESULTS)))]
     pub max_results: Option<u32>,
+    /// Also search files a `.gitignore` excludes. Defaults to false: they are
+    /// skipped and counted in `skipped`. Denied and unindexed paths are never
+    /// searched either way.
+    #[serde(default)]
+    pub include_ignored: bool,
 }
 
 /// Inbound-only, but `Serialize` too so the schema shows the default.
@@ -206,4 +213,9 @@ pub(crate) struct SkippedCounts {
     pub unreadable_directories: u32,
     /// Buffers the editor listed that could not be searched.
     pub buffers_not_searched: u32,
+    /// Files a `.gitignore` excludes (zero with `includeIgnored`).
+    pub ignored_files: u32,
+    /// Directories a `.gitignore` excludes; each counts once, and nothing
+    /// inside it is looked at (zero with `includeIgnored`).
+    pub ignored_directories: u32,
 }
