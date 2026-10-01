@@ -751,6 +751,8 @@ Codex's "checked, no finding" list and residuals are in the session journal. The
 - project-switch races without a serialization fence;
 - the accepted disclosure residuals.
 
+CI evidence (PR #98, code head 44af4d3): guard (JS domain tests) 1388/1388, cargo test Linux 517 passed and macOS 516 passed, 0 failed on either. Windows ran locally: 517 passed, 0 warnings.
+
 ## Side findings (outside this plan)
 
 These were found during the 2026-09-30 inspection and are tracked separately. They are not scheduled here:
