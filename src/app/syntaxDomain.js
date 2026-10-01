@@ -56,6 +56,17 @@ function _isPython(filePath) {
   return /\.py$/i.test(filePath); // .pyi stays out — types, not structure
 }
 
+/**
+ * Whether wiring a file of this kind as a connection's TARGET can write
+ * import code: JS/TS fully (stubs, export blocks, removals, renames); Python
+ * through computeResolveEdits only (picking symbols adds a `from … import`
+ * line). The Project API's capability matrix reads this
+ * (`src/app/languageCapabilities.js`), so the rule keeps one owner.
+ */
+export function writesImportsForTarget(filePath) {
+  return typeof filePath === 'string' && (_isJsTs(filePath) || _isPython(filePath));
+}
+
 function _escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

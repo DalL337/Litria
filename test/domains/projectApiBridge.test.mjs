@@ -6,19 +6,24 @@ import {
   BRIDGE_OPS,
   BRIDGE_REQUEST_EVENT,
   MAX_REPLY_BYTES,
+  answerBufferIndex,
   answerDocuments,
+  answerSelection,
   bufferRevision,
   createProjectApiBridge,
   deriveReadyEpoch,
+  selectionSnapshot,
   serializeAttachments,
   sliceLines,
   utf8Length
 } from '../../src/app/projectApiBridge.js';
 import {
   editorSessionReducer as reduce,
+  getActiveSessionDocument,
   getSessionDocumentsByPath,
   initialEditorSessionState
 } from '../../src/editor/editorSessionDomain.js';
+import { buildCapabilityMatrix, languageServerState } from '../../src/app/languageCapabilities.js';
 
 // Project API build plan P2: the JavaScript half of the `project-api-bridge`
 // contract (ADR-033 decision 4). The committed artifacts under
@@ -118,12 +123,42 @@ function fakeTransport({ firstGeneration = 3, refuse = () => false } = {}) {
   };
 }
 
+// The canvas the committed selection reply describes: pieces 2 and 5 are
+// selected (5 twice, and stored with a Windows separator), group g1 is a
+// folder group, and the focused pane shows piece 5's file with an edit.
+function fixtureWorkspace() {
+  return {
+    selectedIds: [5, 2, 5, 99],
+    piecesById: new Map([
+      [2, { id: 2, filename: 'src/session.ts' }],
+      [5, { id: 5, filename: 'src\\auth.ts' }],
+      [7, { id: 7, filename: 'README.md' }]
+    ]),
+    selectedGroupId: 'g1',
+    groups: [{ id: 'g1', folderPath: 'src' }, { id: 'g2', name: 'manual' }]
+  };
+}
+
+function fixtureActiveSession() {
+  const auth = tab(5, 'src/auth.ts', 'export {};\n', 'export function signIn() {}\n');
+  return { ...initialEditorSessionState, openTabIds: [5], tabsById: { 5: auth } };
+}
+
 async function readyBridge({ session = fixtureSession(), epoch = 'ws-7', workspaceEpoch = epoch, ceiling } = {}) {
   const transport = fakeTransport();
   let current = workspaceEpoch;
-  const holder = { session };
+  const holder = {
+    session,
+    workspace: fixtureWorkspace(),
+    active: getActiveSessionDocument(fixtureActiveSession(), 5),
+    languages: []
+  };
   const bridge = createProjectApiBridge({
-    ports: { sessionDocuments: () => getSessionDocumentsByPath(holder.session) },
+    ports: {
+      sessionDocuments: () => getSessionDocumentsByPath(holder.session),
+      selection: () => selectionSnapshot(holder.workspace, holder.active),
+      languageCapabilities: () => holder.languages
+    },
     transport,
     getWorkspaceEpoch: () => current,
     ...(ceiling ? { ceiling } : {})
@@ -515,4 +550,146 @@ test('a remount (StrictMode) reaches Rust in order: the live bridge stays attach
   await flush();
   assert.equal(rust.attachment?.generation, second.snapshot().generation);
   assert.notEqual(rust.attachment, null);
+});
+
+// ─── Build plan P3: workspace.selection and languages.capabilities ─────────
+
+test('workspace.selection: the committed request gets the committed reply', async () => {
+  const { bridge, transport } = await readyBridge();
+  bridge.handleRequest(acceptedFixture('workspace.selection.request.json'));
+  const [{ requestId, generation, reply }] = transport.replies;
+  assert.equal(requestId, 'r1');
+  assert.equal(generation, 'g3');
+  // Ids 5 and 2 map to their files' paths, sorted and without duplicates;
+  // the unknown id 99 has no file; the Windows separator is normalized.
+  assert.deepEqual(reply, acceptedFixture('workspace.selection.reply.json'));
+  assertDeclared(BRIDGE_OPS.selection, reply);
+});
+
+test('workspace.selection: optional parts are left out, never sent empty', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  holder.workspace = { selectedIds: [], piecesById: new Map(), selectedGroupId: 'g2', groups: fixtureWorkspace().groups };
+  holder.active = null;
+  bridge.handleRequest(acceptedFixture('workspace.selection.request.json'));
+  // g2 is a manual group with no folder.
+  assert.deepEqual(transport.replies[0].reply, acceptedFixture('workspace.selection.reply.empty.json'));
+});
+
+test('workspace.selection: a list over the limit or the ceiling is counted, not overflowed', () => {
+  const many = { selectedPaths: Array.from({ length: 12 }, (_, index) => `src/f${index}.ts`), folder: null, activeDocument: null };
+  const limited = answerSelection({ maxPaths: 5 }, many);
+  assert.deepEqual(limited.result.selected, ['src/f0.ts', 'src/f1.ts', 'src/f10.ts', 'src/f11.ts', 'src/f2.ts']);
+  assert.equal(limited.result.omitted, 7);
+  const ceiling = 200;
+  const fitted = answerSelection({ maxPaths: 1000 }, many, ceiling);
+  assert.ok(utf8Length(JSON.stringify(fitted)) <= ceiling);
+  assert.equal(fitted.result.selected.length + fitted.result.omitted, 12);
+  assert.ok(fitted.result.omitted > 0);
+  // A path the contract cannot carry is counted, never sent.
+  const long = answerSelection({ maxPaths: 10 }, { selectedPaths: ['a.ts', 'x'.repeat(1025)] });
+  assert.deepEqual(long.result, { selected: ['a.ts'], omitted: 1 });
+  assert.deepEqual(answerSelection({ maxPaths: -1 }, many), {
+    kind: 'error', code: 'invalidRequest', message: 'the editor could not read the request'
+  });
+});
+
+test('the active document is the focused tab, with the session\'s dirty rule', () => {
+  const session = fixtureSession();
+  assert.deepEqual(getActiveSessionDocument(session, 1), { path: 'src/open.ts', dirty: true });
+  assert.deepEqual(getActiveSessionDocument(session, 3), { path: 'src/closed-clean.ts', dirty: false });
+  assert.equal(getActiveSessionDocument(session, null), null);
+  assert.equal(getActiveSessionDocument(session, 404), null);
+  const crlf = { tabsById: { 1: tab(1, '/src/a.ts', 'a\r\nb\r\n', 'a\nb\n') } };
+  assert.deepEqual(getActiveSessionDocument(crlf, 1), { path: 'src/a.ts', dirty: false });
+});
+
+test('languages.capabilities: the committed request gets the committed reply', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  holder.languages = acceptedFixture('languages.capabilities.reply.json').result.languages;
+  bridge.handleRequest(acceptedFixture('languages.capabilities.request.json'));
+  assert.deepEqual(transport.replies[0].reply, acceptedFixture('languages.capabilities.reply.json'));
+  assertDeclared(BRIDGE_OPS.capabilities, transport.replies[0].reply);
+});
+
+test('the real capability matrix is a reply Rust accepts (the committed matrix fixture)', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  holder.languages = buildCapabilityMatrix(null); // nothing checked yet in this session
+  bridge.handleRequest(acceptedFixture('languages.capabilities.request.json'));
+  assert.deepEqual(transport.replies[0].reply, acceptedFixture('languages.capabilities.reply.matrix.json'));
+  assertDeclared(BRIDGE_OPS.capabilities, transport.replies[0].reply);
+});
+
+/** A LanguageSupportDomain stand-in: status and whether it was checked, per pack. */
+function languageSupport(packs) {
+  const state = (packId) => {
+    const pack = packs[packId];
+    return pack ? { status: pack[0], lastCheckedAt: pack[1] ? '2026-09-30T00:00:00Z' : null } : null;
+  };
+  return { selectors: { getPackState: state, getManagedPackState: state } };
+}
+
+test('the capability matrix matches the language tiers', () => {
+  const support = languageSupport({ typescript: ['Installed', true], python: ['Not Installed', true] });
+  const rows = buildCapabilityMatrix(support).map((row) => [
+    row.language,
+    row.extensions.join(' '),
+    row.languageServer,
+    [row.documentAccess, row.diagnostics, row.navigation, row.symbols, row.relationshipDiscovery, row.sourceTransformations]
+      .map((flag) => (flag ? 1 : 0)).join('')
+  ]);
+  // Flags: documentAccess, diagnostics, navigation, symbols,
+  // relationshipDiscovery, sourceTransformations.
+  assert.deepEqual(rows, [
+    ['javascript', '.js .jsx .mjs', 'installed', '111111'],
+    ['javascript', '.cjs', 'installed', '111101'],
+    ['typescript', '.ts .tsx', 'installed', '111111'],
+    ['typescript', '.mts .cts', 'installed', '111101'],
+    ['json', '.json', 'none', '110100'],
+    ['css', '.css', 'none', '111100'],
+    ['html', '.html', 'none', '100100'],
+    ['markdown', '.md', 'none', '100000'],
+    ['python', '.py', 'notInstalled', '101111'],
+    ['python', '.pyi', 'notInstalled', '101100'],
+    ['rust', '.rs', 'unknown', '100000'],
+    ['c', '.c', 'unknown', '100000'],
+    ['cpp', '.h .cpp .hpp .cc .cxx', 'unknown', '100000'],
+    ['go', '.go', 'unknown', '100000']
+  ]);
+});
+
+test('installing a language server turns on its diagnostics, and nothing else', () => {
+  const before = buildCapabilityMatrix(languageSupport({}));
+  const after = buildCapabilityMatrix(languageSupport({ rust: ['Installed', true] }));
+  const rustBefore = before.find((row) => row.language === 'rust');
+  const rustAfter = after.find((row) => row.language === 'rust');
+  assert.deepEqual({ ...rustAfter, diagnostics: false, languageServer: 'unknown' }, rustBefore);
+  assert.equal(rustAfter.diagnostics, true);
+  assert.equal(rustAfter.navigation, false, 'an installed server does not imply navigation');
+});
+
+test('language-server states', () => {
+  const cases = [
+    [{ typescript: ['Installed', true] }, 'typescript', 'installed'],
+    [{ typescript: ['Update Available', true] }, 'typescript', 'installed'],
+    [{ python: ['Not Installed', true] }, 'python', 'notInstalled'],
+    [{ python: ['Not Installed', false] }, 'python', 'unknown'],
+    [{ python: ['Installing', true] }, 'python', 'unknown'],
+    [{ go: ['Error', true] }, 'go', 'error'],
+    [{}, 'cpp', 'unknown'],
+    [{}, null, 'none']
+  ];
+  for (const [packs, packId, expected] of cases) {
+    assert.equal(languageServerState(languageSupport(packs), packId), expected, `${packId} ${JSON.stringify(packs)}`);
+  }
+});
+
+test('editor.bufferIndex: a path the contract cannot carry is counted as omitted, never sent', () => {
+  const long = `${'d/'.repeat(600)}a.ts`; // 1,204 code points
+  const documents = new Map([
+    ['a.ts', { tabId: 1, path: 'a.ts', state: 'open', dirty: false, text: 'x' }],
+    [long, { tabId: 2, path: long, state: 'closedDirty', dirty: true, text: 'y' }]
+  ]);
+  const reply = answerBufferIndex({ maxEntries: 500 }, documents, () => 'b1-x');
+  assert.deepEqual(reply.result.entries.map((entry) => entry.path), ['a.ts']);
+  assert.equal(reply.result.omitted, 1);
 });

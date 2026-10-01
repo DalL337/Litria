@@ -1,45 +1,35 @@
+/**
+ * The editor's language id for each lower-case file extension (without the
+ * dot). Every other extension is `plaintext`. Exported as data for the
+ * Project API's capability matrix (`src/app/languageCapabilities.js`), so the
+ * mapping has one owner.
+ */
+export const LANGUAGE_EXTENSIONS = Object.freeze({
+  javascript: Object.freeze(['js', 'jsx', 'mjs', 'cjs']),
+  typescript: Object.freeze(['ts', 'tsx', 'mts', 'cts']),
+  json: Object.freeze(['json']),
+  css: Object.freeze(['css']),
+  html: Object.freeze(['html']),
+  markdown: Object.freeze(['md']),
+  python: Object.freeze(['py', 'pyi']),
+  rust: Object.freeze(['rs']),
+  c: Object.freeze(['c']),
+  // .h follows the VSCode default (C++); clangd infers the real language
+  // from the compilation database regardless.
+  cpp: Object.freeze(['h', 'cpp', 'hpp', 'cc', 'cxx']),
+  go: Object.freeze(['go'])
+});
+
+const LANGUAGE_BY_EXTENSION = new Map(
+  Object.entries(LANGUAGE_EXTENSIONS).flatMap(([language, extensions]) =>
+    extensions.map((extension) => [extension, language])
+  )
+);
+
 export function getLanguageFromFilename(filename) {
   if (!filename) return 'plaintext';
   const ext = filename.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs':
-      return 'javascript';
-    case 'ts':
-    case 'tsx':
-    case 'mts':
-    case 'cts':
-      return 'typescript';
-    case 'json':
-      return 'json';
-    case 'css':
-      return 'css';
-    case 'html':
-      return 'html';
-    case 'md':
-      return 'markdown';
-    case 'py':
-    case 'pyi':
-      return 'python';
-    case 'rs':
-      return 'rust';
-    case 'c':
-      return 'c';
-    case 'h':
-    case 'cpp':
-    case 'hpp':
-    case 'cc':
-    case 'cxx':
-      // .h follows the VSCode default (C++); clangd infers the real language
-      // from the compilation database regardless.
-      return 'cpp';
-    case 'go':
-      return 'go';
-    default:
-      return 'plaintext';
-  }
+  return LANGUAGE_BY_EXTENSION.get(ext) ?? 'plaintext';
 }
 
 /**

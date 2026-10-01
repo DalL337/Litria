@@ -490,7 +490,15 @@ function App() {
     [projectInstance?._dbState]
   );
 
-  useProjectApiBridge({ projectInstance, sessionReadyFor });
+  useProjectApiBridge({
+    projectInstance,
+    sessionReadyFor,
+    selectedIds,
+    piecesById,
+    selectedGroupId,
+    groups,
+    languageSupportDomain
+  });
 
   useTerminalLifecycle({
     projectInstance,
