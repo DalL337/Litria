@@ -96,6 +96,7 @@ pub fn run() {
             platform::get_platform_config,
             // SQLite persistence (db module)
             db::commands::db_bootstrap_project,
+            db::commands::db_check_project_path,
             db::commands::db_open_project,
             db::commands::db_close_project,
             db::commands::db_create_piece,

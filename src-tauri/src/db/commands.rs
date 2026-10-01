@@ -163,16 +163,32 @@ pub(crate) fn db_bootstrap_project(
     })
 }
 
-/// Open a project. Handles: returning project, fresh bootstrap.
-#[tauri::command]
-pub(crate) fn db_open_project(path: String) -> CommandResult<ProjectState> {
-    let project_root = Path::new(&path);
+/// The first refusal of `db_open_project`, shared with its preflight.
+fn ensure_project_dir(path: &str) -> CommandResult<&Path> {
+    let project_root = Path::new(path);
     if !project_root.is_dir() {
         return Err(CommandError::not_found(
             "db.open.not_dir",
             format!("Project path is not a directory: {path}"),
         ));
     }
+    Ok(project_root)
+}
+
+/// Check that a path could be opened as a project, without opening anything.
+/// The frontend calls this BEFORE it tears the current project down, so a
+/// missing or non-directory path (a deleted recent, a typo) leaves the current
+/// project open. Read-only; it answers what `db_open_project` would refuse
+/// first, with the same error. App-scoped: no workspace epoch is involved.
+#[tauri::command]
+pub(crate) fn db_check_project_path(path: String) -> CommandResult<()> {
+    ensure_project_dir(&path).map(|_| ())
+}
+
+/// Open a project. Handles: returning project, fresh bootstrap.
+#[tauri::command]
+pub(crate) fn db_open_project(path: String) -> CommandResult<ProjectState> {
+    let project_root = ensure_project_dir(&path)?;
 
     // Detection precedence (ADR-016):
     // 1. .litria/workspace.db exists → returning project
@@ -1406,4 +1422,28 @@ mod tests {
         );
         fs::remove_dir_all(&root).ok();
     }
+
+    /// P4 gate item 2: the frontend checks a path BEFORE tearing the current
+    /// project down. The check must refuse exactly what `db_open_project`
+    /// refuses first, with the same error, and must create nothing.
+    #[test]
+    fn check_project_path_matches_the_open_refusal_and_touches_nothing() {
+        let root = temp_dir("check-path");
+        assert!(db_check_project_path(root.to_string_lossy().into_owned()).is_ok());
+        assert!(!root.join(".litria").exists(), "the check created nothing");
+
+        let file = root.join("notes.txt");
+        fs::write(&file, "x").unwrap();
+        let missing = root.join("gone");
+        for path in [file, missing] {
+            let path = path.to_string_lossy().into_owned();
+            let checked = db_check_project_path(path.clone()).unwrap_err();
+            assert!(matches!(checked.category(), crate::errors::ErrorCategory::NotFound));
+            assert_eq!(checked.code(), "db.open.not_dir");
+            let opened = db_open_project(path).unwrap_err();
+            assert_eq!(opened.code(), checked.code());
+        }
+        fs::remove_dir_all(&root).ok();
+    }
+
 }

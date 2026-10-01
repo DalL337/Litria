@@ -5,7 +5,7 @@ import { getRandomPieceColor } from '../utils/pieceColors';
 import { getHeaderCommentForFilename } from '../editor/editorHeaders';
 import { UNTITLED_FILENAME } from '../project/untitledSession.js';
 import { splitPathAtLastSeparator } from '../utils/path';
-import { dbOpenProject, dbBootstrapProject, dbCloseProject, dbSaveEditorState, dbCreatePiecesBatch } from '../project/dbStorage.js';
+import { dbCheckProjectPath, dbOpenProject, dbBootstrapProject, dbCloseProject, dbSaveEditorState, dbCreatePiecesBatch } from '../project/dbStorage.js';
 import { prefsSaveGlobal } from '../preferences/preferencesStore.js';
 import { PREF_KEYS } from '../preferences/registry.js';
 import { buildBlankSeedRows } from '../project/blankSeed.js';
@@ -299,6 +299,39 @@ export function useProjectLaunch({
     }
   }, [projectInstance, terminalDomain, languageSupportDomain, clearHistory]);
 
+  // Wipe the workspace state back to pristine and show the launcher. App
+  // itself never unmounts, so without the wipe stale pieces would flash
+  // before the next project's hydration and would leak into a subsequent
+  // launcher single-file session (whose hydration loads nothing). Wipe list
+  // mirrors startSingleFileSession, plus connections (the launcher makes
+  // single-file sessions reachable AFTER a project for the first time).
+  // setProjectInstance(null) re-renders the launch screen; the instanceId
+  // change to null also dispatches RESET_SESSION, wiping editor tabs.
+  // Shared by Exit to Launcher and a project open that fails after teardown.
+  const resetToLauncher = useCallback(() => {
+    setPieces([]);
+    setNextId(1);
+    setGroups([]);
+    setNextGroupId(1);
+    setSelectedGroupId(null);
+    setHiddenScaffoldPaths([]);
+    clearSelection();
+    setConnections?.([]);
+    setNextConnectionIdValue?.(1);
+    setProjectInstance(null);
+  }, [
+    clearSelection,
+    setConnections,
+    setGroups,
+    setHiddenScaffoldPaths,
+    setNextConnectionIdValue,
+    setNextGroupId,
+    setNextId,
+    setPieces,
+    setProjectInstance,
+    setSelectedGroupId
+  ]);
+
   const handleOpenProjectInstance = useCallback(async ({ rootPath }) => {
     const trimmedRootPath = typeof rootPath === 'string' ? rootPath.trim() : '';
     if (!trimmedRootPath) {
@@ -315,7 +348,22 @@ export function useProjectLaunch({
       return;
     }
 
+    // Refuse a path that cannot be a project BEFORE tearing anything down: a
+    // deleted recent or a typo used to close the current project's terminals,
+    // language servers and workspace database first, then leave the window
+    // showing that project with nothing behind it (P4 gate item 2,
+    // 2026-10-01).
+    try {
+      await dbCheckProjectPath(trimmedRootPath);
+    } catch (err) {
+      throw new Error(getStorageErrorMessage(
+        err,
+        `Could not open project at that path: ${err?.message || err}`
+      ));
+    }
+
     // Tear down the OLD project before opening the NEW one.
+    const tearingDown = Boolean(projectInstance?.instanceId);
     await teardownActiveProject();
 
     // ─── Open the NEW project ─────────────────────────────────────────
@@ -327,6 +375,10 @@ export function useProjectLaunch({
     try {
       projectState = await dbOpenProject(trimmedRootPath);
     } catch (err) {
+      // The old project is already torn down; showing it would present a
+      // workspace whose database is closed. Land on the launcher instead
+      // (owner ruling 2026-10-01) — never try to reopen the old one.
+      if (tearingDown) resetToLauncher();
       const storageError = typeof getProjectStorageError === 'function'
         ? getProjectStorageError()
         : null;
@@ -359,6 +411,8 @@ export function useProjectLaunch({
   }, [
     guardUnsavedChanges,
     teardownActiveProject,
+    resetToLauncher,
+    projectInstance,
     getProjectStorageError,
     getStorageErrorMessage,
     clearSelection,
@@ -366,44 +420,33 @@ export function useProjectLaunch({
     setProjectInstance
   ]);
 
+  // The in-workspace ProjectSwitcher fires and forgets. Calling the open
+  // handler bare there made every failed switch an unhandled rejection the
+  // user never saw; report it the way File → Open Project… does.
+  const handleSwitchProject = useCallback(async ({ rootPath }) => {
+    try {
+      await handleOpenProjectInstance({ rootPath });
+    } catch (error) {
+      showToast?.(
+        error instanceof Error ? error.message : 'Failed to open project.',
+        { severity: 'error' }
+      );
+    }
+  }, [handleOpenProjectInstance, showToast]);
+
   // File → Exit to Launcher: the first half of a project switch with no
-  // second half. Teardown, then wipe the workspace state back to pristine —
-  // App itself never unmounts, so without the wipe stale pieces would flash
-  // before the next project's hydration and would leak into a subsequent
-  // launcher single-file session (whose hydration loads nothing). Wipe list
-  // mirrors startSingleFileSession, plus connections (the launcher makes
-  // single-file sessions reachable AFTER a project for the first time).
-  // setProjectInstance(null) re-renders the launch screen; the instanceId
-  // change to null also dispatches RESET_SESSION, wiping editor tabs.
+  // second half. Teardown, then wipe back to the launcher (resetToLauncher).
   // No clean-shutdown ritual: this is not an app exit.
   const handleExitToLauncher = useCallback(async () => {
     if (guardUnsavedChanges && !(await guardUnsavedChanges('exit-to-launcher'))) {
       return;
     }
     await teardownActiveProject();
-    setPieces([]);
-    setNextId(1);
-    setGroups([]);
-    setNextGroupId(1);
-    setSelectedGroupId(null);
-    setHiddenScaffoldPaths([]);
-    clearSelection();
-    setConnections?.([]);
-    setNextConnectionIdValue?.(1);
-    setProjectInstance(null);
+    resetToLauncher();
   }, [
     guardUnsavedChanges,
     teardownActiveProject,
-    clearSelection,
-    setConnections,
-    setGroups,
-    setHiddenScaffoldPaths,
-    setNextConnectionIdValue,
-    setNextGroupId,
-    setNextId,
-    setPieces,
-    setProjectInstance,
-    setSelectedGroupId
+    resetToLauncher
   ]);
 
   // Shared constructor for both single-file session flows ("Open File" and
@@ -528,6 +571,7 @@ export function useProjectLaunch({
   return {
     handleCreateProjectInstance,
     handleOpenProjectInstance,
+    handleSwitchProject,
     handleOpenFileInstance,
     handleNewFileInstance,
     handleMenuOpenProject,

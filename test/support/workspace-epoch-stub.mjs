@@ -24,6 +24,11 @@ export async function invoke(command, payload = {}) {
   if (command === 'db_open_project' || command === 'db_bootstrap_project') {
     return globalThis.__EPOCH_OPEN__(payload.path);
   }
+  // App-scoped preflight: no workspace involved. A test that models a bad
+  // path sets __EPOCH_CHECK__ to throw for it; otherwise every path passes.
+  if (command === 'db_check_project_path') {
+    return globalThis.__EPOCH_CHECK__ ? globalThis.__EPOCH_CHECK__(payload.path) : null;
+  }
   if (command === 'db_close_project') {
     globalThis.__EPOCH_BACKEND__ = null;
     return null;
