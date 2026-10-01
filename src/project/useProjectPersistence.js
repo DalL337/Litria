@@ -334,8 +334,15 @@ export function useProjectPersistence({
       if (isMounted && updated.length) {
         setPieces(updated);
       }
-      hasLoadedPiecesRef.current = true;
-      if (isMounted) setPiecesLoadedFor(dbState);
+      // Only this load's own, still-current reader may mark it loaded. A
+      // reader cancelled by a project switch must not flip the shared flag
+      // for the next load: restoration, viewport and position persistence
+      // all read it. `piecesLoadedFor` lands in the same update as these
+      // pieces, so a render that sees it also sees this load's pieces.
+      if (isMounted) {
+        hasLoadedPiecesRef.current = true;
+        setPiecesLoadedFor(dbState);
+      }
     })();
 
     return () => { isMounted = false; };
@@ -362,18 +369,22 @@ export function useProjectPersistence({
   useEffect(() => {
     if (!projectInstance?.rootPath || !projectInstance?.instanceId) return;
     if (projectInstance.manifestPath === null) return;
-    // Hydration is complete for this load once its own contents have loaded
-    // and the session has been restored for it — here, or by an earlier run
-    // of this effect (contract brief §4.3; the Project API bridge waits on it).
+    // Restore only from THIS load's own pieces: wait until its reader has
+    // marked it loaded, which happens in the same update as its pieces, so
+    // `piecesById` below is this load's. A shared "loaded" flag cannot say
+    // whose pieces are on hand — the render that installs a new project can
+    // still hold the previous one's, and an empty project restored the last
+    // project's discarded edit from them (PR #89 review, 2026-09-30).
     const loadToken = projectInstance._dbState;
-    const markSessionReady = () => {
-      if (loadToken && piecesLoadedFor === loadToken) setSessionReadyFor(loadToken);
-    };
+    if (!loadToken || piecesLoadedFor !== loadToken) return;
+    // Hydration is complete for this load once its session is restored —
+    // here, or by an earlier run of this effect (contract brief §4.3; the
+    // Project API bridge waits on it).
+    const markSessionReady = () => setSessionReadyFor(loadToken);
     if (hasRestoredEditorSessionRef.current) {
       markSessionReady();
       return;
     }
-    if (!hasLoadedPiecesRef.current) return;
     hasRestoredEditorSessionRef.current = true;
     let isMounted = true;
 
