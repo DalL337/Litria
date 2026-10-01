@@ -390,6 +390,8 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 | Reloading the webview | the old listener's request times out; after reopening, calls work again |
 
 **Platform coverage:** the Unix-symlink variant of the link-alias test and the case-variant test on a case-insensitive macOS volume run in the Linux and macOS CI jobs; the junction variant and the case test ran locally on Windows.
+- **CI on PR #89:** `cargo test (linux-x86_64)` passed 441 and `cargo test (macos-aarch64)` passed 440, each with 3 ignored; the Architecture Guard passed. Both logs show `a_link_alias_finds_the_buffer_of_the_file_it_names` (a Unix symlink there) and `a_link_to_a_denied_directory_never_reaches_the_bridge` as `ok`.
+- **Not proven on macOS:** the case-variant test also reports `ok` on both jobs, but it returns early, without output, on a case-sensitive volume. The log cannot show which branch ran on macOS, so the macOS case finding stays suspected.
 
 **Security review** (security policy Rule 1: new commands): the three bridge commands exist only in debug builds and touch no filesystem; replies are accepted only for pending requests and pass the reply boundary; owner error text is never forwarded; denied paths are answered in Rust before the bridge is asked.
 
