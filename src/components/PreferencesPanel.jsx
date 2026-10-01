@@ -474,7 +474,7 @@ function PreferencesPanel({
               className="pf-input"
               aria-label={entry.label}
               value={values[entry.key] ?? entry.defaultValue ?? ''}
-              placeholder="System default"
+              placeholder={entry.placeholder ?? 'System default'}
               disabled={!isLoaded}
               onChange={(e) => setValues((prev) => ({ ...prev, [entry.key]: e.target.value }))}
               onBlur={(e) => handleSetGeneric(entry, e.target.value)}
@@ -786,7 +786,7 @@ function PreferencesPanel({
                 className="pf-search-input"
                 type="search"
                 value={query}
-                placeholder="Find a setting\u2026"
+                placeholder={'Find a setting\u2026'}
                 aria-label="Find a setting"
                 onChange={(e) => setQuery(e.target.value)}
               />
