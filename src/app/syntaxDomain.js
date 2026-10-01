@@ -1542,7 +1542,19 @@ export function createSyntaxDomain() {
       for (const [oldEdgeId, edge] of edgesToRename) {
         syntaxEdges.delete(oldEdgeId);
 
-        if (edge.sourceFilePath === oldPath) edge.sourceFilePath = newPath;
+        if (edge.sourceFilePath === oldPath) {
+          edge.sourceFilePath = newPath;
+          // Symbol ids embed the defining file's path (`${filePath}::${name}`).
+          // Carry them to the new path, or nothing the moved file defines
+          // matches them again: its next edit broke the wire, and the picker
+          // offered symbols already on the edge (2026-10-01).
+          const oldPrefix = `${oldPath}::`;
+          for (const sym of edge.symbols) {
+            if (sym.symbolId.startsWith(oldPrefix)) {
+              sym.symbolId = `${newPath}::${sym.symbolId.slice(oldPrefix.length)}`;
+            }
+          }
+        }
         if (edge.targetFilePath === oldPath) edge.targetFilePath = newPath;
 
         // The import sitting in the target file still says the OLD spec —
@@ -1604,6 +1616,20 @@ export function createSyntaxDomain() {
             moduleSpecifier: edge.relSpec,
             importClause: importText.trim(),
           });
+        }
+      }
+
+      // Statuses follow the file once its text is indexed at the new path: a
+      // symbol broken by the move recovers by its (now matching) id. Without
+      // that text yet, the new path's registration reconciles instead —
+      // reconciling against an empty index would mark every symbol broken.
+      if (fileTextCache.has(newPath)) {
+        const reconciled = _reconcileEdges(newPath);
+        for (const id of reconciled.changedEdges) {
+          if (!changedEdgeIds.includes(id)) changedEdgeIds.push(id);
+        }
+        for (const id of reconciled.changedConns) {
+          if (!changedConnIds.includes(id)) changedConnIds.push(id);
         }
       }
 

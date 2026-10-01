@@ -101,3 +101,42 @@ test('computeImportLineForSpec locates extension-tolerant matches and misses cle
   assert.equal(domain.commands.computeImportLineForSpec({ text: null, spec: './utils' }), null);
   assert.equal(domain.commands.computeImportLineForSpec({ text, spec: '' }), null);
 });
+
+// ---------------------------------------------------------------------------
+// Symbol ids embed the defining file's path (`${filePath}::${name}`). A rename
+// re-pointed the edge but kept the old ids, so nothing the moved file defines
+// matched them again: its next edit turned the wire broken, and the picker
+// offered a symbol already on the edge as new (2026-10-01, found while fixing
+// P4 gate item 5).
+// ---------------------------------------------------------------------------
+
+test('a renamed file keeps its wires resolved through its next edit', async () => {
+  const { domain, adapter } = setupAdapter({
+    'src/utils.js': 'export function helper() {}\n',
+    'src/app.js': 'helper();\n',
+  });
+  await connectAndResolve(domain, adapter);
+
+  await adapter.onFileRenamed('/proj/src/utils.js', '/proj/src/util-belt.js');
+  adapter.onFileChanged('/proj/src/util-belt.js', 'export function helper() {}\n// edited\n');
+
+  const edge = domain.selectors.getSyntaxEdgeForPair('/proj/src/util-belt.js', '/proj/src/app.js');
+  assert.equal(edge.status, 'resolved');
+  assert.deepEqual(edge.symbols.map((s) => s.symbolId), ['/proj/src/util-belt.js::helper']);
+});
+
+test('after a rename, a symbol already on the edge is not offered again', async () => {
+  const { domain, adapter } = setupAdapter({
+    'src/utils.js': 'export function helper() {}\nexport function other() {}\n',
+    'src/app.js': 'helper();\n',
+  });
+  await connectAndResolve(domain, adapter);
+
+  await adapter.onFileRenamed('/proj/src/utils.js', '/proj/src/util-belt.js');
+
+  const edge = domain.selectors.getSyntaxEdgeForPair('/proj/src/util-belt.js', '/proj/src/app.js');
+  const offered = domain.selectors
+    .getAvailableSymbolsForEdge('/proj/src/util-belt.js', edge.edgeId)
+    .map((s) => s.name);
+  assert.deepEqual(offered, ['other']);
+});
