@@ -343,3 +343,197 @@ mod tests {
     }
 }
 
+/// Link entries: delete, move and remove act on the link the user selected,
+/// never on what it points to (2026-09-30; reproduced on Windows junctions
+/// and Linux symlinks before the fix — see Agents/docs/adversarial-check-policy.md).
+#[cfg(test)]
+mod link_entry_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(prefix: &str) -> PathBuf {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("litria-links-{prefix}-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::canonicalize(dir).unwrap()
+    }
+
+    fn root_str(root: &Path) -> &str {
+        root.to_str().unwrap()
+    }
+
+    /// A directory link: a junction on Windows (no privilege needed), a
+    /// symlink elsewhere.
+    fn dir_link(link: &Path, target: &Path) {
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "mklink /J");
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    fn entry_exists(path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok()
+    }
+
+    fn is_link(path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    }
+
+    /// Remove a test tree without following any link inside it (the junction
+    /// hazard): unlink links first, then the rest.
+    fn cleanup(root: &Path, links: &[&str]) {
+        for link in links {
+            let path = root.join(link);
+            if is_link(&path) {
+                let _ = fs::remove_dir(&path).or_else(|_| fs::remove_file(&path));
+            }
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deleting_a_directory_link_removes_only_the_link() {
+        let root = temp_root("delete-dir-link");
+        fs::create_dir_all(root.join("real")).unwrap();
+        fs::write(root.join("real/keep.txt"), "keep").unwrap();
+        dir_link(&root.join("alias"), &root.join("real"));
+
+        delete_project_path(root_str(&root), "alias").unwrap();
+
+        assert!(!entry_exists(&root.join("alias")), "the link itself is gone");
+        assert_eq!(fs::read_to_string(root.join("real/keep.txt")).unwrap(), "keep", "the target is untouched");
+        cleanup(&root, &["alias"]);
+    }
+
+    /// A link back to the project root passes containment (the root is
+    /// "within" itself); deleting it must not delete the project.
+    #[test]
+    fn deleting_a_link_to_the_project_root_removes_only_the_link() {
+        let root = temp_root("delete-root-link");
+        fs::write(root.join("sentinel.txt"), "project").unwrap();
+        dir_link(&root.join("up"), &root);
+
+        delete_project_path(root_str(&root), "up").unwrap();
+
+        assert!(!entry_exists(&root.join("up")), "the link itself is gone");
+        assert_eq!(fs::read_to_string(root.join("sentinel.txt")).unwrap(), "project", "the project survives");
+        cleanup(&root, &["up"]);
+    }
+
+    #[test]
+    fn deleting_a_dangling_link_removes_it() {
+        let root = temp_root("delete-dangling");
+        fs::create_dir_all(root.join("gone")).unwrap();
+        dir_link(&root.join("alias"), &root.join("gone"));
+        fs::remove_dir(root.join("gone")).unwrap();
+        assert!(entry_exists(&root.join("alias")), "the dangling link exists before the delete");
+
+        delete_project_path(root_str(&root), "alias").unwrap();
+
+        assert!(!entry_exists(&root.join("alias")), "a dangling link is actually removed, not reported gone");
+        cleanup(&root, &["alias"]);
+    }
+
+    #[test]
+    fn moving_a_directory_link_moves_the_link() {
+        let root = temp_root("move-dir-link");
+        fs::create_dir_all(root.join("real")).unwrap();
+        fs::write(root.join("real/keep.txt"), "keep").unwrap();
+        dir_link(&root.join("alias"), &root.join("real"));
+
+        move_project_path(root_str(&root), "alias", "renamed").unwrap();
+
+        assert!(is_link(&root.join("renamed")), "the destination is the link");
+        assert!(!entry_exists(&root.join("alias")), "the old link name is gone");
+        assert_eq!(fs::read_to_string(root.join("real/keep.txt")).unwrap(), "keep", "the target never moved");
+        cleanup(&root, &["renamed", "alias"]);
+    }
+
+    #[test]
+    fn removing_an_empty_directory_through_a_link_leaves_the_target() {
+        let root = temp_root("remove-empty-link");
+        fs::create_dir_all(root.join("empty")).unwrap();
+        dir_link(&root.join("alias"), &root.join("empty"));
+
+        let result = remove_empty_directory(root_str(&root), "alias");
+
+        assert!(result.is_err(), "a link is not an empty directory");
+        assert!(root.join("empty").is_dir(), "the link's target survives");
+        cleanup(&root, &["alias"]);
+    }
+
+    #[test]
+    fn a_link_leaving_the_project_is_still_refused() {
+        let root = temp_root("outside-link");
+        let outside = temp_root("outside-target");
+        fs::write(outside.join("precious.txt"), "outside").unwrap();
+        dir_link(&root.join("out"), &outside);
+
+        assert!(delete_project_path(root_str(&root), "out/precious.txt").is_err());
+        assert!(move_project_path(root_str(&root), "out/precious.txt", "taken.txt").is_err());
+        assert_eq!(fs::read_to_string(outside.join("precious.txt")).unwrap(), "outside");
+        cleanup(&root, &["out"]);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn ordinary_entries_still_delete_and_move() {
+        let root = temp_root("ordinary");
+        fs::create_dir_all(root.join("dir/nested")).unwrap();
+        fs::write(root.join("dir/nested/a.txt"), "a").unwrap();
+        fs::write(root.join("file.txt"), "f").unwrap();
+
+        move_project_path(root_str(&root), "file.txt", "dir/file.txt").unwrap();
+        assert_eq!(fs::read_to_string(root.join("dir/file.txt")).unwrap(), "f");
+        delete_project_path(root_str(&root), "dir").unwrap();
+        assert!(!entry_exists(&root.join("dir")), "a real directory is deleted recursively");
+        delete_project_path(root_str(&root), "never-existed").expect("deleting a missing path stays idempotent");
+        cleanup(&root, &[]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_and_moving_a_file_symlink_act_on_the_link() {
+        let root = temp_root("file-link");
+        fs::write(root.join("real.txt"), "keep").unwrap();
+        std::os::unix::fs::symlink(root.join("real.txt"), root.join("alias.txt")).unwrap();
+
+        move_project_path(root_str(&root), "alias.txt", "moved.txt").unwrap();
+        assert!(is_link(&root.join("moved.txt")), "the moved entry is still the link");
+        delete_project_path(root_str(&root), "moved.txt").unwrap();
+
+        assert!(!entry_exists(&root.join("moved.txt")), "the link is gone");
+        assert_eq!(fs::read_to_string(root.join("real.txt")).unwrap(), "keep", "the target is untouched");
+        cleanup(&root, &[]);
+    }
+
+    /// The cross-device fallback must not write THROUGH a dangling link at
+    /// the destination (possibly to a file outside the project).
+    #[cfg(unix)]
+    #[test]
+    fn a_cross_device_copy_refuses_a_dangling_link_at_the_destination() {
+        let root = temp_root("exdev-dest-link");
+        let outside = temp_root("exdev-outside");
+        fs::write(root.join("a.txt"), "payload").unwrap();
+        std::os::unix::fs::symlink(outside.join("planted.txt"), root.join("b.txt")).unwrap();
+
+        let result = copy_then_delete(&root.join("a.txt"), &root.join("b.txt"));
+
+        assert!(result.is_err(), "an existing entry (even a dangling link) is refused");
+        assert!(!outside.join("planted.txt").exists(), "nothing was written through the link");
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "payload", "the source is intact");
+        cleanup(&root, &[]);
+        let _ = fs::remove_dir_all(&outside);
+    }
+}
+
