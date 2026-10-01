@@ -266,6 +266,8 @@ pub(crate) mod samples {
                 unreadable: 1,
                 unreadable_directories: 1,
                 buffers_not_searched: 1,
+                ignored_files: 4,
+                ignored_directories: 2,
             },
             files_searched: 812,
             buffers_searched: 3,

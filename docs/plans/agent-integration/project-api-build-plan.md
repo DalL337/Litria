@@ -544,6 +544,23 @@ An agent can orient itself (`litria_project_context`), read (P1–P2) and search
 
 Debug builds take about 2–3 times as long. In the working tree (5,855 walkable files, 840 of them tracked), a rare-word text search ended on the time budget after 355–582 files.
 
+> **Followed up (2026-10-01, P4 gate item 1, PR #96).** CI on PR #96: the guard job passed, `cargo test` passed 512 on linux-x86_64 and 511 on macos-aarch64 (0 failed). Both ran the Unix-only link tests (`a_gitignore_linked_to_a_denied_file_is_not_honoured`, `a_link_named_like_an_env_template_is_judged_by_its_target`) and their own branch of the per-platform case test. The owner ruled that search honours `.gitignore` (brief §15 Q2). The same change answers Q1 (the user's own withheld paths, a preference) and Q3 (environment templates become readable). Design and as-built rules: brief §6 and §7.3 addenda. Measurements: brief §10 addendum.
+> - **Dependency.** `ignore` 0.4.33, published 2026-08-04 (58 days before adoption), licensed Unlicense OR MIT; it needs Rust 1.88 and the toolchain is 1.97.1. Only its matcher is used. The lockfile gains five packages: `ignore`, `globset` (Unlicense OR MIT), `bstr`, `crossbeam-deque`, `crossbeam-epoch` (MIT OR Apache-2.0). No existing version changed. `cargo tree -e normal` grows from 814 to 835 lines, and the only addition is the `ignore` subtree. `cargo audit`: 0 vulnerabilities, the same 9 allowed warnings.
+> - **Re-measured.** A full text search of this working tree now completes in about 0.25 s with a warm cache (879 files). A cold first search can still hit the 2 s budget (brief §10 addendum).
+> - **Tests.**
+>   - Walker: git's rules (nested files, negation, anchoring, directory rules) with counts at the boundary; an explicit scope; withheld entries never counted; an oversized `.gitignore` not honoured; a `.gitignore` linked to `.env` not honoured (Unix); case matching per platform; user-withheld paths never walked.
+>   - Search: skipped and counted, `includeIgnored`, open buffers searched.
+>   - Policy: templates, the user's patterns (including restrict-only), the summary class.
+>   - Reads: a user-withheld path is denied without revealing whether it exists; a template is readable; a link named like a template is judged by its target (Unix).
+>   - Preferences: `global_text` has no side effects.
+>   - Contract fixtures for the new request field.
+> - **Visual check (implementation policy Rule 6).** In headless Chrome against the real Preferences panel, the new row renders in Behavior with its caption and placeholder. Typing a value saves it through `prefs_save_global`. The check also found the panel's search placeholder showing a literal `…`, now fixed.
+> - **Adversarial check** (the policy changed in two places).
+>   - Q3 template exception: near names, a directory named like a template, and a link wearing the name all stay denied. Case variants and trailing dots name the same file. Hard links remain the accepted residual (§6). A template holding real values is the residual the ruling accepts.
+>   - Q1 user patterns: they can only add (negations cannot re-include built-in denials); they are matched on the effective name; a path that cannot be judged is withheld.
+>   - `.gitignore`: it is read with every read check, so a swapped-in link to `.env` is refused. It never decides disclosure.
+>   - No bypass found.
+
 **Live pass** (a debug build from the worktree, CDP, app data redirected to a scratch folder, scratch projects; every reply saved as evidence in the session journal):
 
 | Check | Outcome |

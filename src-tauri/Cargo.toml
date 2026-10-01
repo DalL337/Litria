@@ -38,6 +38,10 @@ sha2 = "0.10"
 zip = "2"
 flate2 = "1"
 tar = "0.4"
+# Project API search honours .gitignore (P4 gate item 1, 2026-10-01). Only the
+# matcher (ignore::gitignore) is used, inside Litria's own walker: no link
+# following, policy before counting, path order. Not its parallel walker.
+ignore = "0.4.33"
 
 # ADR-033 (contract schemas) — test-only, nothing ships. The contract types
 # compile into the app, but derive JsonSchema only under cfg(test) (Project

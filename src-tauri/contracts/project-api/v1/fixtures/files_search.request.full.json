@@ -3,5 +3,6 @@
   "target": "path",
   "caseSensitive": true,
   "pathPrefix": "src/auth",
-  "maxResults": 200
+  "maxResults": 200,
+  "includeIgnored": true
 }

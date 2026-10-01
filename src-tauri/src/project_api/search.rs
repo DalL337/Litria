@@ -424,7 +424,7 @@ pub(crate) fn search(
     let keys: Vec<String> = buffers.keys().cloned().collect();
 
     // 3. Walk the disk and the buffers together, in path order.
-    let mut walker = Walker::new(root, prefix, budget.max_entries);
+    let mut walker = Walker::new(root, prefix, budget.max_entries, !request.include_ignored);
     #[cfg(test)]
     {
         walker.before_enter = budget.before_enter.take();
@@ -532,6 +532,8 @@ pub(crate) fn search(
     }
     tally.skipped.unreadable += walker.unreadable_files;
     tally.skipped.unreadable_directories += walker.unreadable_directories;
+    tally.skipped.ignored_files += walker.ignored_files;
+    tally.skipped.ignored_directories += walker.ignored_directories;
 
     // A name found on disk is reported only if it still names a file that
     // resolves to exactly itself. The walker lists a directory by path, so a
@@ -794,6 +796,8 @@ fn finish(scope: SearchScope, mut tally: Tally, collected: Vec<SearchMatch>, cei
             unreadable: u32::MAX,
             unreadable_directories: u32::MAX,
             buffers_not_searched: u32::MAX,
+            ignored_files: u32::MAX,
+            ignored_directories: u32::MAX,
         },
         files_searched: u32::MAX,
         buffers_searched: u32::MAX,
@@ -1280,6 +1284,45 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// P4 gate item 1: files a `.gitignore` excludes are skipped and counted,
+    /// so a search over them is never silently clean; `includeIgnored` brings
+    /// them back. A document open in the editor is searched either way.
+    #[test]
+    fn gitignored_files_are_skipped_and_counted_unless_included() {
+        let root = temp_root("gitignore");
+        put(&root, ".gitignore", "generated/\n*.log\n");
+        put(&root, "src/a.ts", "needle\n");
+        put(&root, "trace.log", "needle\n");
+        put(&root, "generated/out.js", "needle\n");
+        put(&root, "generated/more.js", "needle\n");
+
+        let default = run(&root, &query("needle"), &mut Scripted::default());
+        assert_eq!(hits(&default), [hit("src/a.ts", 1, 1, Disk)]);
+        assert_eq!((default.skipped.ignored_files, default.skipped.ignored_directories), (1, 1));
+        assert!(!default.truncated, "skipping ignored files is not truncation: {:?}", default.truncated_by);
+
+        let included = run(
+            &root,
+            &request(serde_json::json!({ "query": "needle", "includeIgnored": true })),
+            &mut Scripted::default(),
+        );
+        assert_eq!(
+            hits(&included),
+            [
+                hit("generated/more.js", 1, 1, Disk),
+                hit("generated/out.js", 1, 1, Disk),
+                hit("src/a.ts", 1, 1, Disk),
+                hit("trace.log", 1, 1, Disk),
+            ]
+        );
+        assert_eq!((included.skipped.ignored_files, included.skipped.ignored_directories), (0, 0));
+
+        let mut editor = Scripted::with(vec![doc("trace.log", "openDirty", "needle in the buffer\n")]);
+        let open = run(&root, &query("needle"), &mut editor);
+        assert_eq!(hits(&open), [hit("src/a.ts", 1, 1, Disk), hit("trace.log", 1, 1, Editor)]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// P4 gate item 6: the editor holds a buffer under a case variant of the
     /// file's name. On a case-insensitive volume (Windows, default macOS) the
     /// variant names the same file, so the document is searched once, in its
@@ -1644,6 +1687,10 @@ mod tests {
             ("common word, text", serde_json::json!({ "query": "the", "maxResults": 200 })),
             ("rare word, text (full walk)", serde_json::json!({ "query": "zq_never_present_xj" })),
             ("rare word, case-sensitive", serde_json::json!({ "query": "zq_never_present_xj", "caseSensitive": true })),
+            (
+                "rare word, ignored files included",
+                serde_json::json!({ "query": "zq_never_present_xj", "includeIgnored": true }),
+            ),
             ("path, common", serde_json::json!({ "query": "test", "target": "path", "maxResults": 200 })),
             ("path, rare (full walk)", serde_json::json!({ "query": "zq_never_present_xj", "target": "path" })),
         ];

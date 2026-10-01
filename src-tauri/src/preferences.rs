@@ -149,6 +149,15 @@ pub(crate) fn load_global(dir: &Path, legacy: &HashMap<String, String>) -> Resul
     Ok(toml_to_json(&toml::Value::Table(prefs)))
 }
 
+/// One global preference as text, read without side effects: no folder or
+/// file is created and nothing migrates. None when the file, the key or a
+/// string value is absent, or the file cannot be parsed.
+pub(crate) fn global_text(dir: &Path, key: &str) -> Option<String> {
+    let content = std::fs::read_to_string(dir.join(GLOBAL_FILE)).ok()?;
+    let prefs = parse_doc(&content, GLOBAL_FILE).ok()?;
+    prefs.get(key)?.as_str().map(str::to_owned)
+}
+
 /// Persist one preference into the global file (read-modify-write, atomic).
 /// Refuses to overwrite a file it cannot parse.
 pub(crate) fn save_global(dir: &Path, key: &str, value: &serde_json::Value) -> Result<(), String> {
@@ -355,7 +364,13 @@ pub(crate) fn prefs_load_global() -> CommandResult<serde_json::Value> {
 #[tauri::command]
 pub(crate) fn prefs_save_global(key: String, value: serde_json::Value) -> CommandResult<()> {
     let dir = preferences_dir().map_err(CommandError::from_text)?;
-    save_global(&dir, &key, &value).map_err(CommandError::from_text)
+    save_global(&dir, &key, &value).map_err(CommandError::from_text)?;
+    // The Project API's disclosure policy holds the user's own withheld
+    // patterns in memory; a saved change applies from the next call on.
+    if key == crate::project_api::policy::USER_EXCLUSIONS_KEY {
+        crate::project_api::policy::set_user_exclusions(value.as_str().unwrap_or(""));
+    }
+    Ok(())
 }
 
 fn project_context(project_path: &str) -> Result<(PathBuf, String, Option<String>), String> {
@@ -415,6 +430,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("litria-prefs-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// The Project API policy reads its preference with no side effects.
+    #[test]
+    fn global_text_reads_one_string_and_creates_nothing() {
+        let dir = temp_dir("global-text");
+        assert_eq!(global_text(&dir, "apiWithheldPaths"), None);
+        assert!(!dir.exists(), "reading created the folder");
+
+        save_global(&dir, "apiWithheldPaths", &serde_json::json!("secrets/, *.sqlite")).unwrap();
+        save_global(&dir, "splashScreen", &serde_json::json!(false)).unwrap();
+        assert_eq!(global_text(&dir, "apiWithheldPaths").as_deref(), Some("secrets/, *.sqlite"));
+        assert_eq!(global_text(&dir, "splashScreen"), None, "not a string");
+        assert_eq!(global_text(&dir, "missing"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

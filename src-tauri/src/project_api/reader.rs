@@ -893,4 +893,41 @@ mod tests {
         assert_eq!(count_lines("a\nb"), 2);
         assert_eq!(count_lines("a\nb\n"), 2);
     }
+
+    /// Brief §15 Q3: `.env.example` is readable, but a link that only wears
+    /// the name is judged by its target (P4 gate item 1, 2026-10-01).
+    #[test]
+    fn an_env_template_is_readable_and_a_link_named_like_one_is_not() {
+        let root = temp_root("env-template");
+        fs::write(root.join(".env.example"), "API_URL=\n").unwrap();
+        let DiskRead::Text { text, .. } = read_disk(&root, ".env.example") else {
+            panic!("the template is readable");
+        };
+        assert_eq!(text, "API_URL=\n");
+        assert!(matches!(read_disk(&root, ".env.local.example"), DiskRead::Denied));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Brief §15 Q1: a path the user withholds is denied to an explicit read
+    /// too, without its existence being revealed.
+    #[test]
+    fn a_user_withheld_path_is_denied_to_a_read() {
+        let _user = crate::project_api::policy::tests::Withholding::patterns("private/");
+        let root = temp_root("user-withheld");
+        fs::create_dir_all(root.join("private")).unwrap();
+        fs::write(root.join("private/plan.md"), "secret plan\n").unwrap();
+        assert!(matches!(read_disk(&root, "private/plan.md"), DiskRead::Denied));
+        assert!(matches!(read_disk(&root, "private/missing.md"), DiskRead::Denied), "existence is not revealed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_named_like_an_env_template_is_judged_by_its_target() {
+        let root = temp_root("env-template-link");
+        fs::write(root.join(".env"), "SECRET=1\n").unwrap();
+        std::os::unix::fs::symlink(root.join(".env"), root.join(".env.sample")).unwrap();
+        assert!(matches!(read_disk(&root, ".env.sample"), DiskRead::Denied));
+        let _ = fs::remove_dir_all(&root);
+    }
 }

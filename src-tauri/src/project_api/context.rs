@@ -179,7 +179,7 @@ fn build(
         policy: PolicySummary {
             denied: denied_classes(),
             unindexed_directories: unindexed_directories(),
-            gitignore_honoured: false,
+            gitignore_honoured: true,
         },
     }
 }
@@ -424,7 +424,7 @@ mod tests {
             !result.policy.unindexed_directories.iter().any(|name| name == ".git" || name == ".litria"),
             "denied wins: never described as merely unindexed"
         );
-        assert!(!result.policy.gitignore_honoured);
+        assert!(result.policy.gitignore_honoured);
 
         let text = serde_json::to_string(&result).unwrap();
         assert!(!text.contains(&epoch), "the epoch is never returned");

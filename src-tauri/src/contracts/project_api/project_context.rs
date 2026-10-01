@@ -213,7 +213,10 @@ pub(crate) struct PolicySummary {
     /// Directory names search and the graph never enter, at any depth.
     /// Their files are still readable by explicit path.
     pub unindexed_directories: Vec<String>,
-    /// Search does not consult `.gitignore` files.
+    /// Search skips what the project's `.gitignore` files exclude unless a
+    /// request sets `includeIgnored`, and counts what it skipped. Ignored
+    /// files stay readable by explicit path: `.gitignore` is never a
+    /// disclosure rule.
     pub gitignore_honoured: bool,
 }
 
@@ -226,7 +229,8 @@ pub(crate) enum DeniedClass {
     LitriaState,
     /// `.git`, `.hg/`, `.svn/`.
     VersionControl,
-    /// `.env` and `.env.*`.
+    /// `.env` and `.env.*`, except the template files `.env.example`,
+    /// `.env.sample`, `.env.template` and `.env.dist`.
     EnvironmentFiles,
     /// `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`.
     KeyMaterial,
@@ -235,4 +239,8 @@ pub(crate) enum DeniedClass {
     /// `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `.ssh/`, `.aws/`,
     /// `.gnupg/`.
     Credentials,
+    /// Paths the user withholds in Preferences, on top of the classes above.
+    /// Listed only while they withhold anything; the patterns are not
+    /// disclosed.
+    UserExclusions,
 }
