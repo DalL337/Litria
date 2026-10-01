@@ -10,8 +10,102 @@
 //! anticipates, and an agent runtime's native tools bypass this policy
 //! entirely (ADR-031 decision 5).
 
+use std::path::Path;
+
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ignore::Match;
+
 use crate::contracts::project_api::project_context::DeniedClass;
 use crate::project_tree;
+
+/// The global preference holding the user's own withheld patterns (brief §6,
+/// §15 Q1; owner ruling 2026-10-01). They can only ADD to what is denied.
+pub(crate) const USER_EXCLUSIONS_KEY: &str = "apiWithheldPaths";
+
+/// The user's withheld patterns, compiled: `.gitignore` syntax, separated by
+/// commas or new lines, matched against the project-relative path and every
+/// parent directory. ASCII case-insensitive on every platform, like the
+/// built-in rules: this is a disclosure rule, so it errs toward withholding.
+#[derive(Default)]
+struct UserExclusions {
+    rules: Option<Gitignore>,
+}
+
+fn compile_user_exclusions(text: &str) -> UserExclusions {
+    let mut builder = GitignoreBuilder::new("");
+    if builder.case_insensitive(true).is_err() {
+        return UserExclusions::default();
+    }
+    let mut any = false;
+    for pattern in text.split([',', '\n']).map(str::trim).filter(|pattern| !pattern.is_empty()) {
+        // A pattern that is not a valid glob is skipped, as git skips it.
+        any |= builder.add_line(None, pattern).is_ok();
+    }
+    UserExclusions {
+        rules: if any { builder.build().ok().filter(|rules| !rules.is_empty()) } else { None },
+    }
+}
+
+/// Production: loaded from the preferences file on first use, then replaced
+/// whenever Preferences saves the key (`preferences::prefs_save_global`). A
+/// hand edit of the file while Litria runs applies on the next launch.
+#[cfg(not(test))]
+fn user_exclusions_cell() -> &'static std::sync::RwLock<UserExclusions> {
+    static CELL: std::sync::OnceLock<std::sync::RwLock<UserExclusions>> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        let text = crate::preferences::preferences_dir()
+            .ok()
+            .and_then(|dir| crate::preferences::global_text(&dir, USER_EXCLUSIONS_KEY))
+            .unwrap_or_default();
+        std::sync::RwLock::new(compile_user_exclusions(&text))
+    })
+}
+
+// Tests: per thread, so tests running in parallel never see each other's
+// patterns.
+#[cfg(test)]
+thread_local! {
+    static TEST_USER_EXCLUSIONS: std::cell::RefCell<UserExclusions> = std::cell::RefCell::new(UserExclusions::default());
+}
+
+fn with_user_exclusions<R>(read: impl FnOnce(&UserExclusions) -> R) -> R {
+    #[cfg(test)]
+    {
+        TEST_USER_EXCLUSIONS.with(|cell| read(&cell.borrow()))
+    }
+    #[cfg(not(test))]
+    {
+        let guard = user_exclusions_cell().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        read(&guard)
+    }
+}
+
+/// Replace the user's withheld patterns (the preference's text).
+pub(crate) fn set_user_exclusions(text: &str) {
+    let compiled = compile_user_exclusions(text);
+    #[cfg(test)]
+    TEST_USER_EXCLUSIONS.with(|cell| *cell.borrow_mut() = compiled);
+    #[cfg(not(test))]
+    {
+        *user_exclusions_cell().write().unwrap_or_else(|poisoned| poisoned.into_inner()) = compiled;
+    }
+}
+
+/// Whether the user's patterns withhold a path whose segments are given.
+/// Judged by the names Windows would open (trailing dots and spaces removed),
+/// like the built-in rules. A path that cannot be judged is withheld.
+fn is_user_excluded(segments: &[&str], is_dir: bool) -> bool {
+    with_user_exclusions(|user| {
+        let Some(rules) = &user.rules else {
+            return false;
+        };
+        let path = segments.iter().map(|segment| effective_segment(segment)).collect::<Vec<_>>().join("/");
+        if path.is_empty() || Path::new(&path).has_root() {
+            return true;
+        }
+        matches!(rules.matched_path_or_any_parents(&path, is_dir), Match::Ignore(_))
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Class {
@@ -84,8 +178,14 @@ const DENIED: &[DeniedRule] = &[
 const ENV_TEMPLATES: &[&str] = &[".env.example", ".env.sample", ".env.template", ".env.dist"];
 
 /// The denied classes, in table order.
+/// The user's own class comes last, and only while they withhold anything:
+/// the summary names it, never the patterns themselves.
 pub(crate) fn denied_classes() -> Vec<DeniedClass> {
-    DENIED.iter().map(|rule| rule.class).collect()
+    let mut classes: Vec<DeniedClass> = DENIED.iter().map(|rule| rule.class).collect();
+    if with_user_exclusions(|user| user.rules.is_some()) {
+        classes.push(DeniedClass::UserExclusions);
+    }
+    classes
 }
 
 /// The unindexed directory names, leaving out those the denied class already
@@ -143,7 +243,7 @@ fn classify_segments(path: &str, last_is_directory: bool) -> Class {
     let denied = segments.iter().enumerate().any(|(index, segment)| {
         is_denied_segment(segment) && !(index == last && !last_is_directory && is_env_template(segment))
     });
-    if denied {
+    if denied || is_user_excluded(&segments, last_is_directory) {
         return Class::Denied;
     }
     let directories = if last_is_directory {
@@ -162,7 +262,7 @@ fn classify_segments(path: &str, last_is_directory: bool) -> Class {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -237,6 +337,53 @@ mod tests {
         }
         assert_eq!(classify_directory("node_modules."), Class::Unindexed);
         assert_eq!(classify("notes."), Class::Allowed);
+    }
+
+    /// Sets the user's patterns for one test and clears them when dropped,
+    /// even if the test fails.
+    pub(crate) struct Withholding;
+
+    impl Withholding {
+        pub(crate) fn patterns(text: &str) -> Self {
+            set_user_exclusions(text);
+            Withholding
+        }
+    }
+
+    impl Drop for Withholding {
+        fn drop(&mut self) {
+            set_user_exclusions("");
+        }
+    }
+
+    /// Brief §15 Q1 (owner ruling 2026-10-01): the user's own patterns add
+    /// to what is denied, at any depth and in any case.
+    #[test]
+    fn user_patterns_withhold_more() {
+        let _user = Withholding::patterns("secrets/, *.sqlite\nnotes/private.md");
+        for path in ["secrets/a.txt", "deep/secrets/b.json", "data/app.SQLITE", "notes/private.md", "Secrets./x"] {
+            assert_eq!(classify(path), Class::Denied, "{path:?}");
+        }
+        assert_eq!(classify_directory("secrets"), Class::Denied);
+        assert_eq!(classify("notes/public.md"), Class::Allowed);
+        assert_eq!(classify("src/secrets.ts"), Class::Allowed, "`secrets/` names a directory");
+        assert_eq!(denied_classes().last(), Some(&DeniedClass::UserExclusions));
+    }
+
+    /// Restrict-only: a negation re-includes nothing the built-in rules deny.
+    #[test]
+    fn user_patterns_never_widen_access() {
+        let _user = Withholding::patterns("!.env, !id_rsa, !.git/config");
+        for path in [".env", "id_rsa", ".git/config"] {
+            assert_eq!(classify(path), Class::Denied, "{path}");
+        }
+    }
+
+    #[test]
+    fn without_user_patterns_the_class_is_not_listed() {
+        let _user = Withholding::patterns(" , \n ");
+        assert!(!denied_classes().contains(&DeniedClass::UserExclusions));
+        assert_eq!(classify("anything/at/all.txt"), Class::Allowed);
     }
 
     /// Brief §15 Q3 (owner ruling 2026-10-01): environment templates are

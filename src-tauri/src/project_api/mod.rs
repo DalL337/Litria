@@ -15,7 +15,7 @@ pub(crate) mod bridge;
 mod context;
 mod files_read;
 mod paths;
-mod policy;
+pub(crate) mod policy;
 mod reader;
 mod search;
 mod walk;

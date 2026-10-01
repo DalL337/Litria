@@ -98,6 +98,11 @@
           "description": "`.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `.ssh/`, `.aws/`,\n`.gnupg/`.",
           "type": "string",
           "const": "credentials"
+        },
+        {
+          "description": "Paths the user withholds in Preferences, on top of the classes above.\nListed only while they withhold anything; the patterns are not\ndisclosed.",
+          "type": "string",
+          "const": "userExclusions"
         }
       ]
     },

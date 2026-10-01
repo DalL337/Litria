@@ -908,6 +908,19 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Brief §15 Q1: a path the user withholds is denied to an explicit read
+    /// too, without its existence being revealed.
+    #[test]
+    fn a_user_withheld_path_is_denied_to_a_read() {
+        let _user = crate::project_api::policy::tests::Withholding::patterns("private/");
+        let root = temp_root("user-withheld");
+        fs::create_dir_all(root.join("private")).unwrap();
+        fs::write(root.join("private/plan.md"), "secret plan\n").unwrap();
+        assert!(matches!(read_disk(&root, "private/plan.md"), DiskRead::Denied));
+        assert!(matches!(read_disk(&root, "private/missing.md"), DiskRead::Denied), "existence is not revealed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_link_named_like_an_env_template_is_judged_by_its_target() {

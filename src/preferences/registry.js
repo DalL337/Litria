@@ -31,6 +31,7 @@
  * - when         optional state predicate — the node-vs-group HUD pattern
  * - projectOverridable  whether a project file may override the global value
  * - comingSoon   entry renders disabled with this reason; setValue refuses it
+ * - placeholder  optional hint shown in an empty 'text' input
  */
 
 import { BUILTIN_THEME_IDS } from '../theme/themeDefaults.js';
@@ -334,6 +335,23 @@ export const PREFERENCE_REGISTRY = [
     // Global by ADR-019's own classification ("Terminal drawer close: hide
     // vs. kill — global | inherit"); no project layer. Capability shipped
     // 2026-08-01 (hide-don't-kill in DrawerContentTerminal).
+    projectOverridable: false
+  },
+  {
+    key: 'apiWithheldPaths',
+    room: 'behavior',
+    scope: 'global',
+    propagation: 'inherit',
+    type: 'text',
+    defaultValue: '',
+    label: 'Withhold from AI agents',
+    caption: 'Paths an AI agent connected to Litria may never read, search or list, on top of the built-in rules (environment files, keys, credentials). .gitignore patterns, separated by commas. Agent connections are still in development.',
+    placeholder: 'e.g. secrets/, *.sqlite',
+    place: ['preferences.global'],
+    // Read by the Rust Project API policy (project_api/policy.rs,
+    // USER_EXCLUSIONS_KEY); it can only ADD denials (brief §6, §15 Q1, owner
+    // ruling 2026-10-01). Global only: a project file could otherwise relax
+    // what the user withholds everywhere.
     projectOverridable: false
   }
 ];

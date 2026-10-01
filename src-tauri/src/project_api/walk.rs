@@ -552,6 +552,22 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// The user's withheld patterns are denials: never walked, never counted
+    /// (not as ignored either), whatever a .gitignore says.
+    #[test]
+    fn user_withheld_paths_are_never_walked_or_counted() {
+        let _user = crate::project_api::policy::tests::Withholding::patterns("private/, *.sqlite");
+        let root = temp_root("user-withheld");
+        write(&root, ".gitignore", "!private/\n");
+        for path in ["private/plan.md", "data/app.sqlite", "src/a.ts"] {
+            touch(&root, path);
+        }
+        let (walked, files, directories) = walk_ignoring(&root, None);
+        assert_eq!(walked, [".gitignore", "src/a.ts"]);
+        assert_eq!((files, directories), (0, 0));
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// An oversized .gitignore is not honoured: search covers more, never less.
     #[test]
     fn an_oversized_gitignore_is_not_honoured() {

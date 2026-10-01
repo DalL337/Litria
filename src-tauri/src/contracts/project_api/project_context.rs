@@ -239,4 +239,8 @@ pub(crate) enum DeniedClass {
     /// `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `.ssh/`, `.aws/`,
     /// `.gnupg/`.
     Credentials,
+    /// Paths the user withholds in Preferences, on top of the classes above.
+    /// Listed only while they withhold anything; the patterns are not
+    /// disclosed.
+    UserExclusions,
 }
