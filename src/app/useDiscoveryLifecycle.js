@@ -89,7 +89,7 @@ export function useDiscoveryLifecycle({
   onPendingEdges = null,
   // S5 (brief-cross-group-wires): incremental refresh triggers. A discovery
   // re-run is idempotent by construction (pair-keyed connection dedup,
-  // edge reuse in handleConnect, no-op resolve merges), so re-running on
+  // edge reuse in connectDiscovered, no-op resolve merges), so re-running on
   // save / scaffold changes never duplicates wires or churns files.
   scaffoldRefreshToken = null,
   dirtyPieceIds = null,
@@ -300,7 +300,6 @@ async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connect
     edges,
     pathToPiece,
     syntaxDomain,
-    syntaxAdapter,
     connectionDomain,
     persistedSides,
   });
@@ -348,10 +347,14 @@ async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connect
  *    instead of being left undefined, so discovered wires don't all launch the
  *    same direction.
  *  - One identity: we reuse the id `createConnectionFromDrag` mints for the
- *    syntax edge (`handleConnect`), so the visual connection and its syntax edge
- *    share one id — exactly as the manual-draw path already does. This replaces
- *    the old `discovery-N` id, which the visual layer ignored (it minted its own
- *    `conn_N`), leaving the two layers unlinked.
+ *    syntax edge (`connectDiscovered`), so the visual connection and its syntax
+ *    edge share one id — exactly as the manual-draw path already does. This
+ *    replaces the old `discovery-N` id, which the visual layer ignored (it
+ *    minted its own `conn_N`), leaving the two layers unlinked.
+ *
+ * Writes nothing: the syntax edge and its symbols are metadata
+ * (`connectDiscovered`, `resolveSymbolsMetadata`). Both discovery entry points
+ * (project load and placing an off-canvas file) come through here.
  *
  * Anchor sides come from the PERSISTED per-pair override (`persistedSides`, the
  * user's chosen edges from a prior manual draw) when present, else from relative
@@ -360,10 +363,10 @@ async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connect
  * across a reopen — see project_discovery_canvas_sync (Phase 1B).
  *
  * @param {{
- *   edges: Array<{ sourceFilePath: string, targetFilePath: string, symbols: Array<{ name: string }> }>,
+ *   edges: Array<{ sourceFilePath: string, targetFilePath: string, moduleSpecifier?: string,
+ *                  importLine?: number, symbols: Array<{ name: string }> }>,
  *   pathToPiece: Map<string, { id: number, x: number, y: number }>,
  *   syntaxDomain: object,
- *   syntaxAdapter: object,
  *   connectionDomain: object,
  *   persistedSides?: Map<string, { sourceSide: string|null, targetSide: string|null }>,
  * }} params
@@ -372,7 +375,6 @@ export async function createConnectionsForEdges({
   edges,
   pathToPiece,
   syntaxDomain,
-  syntaxAdapter,
   connectionDomain,
   persistedSides = null,
 }) {
@@ -406,15 +408,20 @@ export async function createConnectionsForEdges({
     // NOT create a dangling syntax edge for a connection that doesn't exist.
     if (!connection) continue;
 
-    // Create syntax edge (async — may read/write closed files), keyed to the
-    // same connection id so the two layers are linked.
-    const connectResult = await syntaxAdapter.handleConnect({
+    // Create the syntax edge, keyed to the same connection id so the two
+    // layers are linked. METADATA ONLY: this used to be the write-capable
+    // `handleConnect`, which wrote a TODO stub into any file whose import it
+    // failed to find (a directory import, an import deleted in an unsaved
+    // buffer). Discovery holds no write-capable handle at all now.
+    const connectResult = syntaxDomain.commands.connectDiscovered({
       connectionId: connection.id,
       sourceFilePath: edge.sourceFilePath,
       targetFilePath: edge.targetFilePath,
+      moduleSpecifier: edge.moduleSpecifier,
+      importLine: edge.importLine,
     });
 
-    if (!connectResult?.success || !connectResult.edgeId) continue;
+    if (!connectResult?.edgeId) continue;
 
     // Pre-resolve symbols from the discovered import. Imported names with no
     // matching definition register as BROKEN so a dead import is red from

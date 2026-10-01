@@ -100,26 +100,29 @@ function makeConnectionDomain({ createReturns } = {}) {
   };
 }
 
-function makeSyntaxAdapter() {
+/**
+ * SyntaxDomain stand-in: records discovery's metadata-only connect and
+ * resolve. Discovery is handed no adapter at all — it has no write path.
+ */
+function makeSyntaxDomain({ defsByFile = {} } = {}) {
   const connectCalls = [];
-  const resolveCalls = [];
+  const metadataResolveCalls = [];
   return {
     connectCalls,
-    resolveCalls,
-    async handleConnect(args) {
-      connectCalls.push(args);
-      return { success: true, edgeId: `edge_for_${args.connectionId}` };
-    },
-    async handleResolveMultipleSymbols(args) {
-      resolveCalls.push(args);
-      return { success: true };
+    metadataResolveCalls,
+    selectors: { getDefinitionsForFile: (file) => defsByFile[file] ?? [] },
+    commands: {
+      connectDiscovered(args) {
+        connectCalls.push(args);
+        return { edgeId: `edge_for_${args.connectionId}`, isNewEdge: true };
+      },
+      resolveSymbolsMetadata(args) {
+        metadataResolveCalls.push(args);
+        return { edge: {} };
+      },
     },
   };
 }
-
-const SYNTAX_DOMAIN_NO_DEFS = {
-  selectors: { getDefinitionsForFile: () => [] },
-};
 
 test('createConnectionsForEdges: anchors from geometry and links by the minted id', async () => {
   const pathToPiece = new Map([
@@ -127,13 +130,12 @@ test('createConnectionsForEdges: anchors from geometry and links by the minted i
     ['/p/b.ts', { id: 2, x: 500, y: 0 }],
   ]);
   const connectionDomain = makeConnectionDomain();
-  const syntaxAdapter = makeSyntaxAdapter();
+  const syntaxDomain = makeSyntaxDomain();
 
   await createConnectionsForEdges({
     edges: [{ sourceFilePath: '/p/a.ts', targetFilePath: '/p/b.ts', symbols: [] }],
     pathToPiece,
-    syntaxDomain: SYNTAX_DOMAIN_NO_DEFS,
-    syntaxAdapter,
+    syntaxDomain,
     connectionDomain,
   });
 
@@ -143,8 +145,8 @@ test('createConnectionsForEdges: anchors from geometry and links by the minted i
   });
   // The syntax edge is keyed to the SAME id the visual connection got —
   // not a separate `discovery-N`.
-  assert.equal(syntaxAdapter.connectCalls.length, 1);
-  assert.equal(syntaxAdapter.connectCalls[0].connectionId, 'conn_1');
+  assert.equal(syntaxDomain.connectCalls.length, 1);
+  assert.equal(syntaxDomain.connectCalls[0].connectionId, 'conn_1');
 });
 
 test('createConnectionsForEdges: persisted sides override geometry', async () => {
@@ -153,15 +155,14 @@ test('createConnectionsForEdges: persisted sides override geometry', async () =>
     ['/p/b.ts', { id: 2, x: 500, y: 0 }], // geometry would give right/left
   ]);
   const connectionDomain = makeConnectionDomain();
-  const syntaxAdapter = makeSyntaxAdapter();
+  const syntaxDomain = makeSyntaxDomain();
   // User had drawn this pair bottom→top; that choice must win over geometry.
   const persistedSides = new Map([['1-2', { sourceSide: 'bottom', targetSide: 'top' }]]);
 
   await createConnectionsForEdges({
     edges: [{ sourceFilePath: '/p/a.ts', targetFilePath: '/p/b.ts', symbols: [] }],
     pathToPiece,
-    syntaxDomain: SYNTAX_DOMAIN_NO_DEFS,
-    syntaxAdapter,
+    syntaxDomain,
     connectionDomain,
     persistedSides,
   });
@@ -177,15 +178,14 @@ test('createConnectionsForEdges: missing side in override falls back to geometry
     ['/p/b.ts', { id: 2, x: 500, y: 0 }], // geometry: source right, target left
   ]);
   const connectionDomain = makeConnectionDomain();
-  const syntaxAdapter = makeSyntaxAdapter();
+  const syntaxDomain = makeSyntaxDomain();
   // Only the source side persisted; target side must fall back to geometry (left).
   const persistedSides = new Map([['1-2', { sourceSide: 'top', targetSide: null }]]);
 
   await createConnectionsForEdges({
     edges: [{ sourceFilePath: '/p/a.ts', targetFilePath: '/p/b.ts', symbols: [] }],
     pathToPiece,
-    syntaxDomain: SYNTAX_DOMAIN_NO_DEFS,
-    syntaxAdapter,
+    syntaxDomain,
     connectionDomain,
     persistedSides,
   });
@@ -201,14 +201,13 @@ test('createConnectionsForEdges: override for a different pair is ignored (geome
     ['/p/b.ts', { id: 2, x: 500, y: 0 }],
   ]);
   const connectionDomain = makeConnectionDomain();
-  const syntaxAdapter = makeSyntaxAdapter();
+  const syntaxDomain = makeSyntaxDomain();
   const persistedSides = new Map([['9-9', { sourceSide: 'top', targetSide: 'bottom' }]]);
 
   await createConnectionsForEdges({
     edges: [{ sourceFilePath: '/p/a.ts', targetFilePath: '/p/b.ts', symbols: [] }],
     pathToPiece,
-    syntaxDomain: SYNTAX_DOMAIN_NO_DEFS,
-    syntaxAdapter,
+    syntaxDomain,
     connectionDomain,
     persistedSides,
   });
@@ -219,18 +218,17 @@ test('createConnectionsForEdges: override for a different pair is ignored (geome
 test('createConnectionsForEdges: skips edges with an endpoint not on canvas', async () => {
   const pathToPiece = new Map([['/p/a.ts', { id: 1, x: 0, y: 0 }]]);
   const connectionDomain = makeConnectionDomain();
-  const syntaxAdapter = makeSyntaxAdapter();
+  const syntaxDomain = makeSyntaxDomain();
 
   await createConnectionsForEdges({
     edges: [{ sourceFilePath: '/p/a.ts', targetFilePath: '/p/missing.ts', symbols: [] }],
     pathToPiece,
-    syntaxDomain: SYNTAX_DOMAIN_NO_DEFS,
-    syntaxAdapter,
+    syntaxDomain,
     connectionDomain,
   });
 
   assert.equal(connectionDomain.calls.length, 0);
-  assert.equal(syntaxAdapter.connectCalls.length, 0);
+  assert.equal(syntaxDomain.connectCalls.length, 0);
 });
 
 test('createConnectionsForEdges: no dangling syntax edge when createConnection returns null', async () => {
@@ -240,18 +238,17 @@ test('createConnectionsForEdges: no dangling syntax edge when createConnection r
   ]);
   // Force the dedup/invalid case (createConnectionFromDrag → null).
   const connectionDomain = makeConnectionDomain({ createReturns: { 0: null } });
-  const syntaxAdapter = makeSyntaxAdapter();
+  const syntaxDomain = makeSyntaxDomain();
 
   await createConnectionsForEdges({
     edges: [{ sourceFilePath: '/p/a.ts', targetFilePath: '/p/b.ts', symbols: [] }],
     pathToPiece,
-    syntaxDomain: SYNTAX_DOMAIN_NO_DEFS,
-    syntaxAdapter,
+    syntaxDomain,
     connectionDomain,
   });
 
   assert.equal(connectionDomain.calls.length, 1); // attempted
-  assert.equal(syntaxAdapter.connectCalls.length, 0); // but no syntax edge created
+  assert.equal(syntaxDomain.connectCalls.length, 0); // but no syntax edge created
 });
 
 test('createConnectionsForEdges: pre-resolves matched symbols on the linked edge', async () => {
@@ -260,45 +257,41 @@ test('createConnectionsForEdges: pre-resolves matched symbols on the linked edge
     ['/p/b.ts', { id: 2, x: 0, y: 500 }],
   ]);
   const connectionDomain = makeConnectionDomain();
-  const syntaxAdapter = makeSyntaxAdapter();
-  const metadataResolveCalls = [];
-  const syntaxDomain = {
-    selectors: {
-      getDefinitionsForFile: (file) =>
-        file === '/p/a.ts' ? [{ name: 'foo', symbolId: 'sym_foo' }] : [],
-    },
-    commands: {
-      resolveSymbolsMetadata: (args) => {
-        metadataResolveCalls.push(args);
-        return { edge: {} };
-      },
-    },
-  };
+  const syntaxDomain = makeSyntaxDomain({
+    defsByFile: { '/p/a.ts': [{ name: 'foo', symbolId: 'sym_foo' }] },
+  });
 
   await createConnectionsForEdges({
     edges: [{
       sourceFilePath: '/p/a.ts',
       targetFilePath: '/p/b.ts',
+      moduleSpecifier: './a',
+      importLine: 0,
       symbols: [{ name: 'foo' }, { name: 'unmatched' }],
     }],
     pathToPiece,
     syntaxDomain,
-    syntaxAdapter,
     connectionDomain,
   });
 
   // Vertical anchor (b below a).
   assert.equal(connectionDomain.calls[0].sourceSide, 'bottom');
+  // The edge mirrors the import as the code writes it.
+  assert.deepEqual(syntaxDomain.connectCalls[0], {
+    connectionId: 'conn_1',
+    sourceFilePath: '/p/a.ts',
+    targetFilePath: '/p/b.ts',
+    moduleSpecifier: './a',
+    importLine: 0,
+  });
   // The matched symbol resolves; the unmatched one becomes a BROKEN marker
-  // (dead import → red from first load). METADATA ONLY either way — the
-  // write-capable adapter resolve must not be called.
-  assert.equal(metadataResolveCalls.length, 1);
-  assert.deepEqual(metadataResolveCalls[0], {
+  // (dead import → red from first load). METADATA ONLY either way.
+  assert.equal(syntaxDomain.metadataResolveCalls.length, 1);
+  assert.deepEqual(syntaxDomain.metadataResolveCalls[0], {
     edgeId: 'edge_for_conn_1',
     symbolIds: ['sym_foo'],
     brokenNames: ['unmatched'],
   });
-  assert.equal(syntaxAdapter.resolveCalls.length, 0);
 });
 
 // ---------------------------------------------------------------------------
