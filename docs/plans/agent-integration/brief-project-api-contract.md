@@ -179,6 +179,17 @@ Rules:
 >
 > The policy's classes now live in one table in `project_api/policy.rs`, which also feeds the `litria_project_context` policy summary.
 
+> **Addendum (2026-10-01, P4 gate item 1; owner rulings on §15 Q1 and Q3).** Two changes to what is denied, and one to what is unindexed.
+> - **Environment templates are readable (Q3).** The exact file names `.env.example`, `.env.sample`, `.env.template` and `.env.dist` are no longer denied, at any depth. They are compared like every other rule: ASCII case-insensitive, with trailing dots and spaces removed. Every other `.env.*` stays denied (`.env.example.local`, `.env.local.example`, `.env.examples`), and so does a directory named like a template. A link named like a template is judged by its target. **Residual:** a template that holds real values is now disclosed. The ruling accepts that trade.
+> - **The user can withhold more (Q1).** The global preference `apiWithheldPaths` (Preferences → Behavior → "Withhold from AI agents") holds `.gitignore`-style patterns, separated by commas. They ADD to the denied class, as a new class `userExclusions`:
+>   - matched against the path and every parent directory, ASCII case-insensitive on every platform;
+>   - never read, searched, listed or counted, and an explicit read does not reveal whether the file exists;
+>   - restrict-only: the built-in rules are decided first, so a negation cannot re-include `.env` or a key;
+>   - global only: a project file must never relax what the user withholds everywhere;
+>   - loaded on first use and replaced when Preferences saves the key; a hand edit of the preferences file applies on the next launch;
+>   - the context summary lists the class while anything is withheld, never the patterns.
+> - **`.gitignore` joins the unindexed side (Q2; §7.3 addendum).** It narrows what search enumerates and is never a disclosure rule. Ignored files stay readable by explicit path. It cannot widen access: the policy decides first, so a `!` pattern re-includes nothing the policy withholds or leaves unindexed. Reading `.gitignore` files is the first policy input taken from the repository, and it can only narrow search.
+
 ## 7. The read family: `project-api` v1
 
 The operation names are those in agent brief §7. Every result carries only project-relative paths; absolute paths, including the root, never appear. The limits in §10 bound every list.
@@ -253,6 +264,15 @@ Per ADR-033 §6, a reader that meets an unfamiliar `kind` treats that one docume
 - **Skipped counts** by reason: too large, not text, unreadable, buffers not searched. Denied files are never counted.
 
 `.gitignore` is not honoured in v1 (§14, alternative 9). Files it lists are searched unless the policy's denied or unindexed classes exclude them, and the documentation says so.
+
+> **Superseded (2026-10-01, P4 gate item 1; owner ruled §15 Q2 yes).** Search honours `.gitignore` by default. It uses the `ignore` crate's matcher inside Litria's own walker, so links are still not followed, the policy still comes before counting, and results stay in path order.
+> - **Which files:** the project's own `.gitignore` files, nested ones included, with the nearest rules winning as in git. Git's global excludes file and `.git/info/exclude` are not read. Each `.gitignore` is read with every check an API read makes, and is not honoured if it is a link to a withheld file, larger than 256 KiB, or not UTF-8. Not honouring one only widens search.
+> - **Matching:** pattern case follows git's per-platform default (insensitive on Windows and macOS).
+> - **Skipped and counted:** ignored entries below the scope are counted in `skipped.ignoredFiles` and `skipped.ignoredDirectories`, so a search over them is never silently clean. An ignored directory counts once and is never entered.
+> - **Explicit paths:** a `pathPrefix` naming an ignored path is searched; the rules still apply below it.
+> - **Opting in:** `includeIgnored: true` searches ignored files too.
+> - **Open documents:** a document open in the editor is searched either way.
+> - `litria_project_context` reports `gitignoreHonoured: true`.
 
 There are no cursors in v1. A truncated search is narrowed by the caller (prefix, longer query). This avoids a cursor store scoped to connection, epoch and permission generation (agent brief §7, "Reads") until measurements show it is needed.
 
@@ -467,6 +487,12 @@ The bridge applies the same shrink-to-fit rule to its pages. It measures each pa
 >   - **`.gitignore` matters more than expected (evidence for §15 question 2).** The working tree of this repository holds 5,855 walkable files, of which 840 are tracked. The rest are ignored by `.gitignore` without being unindexed: other worktrees, release source maps, bundled resources and research notes. A rare-word text search there ended on the time budget after 355–582 files, before it reached `src/`, because dot-directories sort first.
 >   - **Proposed next steps, not decided.** Either honour `.gitignore` (a dependency decision for the `ignore` crate) or give walked files a lighter per-file check path; re-measure after either. Small-context model budgets stay with track T.
 
+> **Re-measured (2026-10-01, P4 gate item 1, `.gitignore` honoured).** Same method: release build, service called directly, no editor buffers. The tree was this repository's working tree, which also held a worktree with its own `node_modules` and bundled resources at the time.
+> - **Path search** walks 903 files, against 5,855 walkable before, and completes in 16–28 ms.
+> - **A rare-word text search** searches 879 files and **completes in 249–259 ms** once the files have been read before. With `includeIgnored: true` it still stops on `timeBudget`, after 497–767 files, which is the old behaviour.
+> - **Each result reports what it skipped:** 28 ignored files and 9 ignored directories here.
+> - **Residual: the first search over a cold cache can still hit the 2 s budget.** One cold run got through 218 files; a later, partly warm run, 792. Opening a file the system has not read recently costs several milliseconds on this machine, likely real-time antivirus scanning. Not fixed here. The lighter per-file check path stays an option if it proves to matter in use.
+
 ## 11. Versioning and compatibility
 
 - Both families start at `apiVersion` 1. S0's version 0 was the exemplar and is deleted when v1 lands.
@@ -505,16 +531,16 @@ The write contract is written after the reads land. Today's inspection found the
 6. **Regular-expression search in v1:** deferred. It needs enforced work limits; literal search comes first, as the earlier proposal recommended.
 7. **Search in JavaScript:** rejected. It would ship disk contents across IPC, and Rust already owns disk access and policy.
 8. **Reuse `list_project_tree`'s walker for search:** rejected. It is unbounded and aborts on one unreadable directory. Search reuses its ignore constants instead.
-9. **Honour `.gitignore` in v1:** deferred. It needs the `ignore` crate, a new dependency. The files-scanned bound keeps search predictable meanwhile (§15).
+9. **Honour `.gitignore` in v1:** deferred. It needs the `ignore` crate, a new dependency. The files-scanned bound keeps search predictable meanwhile (§15). *(Adopted 2026-10-01 after P3's measurements and the owner's ruling; see the §7.3 addendum.)*
 10. **One family with bidirectional operations:** rejected. The external and bridge boundaries have different principals, directions and trust, and ADR-033 versions each family on its own.
 
 ## 15. Open questions
 
-1. User-configurable exclusions: which preference, and in which slice? They can only add restrictions (§6).
-2. `.gitignore`-aware search: adopt the `ignore` crate (a dependency change) once P3's measurements show the need? *(2026-09-30: they do, on a real working tree — §10 addendum. Owner decision pending.)*
-3. Should `.env.example` and similar templates become readable by default? v1 denies them.
-4. Multiple windows: bridge requests target the main window. Revisit if Litria gains project windows.
-5. Diagnostics store (§7.5): Rust LSP-bridge cache or JS store, decided in its slice with the freshness evidence.
+1. User-configurable exclusions: which preference, and in which slice? They can only add restrictions (§6). *(Answered 2026-10-01: in the `.gitignore` slice, the one sharing the most work (owner). The preference is `apiWithheldPaths`; see the §6 addendum.)*
+2. `.gitignore`-aware search: adopt the `ignore` crate (a dependency change) once P3's measurements show the need? *(2026-09-30: they do, on a real working tree — §10 addendum. Owner decision pending.)* *(Answered 2026-10-01: yes (owner). Built in P4 gate item 1; see the §7.3 and §10 addenda.)*
+3. Should `.env.example` and similar templates become readable by default? v1 denies them. *(Answered 2026-10-01: yes (owner). See the §6 addendum.)*
+4. Multiple windows: bridge requests target the main window. Revisit if Litria gains project windows. *(2026-10-01: no decision for now (owner).)*
+5. Diagnostics store (§7.5): Rust LSP-bridge cache or JS store, decided in its slice with the freshness evidence. *(2026-10-01: stays with P5 (owner).)*
 
 ## 16. Verification record
 
