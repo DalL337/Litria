@@ -1,0 +1,26 @@
+{
+  "kind": "result",
+  "result": {
+    "documents": [
+      {
+        "kind": "buffer",
+        "path": "src/a.ts",
+        "state": "open",
+        "dirty": false,
+        "revision": "b1-x",
+        "text": "a\n",
+        "range": {
+          "startLine": 1,
+          "endLine": 1
+        },
+        "totalLines": 1,
+        "truncated": false,
+        "lineCut": false
+      },
+      {
+        "kind": "deferred",
+        "path": "src/b.ts"
+      }
+    ]
+  }
+}

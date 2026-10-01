@@ -1,0 +1,22 @@
+{
+  "kind": "result",
+  "result": {
+    "documents": [
+      {
+        "kind": "buffer",
+        "path": "src/a.ts",
+        "state": "open",
+        "dirty": false,
+        "revision": "b1-x",
+        "text": "a\n",
+        "range": {
+          "startLine": 1,
+          "endLine": 1
+        },
+        "totalLines": 4294967296,
+        "truncated": false,
+        "lineCut": false
+      }
+    ]
+  }
+}

@@ -18,12 +18,15 @@ use serde_json::{json, Value};
 
 use super::error::ContractError;
 use super::project_api::{catalog, API_VERSION, FAMILY, STATUS};
+use super::project_api_bridge as bridge;
 
 pub(crate) const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 pub(crate) const CATALOG_FILE: &str = "catalog.json";
 pub(crate) const ERROR_FILE: &str = "error.schema.json";
 pub(crate) const FIXTURES_DIR: &str = "fixtures";
 pub(crate) const UPDATE_ENV: &str = "LITRIA_UPDATE_CONTRACTS";
+/// The bridge family's event envelope.
+pub(crate) const EVENT_FILE: &str = "request-event.schema.json";
 
 /// What Rust accepts.
 pub(crate) fn inbound_schema<T: JsonSchema>() -> Schema {
@@ -44,10 +47,73 @@ pub(crate) fn outbound_schema<T: JsonSchema>() -> Schema {
 /// `src-tauri/contracts/<family>/v<apiVersion>/` — inside `src-tauri/`, so the
 /// Rust CI path filter (`src-tauri/**`) already covers every artifact.
 pub(crate) fn family_dir() -> PathBuf {
+    family_dir_of(FAMILY, API_VERSION)
+}
+
+pub(crate) fn family_dir_of(family: &str, api_version: u32) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("contracts")
-        .join(FAMILY)
-        .join(format!("v{API_VERSION}"))
+        .join(family)
+        .join(format!("v{api_version}"))
+}
+
+/// `src-tauri/contracts/project-api-bridge/v1/`.
+pub(crate) fn bridge_dir() -> PathBuf {
+    family_dir_of(bridge::FAMILY, bridge::API_VERSION)
+}
+
+pub(crate) fn bridge_request_file(operation: &str) -> String {
+    format!("{operation}.request.schema.json")
+}
+
+pub(crate) fn bridge_reply_file(operation: &str) -> String {
+    format!("{operation}.reply.schema.json")
+}
+
+/// The bridge family's artifacts. Its direction is reversed: a request
+/// schema describes what Rust EMITS (outbound) and a reply schema what Rust
+/// ACCEPTS (inbound). The catalog also publishes the event name, the reply
+/// command and the reply ceiling, so the JavaScript side can be tested
+/// against them.
+pub(crate) fn generate_bridge() -> BTreeMap<String, String> {
+    let mut files = BTreeMap::new();
+    let mut operations = Vec::new();
+    for operation in bridge::catalog() {
+        let request = bridge_request_file(operation.name);
+        let reply = bridge_reply_file(operation.name);
+        files.insert(request.clone(), render(&(operation.request_schema)()));
+        files.insert(reply.clone(), render(&(operation.reply_schema)()));
+        operations.push(json!({
+            "name": operation.name,
+            "description": operation.description,
+            "owner": operation.owner,
+            "request": request,
+            "reply": reply,
+        }));
+    }
+    files.insert(
+        EVENT_FILE.into(),
+        render(&outbound_schema::<bridge::BridgeRequestEvent>()),
+    );
+    files.insert(
+        CATALOG_FILE.into(),
+        render(&json!({
+            "family": bridge::FAMILY,
+            "apiVersion": bridge::API_VERSION,
+            "status": bridge::STATUS,
+            "event": bridge::REQUEST_EVENT,
+            "envelope": EVENT_FILE,
+            "replyCommand": "project_api_bridge_reply",
+            "maxReplyBytes": bridge::MAX_REPLY_BYTES,
+            "operations": operations,
+        })),
+    );
+    files
+}
+
+/// Every family: its directory and what its types generate today.
+pub(crate) fn families() -> Vec<(PathBuf, BTreeMap<String, String>)> {
+    vec![(family_dir(), generate()), (bridge_dir(), generate_bridge())]
 }
 
 pub(crate) fn request_file(operation: &str) -> String {
@@ -137,7 +203,11 @@ fn write_all(dir: &Path, generated: &BTreeMap<String, String>) {
 
 /// Parsed committed artifact, as a transport would embed it.
 pub(crate) fn committed_json(name: &str) -> Value {
-    let text = fs::read_to_string(family_dir().join(name))
+    committed_json_in(&family_dir(), name)
+}
+
+pub(crate) fn committed_json_in(dir: &Path, name: &str) -> Value {
+    let text = fs::read_to_string(dir.join(name))
         .unwrap_or_else(|error| panic!("read committed artifact {name}: {error}"));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {name}: {error}"))
 }
@@ -194,13 +264,17 @@ mod tests {
 
     #[test]
     fn committed_artifacts_match_generation() {
-        let generated = generate();
-        let dir = family_dir();
+        for (dir, generated) in families() {
+            check_family(&dir, &generated);
+        }
+    }
+
+    fn check_family(dir: &Path, generated: &BTreeMap<String, String>) {
         if std::env::var(UPDATE_ENV).is_ok_and(|value| value == "1") {
-            write_all(&dir, &generated);
+            write_all(dir, generated);
             return;
         }
-        let committed = committed_files(&dir);
+        let committed = committed_files(dir);
         let missing: Vec<&String> = generated.keys().filter(|name| !committed.contains_key(*name)).collect();
         let extra: Vec<&String> = committed.keys().filter(|name| !generated.contains_key(*name)).collect();
         let stale: Vec<&String> = generated
@@ -219,11 +293,12 @@ mod tests {
     #[test]
     fn generation_is_deterministic() {
         assert_eq!(generate(), generate());
+        assert_eq!(generate_bridge(), generate_bridge());
     }
 
     #[test]
     fn every_schema_is_a_self_contained_2020_12_document() {
-        for (name, text) in generate() {
+        for (name, text) in generate().into_iter().chain(generate_bridge()) {
             if name == CATALOG_FILE {
                 continue;
             }
@@ -242,6 +317,15 @@ mod tests {
         for operation in catalog() {
             let schema = Value::from((operation.request_schema)());
             assert_eq!(schema["type"], "object", "{}: MCP inputSchema must be an object", operation.name);
+            assert_closed(operation.name, &schema);
+        }
+    }
+
+    /// The bridge's replies are inbound and read strictly, like requests.
+    #[test]
+    fn bridge_reply_schemas_are_closed_objects() {
+        for operation in bridge::catalog() {
+            let schema = Value::from((operation.reply_schema)());
             assert_closed(operation.name, &schema);
         }
     }

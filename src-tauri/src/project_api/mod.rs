@@ -11,6 +11,7 @@
 //! Consumers today: the debug-only `project_api_dev_call` and the tests. The
 //! external transport (build plan track T) is the release consumer.
 
+pub(crate) mod bridge;
 mod files_read;
 mod paths;
 mod policy;
@@ -28,6 +29,8 @@ use crate::contracts::context::{CallContext, Grant, Principal};
 #[cfg(debug_assertions)]
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::files_read::FilesReadOp;
+#[cfg(debug_assertions)]
+use crate::contracts::project_api_bridge::{BridgeRequestEvent, REQUEST_EVENT};
 
 /// Encoded size of any operation's result (brief §10).
 pub(crate) const MAX_RESPONSE_BYTES: usize = 384 * 1024;
@@ -63,6 +66,43 @@ pub(crate) fn dev_call(operation: &str, payload: &[u8]) -> Result<Value, Contrac
         epoch,
     };
     dispatcher.dispatch(&context, operation, payload)
+}
+
+// --- The owner bridge's command side (debug builds, see commands.rs) --------
+
+/// Attach the frontend bridge for `epoch`; refused unless it is the
+/// workspace open now.
+#[cfg(debug_assertions)]
+pub(crate) fn bridge_attach(epoch: &str) -> Result<String, ContractError> {
+    bridge::global().attach(epoch, workspace::current_epoch().as_deref())
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn bridge_detach(generation: &str) -> bool {
+    bridge::global().detach(generation)
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn bridge_reply(request_id: &str, generation: &str, reply: String) {
+    bridge::global().deliver_reply(request_id, generation, reply);
+}
+
+/// Emits bridge requests to the main window only.
+#[cfg(debug_assertions)]
+struct MainWindow(tauri::AppHandle);
+
+#[cfg(debug_assertions)]
+impl bridge::Emit for MainWindow {
+    fn emit(&self, event: &BridgeRequestEvent) -> bool {
+        use tauri::Emitter;
+        self.0.emit_to("main", REQUEST_EVENT, event).is_ok()
+    }
+}
+
+/// Called once at startup.
+#[cfg(debug_assertions)]
+pub(crate) fn install_bridge(app: tauri::AppHandle) {
+    bridge::global().install_emitter(std::sync::Arc::new(MainWindow(app)));
 }
 
 #[cfg(test)]

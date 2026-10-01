@@ -437,6 +437,39 @@ pub(crate) async fn project_api_dev_call(
         .map_err(|_| ContractError::new(ErrorCode::Internal, "the call did not complete"))?
 }
 
+// The Project API owner bridge (contract brief §8) — dev builds only, like
+// the dev call above, which is its only consumer until the external transport
+// (build plan track T). The frontend hook attaches once its project has
+// finished hydrating; Rust then asks it for editor state through the event
+// `project-api://bridge-request`, and it answers through the reply command.
+// None of the three touches the filesystem; replies are accepted only for
+// requests Rust is waiting on, from the generation they were addressed to.
+
+/// Attach the frontend bridge for `epoch`, which must be the workspace open
+/// now. Returns the attach generation every reply must carry.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub(crate) async fn project_api_bridge_attach(
+    epoch: String,
+) -> Result<String, crate::contracts::error::ContractError> {
+    crate::project_api::bridge_attach(&epoch)
+}
+
+/// End an attach generation. A stale generation changes nothing.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub(crate) async fn project_api_bridge_detach(generation: String) -> bool {
+    crate::project_api::bridge_detach(&generation)
+}
+
+/// Deliver the reply to a bridge request. `reply` is the reply's JSON text,
+/// so its size is checked before anything parses it. Never waits.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub(crate) async fn project_api_bridge_reply(request_id: String, generation: String, reply: String) {
+    crate::project_api::bridge_reply(&request_id, &generation, reply);
+}
+
 // ---------------------------------------------------------------------------
 // Generic LSP commands (language-agnostic)
 // ---------------------------------------------------------------------------

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BridgeRequestEvent",
+  "description": "The payload of `project-api://bridge-request`.",
+  "type": "object",
+  "properties": {
+    "epoch": {
+      "description": "The workspace epoch the request is about. The bridge answers only when\nthis, its own ready epoch and the frontend's current epoch all agree.",
+      "type": "string"
+    },
+    "generation": {
+      "description": "The attach generation the request is addressed to; a listener with\nanother generation ignores it.",
+      "type": "string"
+    },
+    "op": {
+      "description": "The operation, as named in the catalog.",
+      "type": "string"
+    },
+    "request": {
+      "description": "Shaped by the operation's request schema (`<op>.request.schema.json`).",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "requestId": {
+      "description": "Opaque, minted by Rust; the reply echoes it.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "requestId",
+    "epoch",
+    "generation",
+    "op",
+    "request"
+  ]
+}

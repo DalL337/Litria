@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DocumentsRequest",
+  "description": "Rust → JavaScript. Paths have already passed the disclosure policy.",
+  "type": "object",
+  "properties": {
+    "documents": {
+      "description": "The documents to look up, answered in this order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DocumentQuery"
+      }
+    },
+    "maxTextBytes": {
+      "description": "Raw text budget for the whole reply, in UTF-8 bytes, spent in order.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "documents",
+    "maxTextBytes"
+  ],
+  "$defs": {
+    "DocumentQuery": {
+      "type": "object",
+      "properties": {
+        "endLine": {
+          "description": "Last line wanted, inclusive; absent means the end.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxBytes": {
+          "description": "Text budget for this document, in UTF-8 bytes. Strict: a slice never\nexceeds it.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "path": {
+          "description": "Project-relative path, forward slashes, exactly as the session should\nbe searched for it.",
+          "type": "string"
+        },
+        "startLine": {
+          "description": "First line wanted, 1-based; absent means 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "maxBytes"
+      ]
+    }
+  }
+}

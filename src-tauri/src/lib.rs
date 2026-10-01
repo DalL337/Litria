@@ -142,6 +142,12 @@ pub fn run() {
             // Project API — dev builds only, until a transport exists (track T)
             #[cfg(debug_assertions)]
             commands::project_api_dev_call,
+            #[cfg(debug_assertions)]
+            commands::project_api_bridge_attach,
+            #[cfg(debug_assertions)]
+            commands::project_api_bridge_detach,
+            #[cfg(debug_assertions)]
+            commands::project_api_bridge_reply,
             // Build logs — scaffold/build diagnostics (not crashes)
             commands::build_log_write,
             commands::build_log_list,
@@ -170,6 +176,11 @@ pub fn run() {
                     nudge_autohide_taskbar_frame(&window);
                 }
             }
+
+            // Project API owner bridge: requests go to the main window (dev
+            // builds only, with the dev call that consumes it — track T).
+            #[cfg(debug_assertions)]
+            project_api::install_bridge(app.handle().clone());
 
             // Initialize the app-level SQLite database (recent projects, preferences).
             if let Err(e) = db::app_db::open_app_db() {

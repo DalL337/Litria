@@ -1,0 +1,25 @@
+{
+  "apiVersion": 1,
+  "envelope": "request-event.schema.json",
+  "event": "project-api://bridge-request",
+  "family": "project-api-bridge",
+  "maxReplyBytes": 524288,
+  "operations": [
+    {
+      "description": "For each path, the editor session's state, and — when the session holds the document open or unsaved — its revision and the requested slice of its text. Answered in request order; a page that runs out of room defers the rest.",
+      "name": "editor.documents",
+      "owner": "EditorDomain",
+      "reply": "editor.documents.reply.schema.json",
+      "request": "editor.documents.request.schema.json"
+    },
+    {
+      "description": "Path, revision, UTF-8 byte length and session state of every open or unsaved buffer, without text. Entries beyond the limit, or beyond the reply ceiling, are counted as omitted.",
+      "name": "editor.bufferIndex",
+      "owner": "EditorDomain",
+      "reply": "editor.bufferIndex.reply.schema.json",
+      "request": "editor.bufferIndex.request.schema.json"
+    }
+  ],
+  "replyCommand": "project_api_bridge_reply",
+  "status": "draft"
+}

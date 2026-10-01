@@ -1,0 +1,36 @@
+{
+  "kind": "result",
+  "result": {
+    "entries": [
+      {
+        "path": "dist/bundle.min.js",
+        "state": "open",
+        "dirty": false,
+        "revision": "b1-ca89c64f9d7b52ff402305ed07b31e42",
+        "byteLength": 23
+      },
+      {
+        "path": "src/closed-dirty.ts",
+        "state": "closedDirty",
+        "dirty": true,
+        "revision": "b1-50a288dabd9f0903cf6989aa630bc66d",
+        "byteLength": 11
+      },
+      {
+        "path": "src/lines.ts",
+        "state": "open",
+        "dirty": false,
+        "revision": "b1-9e8b42ce557d187ada949a6d25380a03",
+        "byteLength": 19
+      },
+      {
+        "path": "src/open.ts",
+        "state": "open",
+        "dirty": true,
+        "revision": "b1-b7c5b586fa9b9cd71d879a6abb22dde7",
+        "byteLength": 20
+      }
+    ],
+    "omitted": 0
+  }
+}

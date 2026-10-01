@@ -1,0 +1,5 @@
+{
+  "kind": "error",
+  "code": "workspaceChanged",
+  "message": "the editor's state belongs to another workspace"
+}

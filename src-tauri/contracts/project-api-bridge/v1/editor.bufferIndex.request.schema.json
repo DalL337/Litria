@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BufferIndexRequest",
+  "type": "object",
+  "properties": {
+    "maxEntries": {
+      "description": "List at most this many entries.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "maxEntries"
+  ]
+}

@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BridgeReply",
+  "description": "A reply, as JavaScript sends it (the JSON text of the reply command's\n`reply` argument). Read strictly: unknown fields are rejected.",
+  "oneOf": [
+    {
+      "description": "The owner's answer.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "result"
+        },
+        "result": {
+          "$ref": "#/$defs/DocumentsResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "result"
+      ]
+    },
+    {
+      "description": "The owner refused or failed. Never forwarded as text.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/BridgeErrorCode"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ]
+    }
+  ],
+  "$defs": {
+    "BridgeErrorCode": {
+      "oneOf": [
+        {
+          "description": "The request's epoch is not the one the owner's state belongs to.",
+          "type": "string",
+          "const": "workspaceChanged"
+        },
+        {
+          "description": "The owner does not know the operation.",
+          "type": "string",
+          "const": "unknownOperation"
+        },
+        {
+          "description": "The owner could not read the request.",
+          "type": "string",
+          "const": "invalidRequest"
+        },
+        {
+          "description": "Any other failure.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "BufferRange": {
+      "type": "object",
+      "properties": {
+        "endLine": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1
+        },
+        "startLine": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "startLine",
+        "endLine"
+      ]
+    },
+    "BufferState": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closedDirty"
+      ]
+    },
+    "DocumentEntry": {
+      "oneOf": [
+        {
+          "description": "The session holds no buffer an effective read should use: no entry for\nthe path, or a closed entry with no unsaved changes.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "notBuffered"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            },
+            "state": {
+              "$ref": "#/$defs/UnbufferedState"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path",
+            "state"
+          ]
+        },
+        {
+          "description": "The session's buffer: open, or closed with unsaved changes.",
+          "type": "object",
+          "properties": {
+            "dirty": {
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "const": "buffer"
+            },
+            "lineCut": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            },
+            "range": {
+              "description": "The lines returned; absent when none were.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BufferRange"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "description": "Revision of the WHOLE buffer, whatever slice is returned.",
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "state": {
+              "$ref": "#/$defs/BufferState"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 262144
+            },
+            "totalLines": {
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path",
+            "state",
+            "dirty",
+            "revision",
+            "text",
+            "totalLines",
+            "truncated",
+            "lineCut"
+          ]
+        },
+        {
+          "description": "Buffered, but this page had no room left: ask again.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "deferred"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        }
+      ]
+    },
+    "DocumentsResult": {
+      "description": "JavaScript → Rust.",
+      "type": "object",
+      "properties": {
+        "documents": {
+          "description": "Exactly one entry per requested document, in request order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DocumentEntry"
+          },
+          "maxItems": 20,
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "documents"
+      ]
+    },
+    "UnbufferedState": {
+      "type": "string",
+      "enum": [
+        "none",
+        "closedClean"
+      ]
+    }
+  }
+}

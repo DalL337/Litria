@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BridgeReply",
+  "description": "A reply, as JavaScript sends it (the JSON text of the reply command's\n`reply` argument). Read strictly: unknown fields are rejected.",
+  "oneOf": [
+    {
+      "description": "The owner's answer.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "result"
+        },
+        "result": {
+          "$ref": "#/$defs/BufferIndexResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "result"
+      ]
+    },
+    {
+      "description": "The owner refused or failed. Never forwarded as text.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/BridgeErrorCode"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ]
+    }
+  ],
+  "$defs": {
+    "BridgeErrorCode": {
+      "oneOf": [
+        {
+          "description": "The request's epoch is not the one the owner's state belongs to.",
+          "type": "string",
+          "const": "workspaceChanged"
+        },
+        {
+          "description": "The owner does not know the operation.",
+          "type": "string",
+          "const": "unknownOperation"
+        },
+        {
+          "description": "The owner could not read the request.",
+          "type": "string",
+          "const": "invalidRequest"
+        },
+        {
+          "description": "Any other failure.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "BufferIndexEntry": {
+      "type": "object",
+      "properties": {
+        "byteLength": {
+          "description": "The whole buffer's length in UTF-8 bytes.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "state": {
+          "$ref": "#/$defs/BufferState"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "state",
+        "dirty",
+        "revision",
+        "byteLength"
+      ]
+    },
+    "BufferIndexResult": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BufferIndexEntry"
+          },
+          "maxItems": 500
+        },
+        "omitted": {
+          "description": "Buffers that exist but were not listed (the limit or the ceiling).",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entries",
+        "omitted"
+      ]
+    },
+    "BufferState": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closedDirty"
+      ]
+    }
+  }
+}
