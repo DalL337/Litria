@@ -1687,6 +1687,10 @@ mod tests {
             ("common word, text", serde_json::json!({ "query": "the", "maxResults": 200 })),
             ("rare word, text (full walk)", serde_json::json!({ "query": "zq_never_present_xj" })),
             ("rare word, case-sensitive", serde_json::json!({ "query": "zq_never_present_xj", "caseSensitive": true })),
+            (
+                "rare word, ignored files included",
+                serde_json::json!({ "query": "zq_never_present_xj", "includeIgnored": true }),
+            ),
             ("path, common", serde_json::json!({ "query": "test", "target": "path", "maxResults": 200 })),
             ("path, rare (full walk)", serde_json::json!({ "query": "zq_never_present_xj", "target": "path" })),
         ];
