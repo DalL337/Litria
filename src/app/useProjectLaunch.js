@@ -336,6 +336,13 @@ export function useProjectLaunch({
       ));
     }
     const normalizedRoot = trimmedRootPath.replace(/[\\\/]+$/, '');
+    // Selection holds piece ids and the selected group a group id; both
+    // repeat across projects (per-project autoincrement), so a selection that
+    // survived the switch would land on the new project's same-id pieces.
+    // Cleared in the same batch as the instance change, so no render shows
+    // the new project with the old selection (Project API build plan P3).
+    clearSelection();
+    setSelectedGroupId(null);
     setProjectInstance({
       instanceId: projectState.project.instanceId || createProjectInstanceId(),
       name: projectState.project.name || normalizedRoot.split(/[\\\/]/).pop() || 'Litria Project',
@@ -354,6 +361,8 @@ export function useProjectLaunch({
     teardownActiveProject,
     getProjectStorageError,
     getStorageErrorMessage,
+    clearSelection,
+    setSelectedGroupId,
     setProjectInstance
   ]);
 
