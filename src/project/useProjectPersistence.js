@@ -186,10 +186,20 @@ export function useProjectPersistence({
     });
   }, [configurePersistence, persistSavedTab, persistSavedTabs, resolveUntitledSave, sameId, setPieces]);
 
+  // The editor session belongs to one LOAD of a project, not to its identity.
+  // `instanceId` is persisted in the project's own database, so reopening a
+  // project — or opening a folder copy of it — keeps the same id while the
+  // files on disk may differ. Keyed on the load (`_dbState`, a fresh object
+  // per open), the session resets and restores from that load's saved editor
+  // state. A session without a load (untitled, single file) keys on its id, so
+  // an untitled Save As — same id, still no load — keeps its tabs.
+  // (2026-09-30, Project API build plan P2 live pass: a folder copy showed the
+  // original's buffers, and the owner bridge served them as the copy's.)
+  const sessionKey = projectInstance?._dbState ?? projectInstance?.instanceId ?? null;
   useEffect(() => {
-    setProjectInstanceId(projectInstance?.instanceId ?? null);
+    setProjectInstanceId(sessionKey);
     hasRestoredEditorSessionRef.current = false;
-  }, [projectInstance?.instanceId, setProjectInstanceId]);
+  }, [sessionKey, setProjectInstanceId]);
 
   // ─── Hydration from SQLite ProjectState ──────────────────────────────────
   useEffect(() => {
