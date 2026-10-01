@@ -35,7 +35,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
 | P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | Done: PR #86, merged 2026-09-30 (see [P1 record](#p1-record)) |
-| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Built 2026-09-30 (see [P2 record](#p2-record)) |
+| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | In review: PR #89 (see [P2 record](#p2-record)) |
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Pending |
 | P4 | `litria_graph_query` | P2 | Pending |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Pending |
@@ -323,7 +323,7 @@ Rust can ask live frontend owners for state through a typed, fenced and bounded 
 
 ### P2 record
 
-**2026-09-30, branch `feat/project-api-p2`,** a worktree off `main` `835e4dd`. Environment: Windows 10, rustc 1.97.1, Node 24.14.0. The pull request is linked from the branch.
+**2026-09-30, branch `feat/project-api-p2`, PR #89,** a worktree off `main` `835e4dd`. Environment: Windows 10, rustc 1.97.1, Node 24.14.0.
 
 **Delivered, as tasked above:**
 - the `project-api-bridge` v1 family: `editor.documents` and `editor.bufferIndex`, the request event envelope, and the reply union, with artifacts and 25 fixtures (two generated) in `src-tauri/contracts/project-api-bridge/v1/`. The test-only artifact and fixture machinery now serves two families;
