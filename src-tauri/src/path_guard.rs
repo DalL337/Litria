@@ -107,6 +107,32 @@ pub(crate) fn resolve_existing_relative_path(root: &Path, relative_path: &str) -
     resolve_existing_relative_path_typed(root, relative_path.trim()).map_err(ResolveError::legacy_message)
 }
 
+/// The directory entry a mutation (delete, move, remove) acts on.
+///
+/// The PARENT is canonicalized and must lie within the root, but the final
+/// component is kept exactly as named and never followed: if the selected
+/// entry is a link, the link is the object, not its target. Using
+/// `resolve_existing_relative_path` here instead made delete, move and
+/// remove act on a link's target — deleting a link to the project root
+/// deleted the project (2026-09-30, reproduced on Windows junctions and
+/// Linux symlinks). The entry is always a strict child of a directory
+/// inside the root, so the root itself can never be the target.
+///
+/// The entry may not exist (callers inspect it with `symlink_metadata`,
+/// which sees dangling links too). Reads keep using the canonicalizing
+/// resolver: they want the target.
+pub(crate) fn resolve_entry_for_mutation(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    let relative = validate_relative_path(relative_path)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| "Invalid relative path.".to_string())?;
+    let parent = root.join(relative.parent().unwrap_or_else(|| Path::new("")));
+    let canonical_parent =
+        fs::canonicalize(&parent).map_err(|error| format!("Unable to resolve path: {error}"))?;
+    ensure_within_root(root, &canonical_parent)?;
+    Ok(canonical_parent.join(name))
+}
+
 pub(crate) fn resolve_relative_path_for_write(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
     let relative = validate_relative_path(relative_path)?;
     let joined = root.join(relative);

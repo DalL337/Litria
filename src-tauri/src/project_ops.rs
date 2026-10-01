@@ -37,8 +37,11 @@ pub(crate) fn move_project_path(
 ) -> CommandResult<()> {
     write_ops::with_write_lock(|| {
         let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
+        // The selected entry itself — a link moves as a link, never its target.
         let from_path =
-            path_guard::resolve_existing_relative_path(&root, from_relative).map_err(CommandError::from_text)?;
+            path_guard::resolve_entry_for_mutation(&root, from_relative).map_err(CommandError::from_text)?;
+        let from_metadata = fs::symlink_metadata(&from_path)
+            .map_err(|error| CommandError::from_text(format!("Unable to resolve path: {error}")))?;
         let to_path =
             path_guard::resolve_relative_path_for_write(&root, to_relative).map_err(CommandError::from_text)?;
         if let Some(parent) = to_path.parent() {
@@ -46,8 +49,29 @@ pub(crate) fn move_project_path(
                 CommandError::from_io("project_path.move", &error, "Unable to create file directory")
             })?;
         }
-        move_with_cross_device_fallback(&from_path, &to_path, |from, to| fs::rename(from, to))
-            .map_err(|error| CommandError::from_io("project_path.move", &error, "Unable to move project path"))
+        move_entry(&from_path, &to_path, from_metadata.file_type().is_symlink(), |from, to| {
+            fs::rename(from, to)
+        })
+        .map_err(|error| CommandError::from_io("project_path.move", &error, "Unable to move project path"))
+    })
+}
+
+/// Move one entry. A link is renamed as a link; it never takes the
+/// cross-device copy fallback, which would copy what it points to and so
+/// turn the link into a copy of its target (or copy a whole outside tree).
+fn move_entry<R>(from: &Path, to: &Path, is_link: bool, rename: R) -> io::Result<()>
+where
+    R: FnOnce(&Path, &Path) -> io::Result<()>,
+{
+    if !is_link {
+        return move_with_cross_device_fallback(from, to, rename);
+    }
+    rename(from, to).map_err(|error| {
+        if error.kind() == io::ErrorKind::CrossesDevices {
+            io::Error::new(error.kind(), "a link cannot be moved to another drive")
+        } else {
+            error
+        }
     })
 }
 
@@ -101,7 +125,9 @@ fn copy_then_delete_with<D>(from: &Path, to: &Path, delete_source: D) -> io::Res
 where
     D: FnOnce(&Path, bool) -> io::Result<()>,
 {
-    if to.exists() {
+    // `symlink_metadata`, not `exists()`: a dangling link at the destination
+    // counts as existing, so the copy can never write THROUGH it.
+    if fs::symlink_metadata(to).is_ok() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("cross-device move destination already exists: {}", to.display()),
@@ -169,19 +195,27 @@ pub(crate) fn create_project_directory(root_path: &str, relative_path: &str) -> 
 pub(crate) fn delete_project_path(root_path: &str, relative_path: &str) -> CommandResult<()> {
     write_ops::with_write_lock(|| {
         let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
-        let relative = path_guard::validate_relative_path(relative_path).map_err(CommandError::from_text)?;
-        let target = root.join(relative);
-        if !target.exists() {
-            return Ok(());
-        }
+        // The selected entry itself, inspected WITHOUT following it: a link
+        // (dangling or not) is deleted as a link; its target is untouched.
         let target =
-            path_guard::resolve_existing_relative_path(&root, relative_path).map_err(CommandError::from_text)?;
-        let metadata = fs::symlink_metadata(&target)
-            .map_err(|error| CommandError::from_io("project_path.delete", &error, "Unable to inspect project path"))?;
+            path_guard::resolve_entry_for_mutation(&root, relative_path).map_err(CommandError::from_text)?;
+        let metadata = match fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            // Already gone: deleting a missing path stays idempotent.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(CommandError::from_io(
+                    "project_path.delete",
+                    &error,
+                    "Unable to inspect project path",
+                ))
+            }
+        };
         if metadata.file_type().is_symlink() {
-            fs::remove_file(&target)
-                .map_err(|error| CommandError::from_io("project_path.delete", &error, "Unable to delete symlink"))
+            remove_link(&target, &metadata)
+                .map_err(|error| CommandError::from_io("project_path.delete", &error, "Unable to delete link"))
         } else if metadata.is_dir() {
+            // std's remove_dir_all does not follow links inside the tree.
             fs::remove_dir_all(&target).map_err(|error| {
                 CommandError::from_io("project_path.delete", &error, "Unable to delete project directory")
             })
@@ -192,12 +226,35 @@ pub(crate) fn delete_project_path(root_path: &str, relative_path: &str) -> Comma
     })
 }
 
+/// Remove a link itself. On Windows a directory link or junction is removed
+/// with `remove_dir` (which never touches the target); elsewhere a link is a
+/// file entry whatever it points to.
+#[cfg(windows)]
+fn remove_link(link: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    use std::os::windows::fs::FileTypeExt;
+    if metadata.file_type().is_symlink_dir() {
+        fs::remove_dir(link)
+    } else {
+        fs::remove_file(link)
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_link(link: &Path, _metadata: &fs::Metadata) -> io::Result<()> {
+    fs::remove_file(link)
+}
+
 pub(crate) fn remove_empty_directory(root_path: &str, relative_path: &str) -> CommandResult<()> {
     write_ops::with_write_lock(|| {
         let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
+        // The selected entry itself: a link to an empty directory is not an
+        // empty directory, and its target must never be the one removed.
         let target =
-            path_guard::resolve_existing_relative_path(&root, relative_path).map_err(CommandError::from_text)?;
-        if !target.is_dir() {
+            path_guard::resolve_entry_for_mutation(&root, relative_path).map_err(CommandError::from_text)?;
+        let is_real_directory = fs::symlink_metadata(&target)
+            .map_err(|error| CommandError::from_text(format!("Unable to resolve path: {error}")))?
+            .is_dir();
+        if !is_real_directory {
             return Err(CommandError::invalid_path(
                 "project_dir.not_directory",
                 "Path is not a directory.",
@@ -484,6 +541,26 @@ mod link_entry_tests {
         assert_eq!(fs::read_to_string(outside.join("precious.txt")).unwrap(), "outside");
         cleanup(&root, &["out"]);
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    /// A link facing a cross-device rename is refused, not copied: the copy
+    /// fallback would duplicate what it points to.
+    #[test]
+    fn a_link_never_takes_the_cross_device_copy_path() {
+        let root = temp_root("exdev-link");
+        fs::create_dir_all(root.join("real")).unwrap();
+        fs::write(root.join("real/keep.txt"), "keep").unwrap();
+        dir_link(&root.join("alias"), &root.join("real"));
+
+        let result = move_entry(&root.join("alias"), &root.join("moved"), true, |_, _| {
+            Err(io::Error::new(io::ErrorKind::CrossesDevices, "simulated cross-device move"))
+        });
+
+        assert!(result.is_err(), "a link is not copied across devices");
+        assert!(is_link(&root.join("alias")), "the link stays where it was");
+        assert!(!entry_exists(&root.join("moved")), "nothing was copied to the destination");
+        assert_eq!(fs::read_to_string(root.join("real/keep.txt")).unwrap(), "keep");
+        cleanup(&root, &["alias"]);
     }
 
     #[test]
