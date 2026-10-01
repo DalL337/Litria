@@ -150,7 +150,9 @@ test('moveFile — moves file and runs full sync pipeline', async () => {
   assert.equal(calls.updateTabFilename.length, 1);
   assert.deepEqual(calls.updateTabFilename[0], { pieceId: 1, path: 'lib/foo.py' });
   assert.equal(calls.unregisterFile.length, 1);
-  assert.equal(calls.unregisterFile[0], 'src/foo.py');
+  // SyntaxDomain's key is the absolute path (P4 gate item 5): the relative
+  // path this used to assert matched nothing in the real domain.
+  assert.equal(calls.unregisterFile[0], '/test/project/src/foo.py');
   // Note: SQLite persistence (dbUpdatePiece) fires internally via dbStorage import
   // and cannot be observed by this mock-deps style test. Rust-side unit tests
   // cover the SQLite layer; see src-tauri/src/db/commands.rs tests.
@@ -401,8 +403,8 @@ test('moveOrWriteFile — failed move materializes the file and syncs the piece'
   assert.deepEqual(calls.writeProjectFile[0], { rootPath: '/test/project', path: 'lib/foo.py', contents: 'print(1)' });
   assert.deepEqual(calls.updatePieceFilenames[0], [{ pieceId: 1, path: 'lib/foo.py' }]);
   assert.deepEqual(calls.updateTabFilename[0], { pieceId: 1, path: 'lib/foo.py' });
-  assert.equal(calls.unregisterFile[0], 'src/foo.py');
-  assert.deepEqual(calls.notifyFileChanged[0], { path: 'lib/foo.py', text: 'print(1)' });
+  assert.equal(calls.unregisterFile[0], '/test/project/src/foo.py');
+  assert.deepEqual(calls.notifyFileChanged[0], { path: '/test/project/lib/foo.py', text: 'print(1)' });
   assert.deepEqual(calls.applyFsSyncPlan[0].additions, [{ groupId: 'g2', pieceId: 1 }]);
   assert.equal(calls.bumpScaffoldRefresh.length, 1);
 });
@@ -478,7 +480,7 @@ test('deleteFile — runs full delete pipeline', async () => {
   assert.equal(calls.removeConnectionsForPieces.length, 1, 'removes connections');
   assert.deepEqual(calls.removeConnectionsForPieces[0], [1]);
   assert.equal(calls.unregisterFile.length, 1, 'unregisters from syntax domain');
-  assert.equal(calls.unregisterFile[0], 'src/foo.py');
+  assert.equal(calls.unregisterFile[0], '/test/project/src/foo.py');
   assert.equal(calls.deletePieces.length, 1, 'removes piece from state');
   assert.deepEqual(calls.deletePieces[0].ids, [1]);
   assert.equal(calls.removePiecesFromGroups.length, 1, 'removes from groups');
@@ -586,7 +588,7 @@ test('writeFile — writes file and notifies syntax domain', async () => {
   assert.equal(result.success, true);
   assert.equal(calls.writeProjectFile.length, 1);
   assert.equal(calls.notifyFileChanged.length, 1);
-  assert.deepEqual(calls.notifyFileChanged[0], { path: 'src/new.py', text: 'print("hello")' });
+  assert.deepEqual(calls.notifyFileChanged[0], { path: '/test/project/src/new.py', text: 'print("hello")' });
   assert.equal(calls.bumpScaffoldRefresh.length, 1);
 });
 
