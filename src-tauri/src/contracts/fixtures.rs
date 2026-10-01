@@ -133,6 +133,31 @@ fn generated_fixture(name: &str) -> Vec<u8> {
             }))
             .unwrap()
         }
+        // One selected path more than a selection reply may list.
+        "selectionOverCount" => {
+            use super::project_api_bridge::workspace::MAX_SELECTED_PATHS;
+            let selected: Vec<_> = (0..=MAX_SELECTED_PATHS).map(|index| format!("f{index}.txt")).collect();
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "result", "result": { "selected": selected, "omitted": 0 }
+            }))
+            .unwrap()
+        }
+        // One language row more than a capabilities reply may hold.
+        "capabilitiesOverCount" => {
+            use super::project_api_bridge::languages::MAX_LANGUAGE_ROWS;
+            let languages: Vec<_> = (0..=MAX_LANGUAGE_ROWS)
+                .map(|index| serde_json::json!({
+                    "language": format!("lang{index}"), "extensions": [format!(".x{index}")],
+                    "languageServer": "none", "documentAccess": true, "diagnostics": false,
+                    "navigation": false, "symbols": false, "relationshipDiscovery": false,
+                    "sourceTransformations": false
+                }))
+                .collect();
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "result", "result": { "languages": languages }
+            }))
+            .unwrap()
+        }
         other => panic!("unknown generated fixture `{other}`"),
     }
 }
@@ -221,6 +246,8 @@ mod outbound {
     use crate::contracts::artifacts::outbound_schema;
     use crate::contracts::error::ContractError;
     use crate::contracts::project_api::files_read::FilesReadResult;
+    use crate::contracts::project_api::files_search::FilesSearchResult;
+    use crate::contracts::project_api::project_context::ProjectContextResult;
     use crate::contracts::project_api::samples;
     use schemars::JsonSchema;
     use serde::Serialize;
@@ -239,6 +266,9 @@ mod outbound {
     /// What Rust emits conforms to the outbound schema, for every outcome kind.
     #[test]
     fn emitted_values_conform_to_their_outbound_schemas() {
+        assert_conforms("project context", &samples::project_context_result());
+        let search = assert_conforms("files search", &samples::files_search_result());
+        assert_eq!(search["matches"][2]["kind"], "path");
         let files_read = assert_conforms("files read", &samples::files_read_result());
         let empty = &files_read["documents"][2];
         assert_eq!(empty["kind"], "read");
@@ -253,19 +283,24 @@ mod outbound {
     /// are tested against real output, not hand-made shapes.
     #[test]
     fn result_fixtures_are_what_rust_emits() {
-        let emitted = serde_json::to_value(samples::files_read_result()).unwrap();
-        let path = family_dir().join(FIXTURES_DIR).join("files_read.result.json");
-        // Regenerated with the schemas, so it can only ever be Rust's output.
-        if std::env::var(UPDATE_ENV).is_ok_and(|value| value == "1") {
-            let mut text = serde_json::to_string_pretty(&emitted).unwrap();
-            text.push('\n');
-            fs::write(&path, text).unwrap();
+        fn check<T: Serialize + serde::de::DeserializeOwned>(file: &str, sample: &T) {
+            let emitted = serde_json::to_value(sample).unwrap();
+            let path = family_dir().join(FIXTURES_DIR).join(file);
+            // Regenerated with the schemas, so it can only ever be Rust's output.
+            if std::env::var(UPDATE_ENV).is_ok_and(|value| value == "1") {
+                let mut text = serde_json::to_string_pretty(&emitted).unwrap();
+                text.push('\n');
+                fs::write(&path, text).unwrap();
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            let committed: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(committed, emitted, "{file} differs from what Rust emits");
+            // Round trip: what Rust emits, a tolerant reader of the contract reads back.
+            let _: T = serde_json::from_value(emitted).unwrap();
         }
-        let text = fs::read_to_string(&path).unwrap();
-        let committed: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(committed, emitted, "files_read.result.json differs from what Rust emits");
-        // Round trip: what Rust emits, a tolerant reader of the contract reads back.
-        let _: FilesReadResult = serde_json::from_value(emitted).unwrap();
+        check::<FilesReadResult>("files_read.result.json", &samples::files_read_result());
+        check::<ProjectContextResult>("project_context.result.json", &samples::project_context_result());
+        check::<FilesSearchResult>("files_search.result.json", &samples::files_search_result());
     }
 }
 
@@ -369,6 +404,8 @@ mod bridge_family {
             let sample = match fixture.sample.as_deref() {
                 Some("documents") => samples::documents_event(),
                 Some("bufferIndex") => samples::buffer_index_event(),
+                Some("selection") => samples::selection_event(),
+                Some("capabilities") => samples::capabilities_event(),
                 other => panic!("{file}: unknown sample {other:?}"),
             };
             assert_eq!(sample.op, fixture.operation, "{file}: the sample is for another operation");

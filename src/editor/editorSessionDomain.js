@@ -135,6 +135,25 @@ export function getPaneTagsByPieceId(state) {
 
 const SESSION_STATE_RANK = { closedClean: 0, closedDirty: 1, open: 2 };
 
+function sessionPathOf(tab) {
+  return typeof tab?.filename === 'string'
+    ? tab.filename.replace(/\\/g, '/').replace(/^\/+/, '')
+    : '';
+}
+
+/**
+ * The document the focused pane shows, as `{ path, dirty }`, or null. Same
+ * path form and dirty rule as `getSessionDocumentsByPath` (Project API
+ * `workspace.selection`, build plan P3).
+ */
+export function getActiveSessionDocument(state, activeTabId) {
+  const tab = activeTabId == null ? null : state.tabsById[activeTabId];
+  const path = sessionPathOf(tab);
+  if (!path) return null;
+  const text = typeof tab.workingCode === 'string' ? tab.workingCode : '';
+  return { path, dirty: !areEditorTextsEqual(text, tab.code) };
+}
+
 /**
  * Session entries by project-relative path — the read selector the Project
  * API bridge answers from (contract brief §5, build plan P2). Buffer truth is
@@ -155,9 +174,7 @@ export function getSessionDocumentsByPath(state) {
   const open = new Set(state.openTabIds);
   const byPath = new Map();
   for (const tab of Object.values(state.tabsById)) {
-    const path = typeof tab?.filename === 'string'
-      ? tab.filename.replace(/\\/g, '/').replace(/^\/+/, '')
-      : '';
+    const path = sessionPathOf(tab);
     if (!path) continue;
     const text = typeof tab.workingCode === 'string' ? tab.workingCode : '';
     const dirty = !areEditorTextsEqual(text, tab.code);

@@ -1,0 +1,197 @@
+{
+  "kind": "result",
+  "result": {
+    "languages": [
+      {
+        "language": "javascript",
+        "extensions": [
+          ".js",
+          ".jsx",
+          ".mjs"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": true,
+        "sourceTransformations": true
+      },
+      {
+        "language": "javascript",
+        "extensions": [
+          ".cjs"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": false,
+        "sourceTransformations": true
+      },
+      {
+        "language": "typescript",
+        "extensions": [
+          ".ts",
+          ".tsx"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": true,
+        "sourceTransformations": true
+      },
+      {
+        "language": "typescript",
+        "extensions": [
+          ".mts",
+          ".cts"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": false,
+        "sourceTransformations": true
+      },
+      {
+        "language": "json",
+        "extensions": [
+          ".json"
+        ],
+        "languageServer": "none",
+        "documentAccess": true,
+        "diagnostics": true,
+        "navigation": false,
+        "symbols": true,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "css",
+        "extensions": [
+          ".css"
+        ],
+        "languageServer": "none",
+        "documentAccess": true,
+        "diagnostics": true,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "html",
+        "extensions": [
+          ".html"
+        ],
+        "languageServer": "none",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": true,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "markdown",
+        "extensions": [
+          ".md"
+        ],
+        "languageServer": "none",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "python",
+        "extensions": [
+          ".py"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": true,
+        "sourceTransformations": true
+      },
+      {
+        "language": "python",
+        "extensions": [
+          ".pyi"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": true,
+        "symbols": true,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "rust",
+        "extensions": [
+          ".rs"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "c",
+        "extensions": [
+          ".c"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "cpp",
+        "extensions": [
+          ".h",
+          ".cpp",
+          ".hpp",
+          ".cc",
+          ".cxx"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      },
+      {
+        "language": "go",
+        "extensions": [
+          ".go"
+        ],
+        "languageServer": "unknown",
+        "documentAccess": true,
+        "diagnostics": false,
+        "navigation": false,
+        "symbols": false,
+        "relationshipDiscovery": false,
+        "sourceTransformations": false
+      }
+    ]
+  }
+}

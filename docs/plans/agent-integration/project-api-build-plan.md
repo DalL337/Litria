@@ -1,6 +1,6 @@
 # Project API build plan
 
-Status: Accepted, 2026-09-30 (owner ruling on PR #85). Proposed the same day and revised with the brief after peer review by Codex. **All slices are pending. No code has been delivered.** *(Superseded 2026-09-30: P1 merged as PR #86; P2 is built — the slice map holds each slice's status.)*
+Status: Accepted, 2026-09-30 (owner ruling on PR #85). Proposed the same day and revised with the brief after peer review by Codex. **All slices are pending. No code has been delivered.** *(Superseded 2026-09-30: P1 and P2 are merged (PRs #86, #89); P3 is built — the slice map holds each slice's status.)*
 
 Decisions: [ADR-031](031-agent-integration-and-lifecycle.md) (semantics), [ADR-033](../../adrs/033-contract-schema-source-of-truth.md) (contract pipeline), [ADR-032](../../adrs/032-workspace-epoch-fencing-and-write-truthfulness.md) (workspace epoch).
 Canonical contract design: [Project API contract brief](brief-project-api-contract.md). Parent design: [agent integration brief](brief-agent-integration.md).
@@ -35,8 +35,8 @@ This document owns sequencing, executable evidence and completion status. It own
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
 | P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | Done: PR #86, merged 2026-09-30 (see [P1 record](#p1-record)) |
-| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | In review: PR #89 (see [P2 record](#p2-record)) |
-| P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Pending |
+| P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Done: PR #89, merged 2026-09-30 (see [P2 record](#p2-record)) |
+| P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | In review: PR #90 (see [P3 record](#p3-record)) |
 | P4 | `litria_graph_query` | P2 | Pending |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Pending |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
@@ -450,6 +450,118 @@ An agent can orient itself (`litria_project_context`), read (P1–P2) and search
 - All tests, standard checks and the live pass pass.
 - Brief §10 carries a dated measurement note.
 - The first read set is usable end to end through the development call.
+
+### P3 record
+
+**2026-09-30 to 10-01, branch `feat/project-api-p3`, PR #90,** a worktree off `main` `a13055f`. Environment: Windows 10, Node 24.14.0, the P2 Rust toolchain.
+
+**Delivered, as tasked above:**
+- `litria_project_context` (`project_api/context.rs`): the project name from the workspace's `project` row, through the epoch-checked connection; selection, folder, active and open documents and the dirty count, all filtered by the policy before anything is listed or counted; the capability matrix; the operations the grant permits; the server's limits; the policy summary. No epoch and no absolute path.
+- `litria_files_search` (`project_api/search.rs`, `project_api/walk.rs`): the buffer-coverage protocol, one path-ordered pass over disk and buffers, ASCII folding with exact columns, a revision on every text match, every §10 bound, and the concurrent-search ceiling.
+- The bridge operations `workspace.selection` and `languages.capabilities`, with their artifacts and fixtures. On the JavaScript side: `selectionSnapshot`, `answerSelection`, `answerCapabilities`, EditorDomain's `getActiveSessionDocument`, and `src/app/languageCapabilities.js` over its owners' new exports (`LANGUAGE_EXTENSIONS`, `isDiscoverableFilename`, `writesImportsForTarget`).
+- Contract tests for three result fixtures; the policy's denied classes moved into one table.
+
+**Refinements**, each recorded in the brief as a dated note (§6, §7.1, §7.3, §8, §10):
+- capability rows are classes of extensions;
+- path matches carry no line or revision;
+- a `scope` outcome for the prefix;
+- `complete: false` instead of counting what the owner did not list;
+- a line longer than one chunk counts as too large;
+- unreached buffers are counted on work-limit stops only;
+- an internal walk-entry limit;
+- an erratum: Python targets do get source transformations.
+
+**Fixes beyond the tasks** (all found by this slice; statuses below):
+- **The canvas selection survived a project switch** (`useProjectLaunch`). The new selection operation would have reported it, so the fix belongs in this slice (adversarial policy Rule 2).
+- **Three name-judging defects in the new and shared disclosure code:** names reported through a directory swapped for a link; denied names counted when the API cannot address them; unresolvable names behind links judged as themselves.
+- JavaScript's `answerBufferIndex` no longer sends a path the contract cannot carry: it counts it as omitted instead of failing the whole reply.
+
+**Checks (all run in the worktree on the final code, after the planted-mistake run):**
+
+| Command | Outcome |
+|---|---|
+| `cargo build` | zero warnings |
+| `cargo check --release` | zero warnings |
+| `cargo test` | 496 passed, 4 ignored (the 3 pre-existing, plus the on-demand `measure_search`) |
+| `LITRIA_UPDATE_CONTRACTS=1 cargo test contracts:: -- --test-threads=1`, then `cargo test contracts::` | 30 contract tests pass against the committed artifacts of both families |
+| `npm run check:architecture` | all seven guards pass |
+| `npm run test:domains` | 1353 of 1353 (1341 before: 2 real-hook selection tests and 10 bridge tests added) |
+| `npm run build` | pass |
+| `cargo tree -e normal`, before and after | identical apart from the letter case of the checkout path; no manifest or lockfile changes |
+
+**Planted mistakes: 15 of 15 caught**, each restored and verified identical by SHA-256; every source file compared equal to a snapshot taken before the run.
+
+| Planted mistake | Caught by |
+|---|---|
+| Rust: buffers keyed by the session path, without `identity` | `a_buffer_behind_a_dangling_link_is_withheld` |
+| Rust: the walker follows links | `walk::links_are_not_followed` (the search-level test passed, because the name re-check also drops those names) |
+| Rust: a buffered document also searched on disk | four buffer-coverage tests |
+| Rust: a failed page falls back to disk | `a_failed_page_reports_buffer_coverage_and_never_falls_back_to_disk`, and the edited-between-chunks test |
+| Rust: disk matches reported without the re-check | `a_directory_swapped_for_a_link_mid_walk_discloses_no_names` |
+| Rust: names judged without trimming | the policy test and `a_denied_name_the_api_cannot_address_is_not_counted` |
+| Rust: the link check removed from `identity` | `a_buffer_behind_a_dangling_link_is_withheld` |
+| Rust: context counts dirty documents before the policy | `denied_files_are_listed_and_counted_nowhere` |
+| Rust: three searches may run at once | `a_third_concurrent_search_is_busy` |
+| Rust: the selection reply boundary skips path lengths | the bridge fixture verdict test |
+| JavaScript: `activeDoc` instead of `activeDocument` | the committed selection reply |
+| JavaScript: Windows separators kept in selected paths | the committed selection reply |
+| JavaScript: relationship discovery decided by language, not extension | the tier table and the committed matrix fixture |
+| JavaScript: an unchecked server reported as not installed | the language-server state test |
+| JavaScript: the open handler keeps the selection | both real-hook selection tests |
+
+**Adversarial check** ([policy](../../../Agents/docs/adversarial-check-policy.md)). Guarantees:
+- search never discloses a denied path: no match, preview or count, and no denied buffer text crosses the bridge;
+- the context lists or counts no denied path;
+- every bound in §10 holds;
+- a buffered document is never searched on disk, and uncovered buffers are reported;
+- a reply never describes another project;
+- at most two searches run at once.
+
+| Finding | Status |
+|---|---|
+| **Medium.** Opening another project kept the previous selection and selected group; per-project ids landed it on the new project's pieces, and `workspace.selection` would have reported it. | **Reproduced**: by `projectSwitchSelection.test.mjs` (real `useProjectLaunch` and `useSelection`, Windows, failed first), and live on Windows by temporarily reverting the fix in the debug app (B's selection `[3, 4]` became A's, and A's context reported `README.md` as selected). **Verified fixed** by the same test, and live with the same script on the restored fix. JavaScript only. |
+| **Medium.** A directory swapped for a junction after its parent was listed was listed through the junction; a path search reported names from `.git` or outside the project under the allowed alias (`src/HEAD`). | **Reproduced** on Windows (a test seam between listing and entering; the unfixed search returned `src/HEAD`). **Verified fixed** on Windows by the same test. Linux and macOS (symlink variant): CI. |
+| **Low.** The walker counted entries the API cannot address before applying the policy, so `.env.`, `id_rsa ` and `server.pem.` were counted as unreadable. | **Reproduced** on Windows (`unreadable: 3`); **verified fixed** on Windows. Linux and macOS: CI. |
+| **Low.** An unresolvable name behind a dangling junction was judged as itself, so its buffer, holding the old text of a withheld file, was searched. | **Reproduced** on Windows (a match in `cfg/config`); **verified fixed** on Windows. Linux and macOS (symlink variant): CI. |
+| JavaScript's buffer index sent paths over 1,024 code points, which failed the whole reply (fails closed). | **Suspected**, by inspection; fixed and covered by a unit test. |
+| On macOS, a buffer key's case may differ from the walked name, so the disk copy of a buffered file may also be searched (a stale duplicate match, not a disclosure). | **Suspected**, carried over from P2. |
+| A text match's file swapped, mid-read, for another allowed file reports that file's text under the walked name. | Accepted residual: it needs an active race, and the text is allowed. |
+| The `unreadable` counts of a directory listed through a swapped link. | Accepted residual: it needs a double swap, and reveals counts only. |
+| Hard links. | Accepted residual, as in P1 and P2. |
+
+**Measurements** (the brief's §10 addendum summarises them): the `#[ignore]`d test `measure_search` (`LITRIA_MEASURE_ROOT=<dir> cargo test [--release] measure_search -- --ignored --nocapture`) was run against a `git archive` copy of this repository, a synthetic tree of 25,000 files, and this repository's working tree, read only.
+
+| Case | Repository copy, release | Synthetic, release |
+|---|---|---|
+| A common word, at most 200 results | 5 ms, 45,124 B, `results` | 4 ms, 42,010 B |
+| A rare word (full walk) | 260–380 ms, 815 files, complete | 2,000 ms, `timeBudget` after about 7,200–7,800 files |
+| A path search (full walk) | 10 ms | 66–68 ms, `filesScanned` at 20,000 |
+
+Debug builds take about 2–3 times as long. In the working tree (5,855 walkable files, 840 of them tracked), a rare-word text search ended on the time budget after 355–582 files.
+
+**Live pass** (a debug build from the worktree, CDP, app data redirected to a scratch folder, scratch projects; every reply saved as evidence in the session journal):
+
+| Check | Outcome |
+|---|---|
+| Context right after opening a project | The name, three operations, 14 language rows and the policy summary; no epoch, drive path or root path in the result |
+| `.env` open, active and selected beside `README.md` | Context lists only `README.md` (open and selected), no active document, `omitted: 0` |
+| A real click on a piece, then on a folder group's pill | `selection.paths: ["README.md"]`, then `folder: "src"` |
+| Real typing without saving, then a search | Found in the editor's buffer (case-folded, line 1, column 13), with the revision a following effective read returns; a disk read still shows the saved text |
+| A search for text only `.env` holds (open in a tab); a path search for "env" | No matches, and nothing counted |
+| Switching projects with pieces selected (both directions) | The new project starts with no selection, and its context agrees; with the fix reverted, the old selection carried over |
+| The repository copy as a project, end to end | Full walk 859 ms; common word 28 ms (45 KB); prefix search `scope: prefix` |
+| Three concurrent searches | Two ran (about 850 ms each); the third returned `busy` in 4 ms |
+
+**Platform coverage:** the link, swap, odd-name and dangling-link tests ran on Windows (junctions, verbatim paths). Their symlink variants, and the unreadable-directory test, ran in CI on PR #90 (2026-10-01):
+- `cargo test (linux-x86_64)` passed 494 and `cargo test (macos-aarch64)` passed 493, each with 4 ignored; the Architecture Guard passed.
+- Both logs show these tests as `ok`: `a_directory_swapped_for_a_link_mid_walk_discloses_no_names`, `a_denied_name_the_api_cannot_address_is_not_counted`, `a_buffer_behind_a_dangling_link_is_withheld`, both `links_are_not_followed`, `a_file_symlink_is_not_walked`, `an_unreadable_directory_is_counted_and_skipped` and `denied_files_are_listed_and_counted_nowhere`. F2, F3 and F4 are therefore verified fixed on Linux and macOS as well.
+- **Limit of this evidence:** a test that cannot create a link returns early with a note, and the log cannot show which branch ran. Symlink creation needs no privilege on these runners, so those early returns cannot be what happened there. The unreadable-directory test also returns early when run as root; the runners use an unprivileged account (inferred, not shown in the log).
+
+**Security review** (security policy Rule 1): no new command and no new process. The two new operations are reachable only through the debug-only development call until track T. Every new surface (context lists, search results and counts, previews, bridge replies) passes the disclosure policy in Rust, and the review's findings are the table above.
+
+**Found in passing (pre-existing, not fixed here):**
+- A failed project open (an invalid path) tears the current project down before the open fails, so the window keeps showing a project whose workspace is closed. Seen live.
+- Three inferred findings from the language-tier inspection: wire writes are gated on the target's language only; discovery may write a stub import for a directory import on load; the write manager calls `unregisterFile` with relative paths where the domain keys are absolute.
 
 ## P4. Graph query
 

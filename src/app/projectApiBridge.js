@@ -26,7 +26,9 @@
 export const BRIDGE_REQUEST_EVENT = 'project-api://bridge-request';
 export const BRIDGE_OPS = Object.freeze({
   documents: 'editor.documents',
-  bufferIndex: 'editor.bufferIndex'
+  bufferIndex: 'editor.bufferIndex',
+  selection: 'workspace.selection',
+  capabilities: 'languages.capabilities'
 });
 /** Encoded size of one reply (contract brief §10); the catalog publishes it. */
 export const MAX_REPLY_BYTES = 512 * 1024;
@@ -34,6 +36,10 @@ export const MAX_REPLY_BYTES = 512 * 1024;
 const MIN_PAGE_BUDGET = 4;
 const MAX_QUERIES = 20;
 const MAX_INDEX_ENTRIES = 500;
+const MAX_SELECTED_PATHS = 1000;
+const MAX_LANGUAGE_ROWS = 32;
+/** Path length in code points, as the contract's schemas count it. */
+const MAX_PATH_LENGTH = 1024;
 const REMEMBERED_REQUESTS = 256;
 /** Rust's pending ceiling: no more requests than this can be waiting. */
 const HELD_WHILE_ATTACHING = 32;
@@ -316,13 +322,16 @@ export function answerBufferIndex(request, documents, revisionOf, ceiling = MAX_
   const maxEntries = request?.maxEntries;
   if (!Number.isInteger(maxEntries) || maxEntries < 0) return refusal('invalidRequest');
   const limit = Math.min(maxEntries, MAX_INDEX_ENTRIES);
+  // A path the contract cannot carry would fail the whole reply: it is
+  // counted as omitted instead (Rust then reports incomplete coverage).
   const buffered = [...documents.values()]
     .filter((doc) => doc.state !== 'closedClean')
     .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  const carriable = buffered.filter((doc) => isCarriablePath(doc.path));
   // Room for the largest possible `omitted` count, then entries in order.
   let used = encodedLength({ kind: 'result', result: { entries: [], omitted: 4294967295 } });
   const entries = [];
-  for (const doc of buffered) {
+  for (const doc of carriable) {
     if (entries.length >= limit) break;
     const entry = {
       path: doc.path,
@@ -339,12 +348,91 @@ export function answerBufferIndex(request, documents, revisionOf, ceiling = MAX_
   return { kind: 'result', result: { entries, omitted: buffered.length - entries.length } };
 }
 
+function projectPath(value) {
+  return typeof value === 'string' ? value.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') : '';
+}
+
+/**
+ * The selection port's answer from owner state: selected piece ids mapped to
+ * their files' project-relative paths, the selected group's folder (folder
+ * groups only), and the active document (`getActiveSessionDocument`). Ids
+ * never leave the bridge.
+ */
+export function selectionSnapshot({ selectedIds, piecesById, selectedGroupId, groups }, activeDocument) {
+  const selectedPaths = [];
+  for (const id of selectedIds ?? []) {
+    const path = projectPath(piecesById?.get?.(id)?.filename);
+    if (path) selectedPaths.push(path);
+  }
+  const group = selectedGroupId == null ? null : (groups ?? []).find((candidate) => candidate.id === selectedGroupId);
+  const folder = projectPath(group?.folderPath) || null;
+  return { selectedPaths, folder, activeDocument: activeDocument ?? null };
+}
+
+/** A path the contract can carry: 1–1024 code points. */
+function isCarriablePath(path) {
+  if (typeof path !== 'string' || !path) return false;
+  let points = 0;
+  for (const _ of path) {
+    points += 1;
+    if (points > MAX_PATH_LENGTH) return false;
+  }
+  return true;
+}
+
+/**
+ * `workspace.selection`: the selected files' paths (path order, without
+ * duplicates), up to `maxPaths` and within the ceiling — the rest counted as
+ * `omitted` — plus the selected folder group's path and the active document.
+ * `snapshot` is `{ selectedPaths, folder, activeDocument }` from the owners.
+ * Paths the contract cannot carry are counted, never sent.
+ */
+export function answerSelection(request, snapshot, ceiling = MAX_REPLY_BYTES) {
+  const maxPaths = request?.maxPaths;
+  if (!Number.isInteger(maxPaths) || maxPaths < 0) return refusal('invalidRequest');
+  const limit = Math.min(maxPaths, MAX_SELECTED_PATHS);
+  const all = [...new Set(snapshot?.selectedPaths ?? [])].sort();
+  const result = { selected: [], omitted: 0 };
+  if (isCarriablePath(snapshot?.folder)) result.folder = snapshot.folder;
+  const active = snapshot?.activeDocument;
+  if (active && isCarriablePath(active.path)) {
+    result.activeDocument = { path: active.path, dirty: active.dirty === true };
+  }
+  // Room for the largest possible `omitted` count, then paths in order.
+  let used = encodedLength({ kind: 'result', result: { ...result, omitted: 4294967295 } });
+  for (const path of all) {
+    if (result.selected.length >= limit) break;
+    if (!isCarriablePath(path)) continue;
+    const bytes = encodedLength(path) + 1;
+    if (used + bytes > ceiling) break;
+    used += bytes;
+    result.selected.push(path);
+  }
+  result.omitted = all.length - result.selected.length;
+  return { kind: 'result', result };
+}
+
+/**
+ * `languages.capabilities`: the capability rows the owners report
+ * (`src/app/languageCapabilities.js`), at most the contract's row limit.
+ */
+export function answerCapabilities(request, rows) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return refusal('invalidRequest');
+  return { kind: 'result', result: { languages: (rows ?? []).slice(0, MAX_LANGUAGE_ROWS) } };
+}
+
 // ─── The bridge ────────────────────────────────────────────────────────────
 
 /**
  * @param {object} deps
- * @param {{ sessionDocuments: () => Map<string, {tabId:any, path:string, state:string, dirty:boolean, text:string}> }} deps.ports
- *   Read-only owner ports (EditorDomain's `getSessionDocumentsByPath`).
+ * @param {{
+ *   sessionDocuments: () => Map<string, {tabId:any, path:string, state:string, dirty:boolean, text:string}>,
+ *   selection: () => {selectedPaths: string[], folder: (string|null), activeDocument: ({path:string, dirty:boolean}|null)},
+ *   languageCapabilities: () => object[]
+ * }} deps.ports
+ *   Read-only owner ports: EditorDomain's `getSessionDocumentsByPath` and
+ *   `getActiveSessionDocument`; the selection, its pieces and the selected
+ *   group mapped to paths; `buildCapabilityMatrix` over LanguageSupportDomain.
  * @param {{ attach: (epoch: string) => Promise<string>, detach: (generation: string) => Promise<unknown>,
  *   reply: (requestId: string, generation: string, reply: string) => Promise<unknown> }} deps.transport
  *   Use `serializeAttachments` around the raw Tauri calls.
@@ -433,12 +521,15 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
   }
 
   function answer(op, request) {
-    const documents = ports.sessionDocuments();
     switch (op) {
       case BRIDGE_OPS.documents:
-        return answerDocuments(request, documents, revisionOf, ceiling);
+        return answerDocuments(request, ports.sessionDocuments(), revisionOf, ceiling);
       case BRIDGE_OPS.bufferIndex:
-        return answerBufferIndex(request, documents, revisionOf, ceiling);
+        return answerBufferIndex(request, ports.sessionDocuments(), revisionOf, ceiling);
+      case BRIDGE_OPS.selection:
+        return answerSelection(request, ports.selection(), ceiling);
+      case BRIDGE_OPS.capabilities:
+        return answerCapabilities(request, ports.languageCapabilities());
       default:
         return refusal('unknownOperation');
     }

@@ -45,6 +45,11 @@ Scope: `src-tauri/src/*`
     commands are `project_api_bridge_attach`, `project_api_bridge_detach` and
     `project_api_bridge_reply`; requests go to the main window as
     `project-api://bridge-request`.
+  - *(P3)* `context.rs`: `litria_project_context`, built from three bridge
+    requests and the workspace's `project` row. `search.rs`:
+    `litria_files_search` — buffer coverage, path-ordered merge, bounds and
+    the concurrent-search ceiling. `walk.rs`: the search walker (path order,
+    no links, policy by name, bounded entries).
 
 > **Note (2026-09-30):** this document predates the `db`, `lsp`, `crash`,
 > `preferences` and `platform` modules, which define their commands in their

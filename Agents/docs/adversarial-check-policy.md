@@ -104,14 +104,19 @@ and for the list of attacks. Each one names the flaw that taught it.
    Watch for a check that *returns* a different object: canonicalizing
    follows links, so its result is the link's target, not the entry that
    was selected. A containment check that accepts the root itself also
-   accepts every alias of the root. *(Flaws 1, 2 and 6.)*
+   accepts every alias of the root. A result that reports *names* without
+   opening them (a listing, a path search) never gets a handle check at all:
+   re-check each name before it is reported. *(Flaws 1, 2, 6 and 10.)*
 2. **Identity and aliasing.** Can two inputs reach one object (case,
    trailing dots or spaces, links, hard links, alternate data streams, device
    names)? Can one input reach a different object than intended? Read every
    reused helper's normalization (trimming, case folding, separators) before
    relying on it. Ask the same of keys a fence relies on: is an "id" unique
    per session, or stored with the data, so that a copy or a reopen
-   presents it again? *(Flaws 3 and 7.)*
+   presents it again — or a per-project counter, so that the next project
+   reuses it? Judge a name by what the OS would open for it (`.env.` is
+   `.env` on Windows), and judge it before counting it. *(Flaws 3, 7, 9
+   and 11.)*
 3. **Bounds on what is consumed.** Is each limit enforced on what is
    actually read, allocated and emitted? That includes encoded size and
    escaping, memory proportional to input (a vector per line, per match or
@@ -122,7 +127,9 @@ and for the list of attacks. Each one names the flaw that taught it.
    caller's input, or expose internals such as absolute paths? *(Flaw 3.)*
 5. **Fail direction.** When an OS query fails, returns something
    unexpected, or the platform is unsupported, does the code refuse or allow?
-   It must refuse. *(Flaw 2.)*
+   It must refuse. A fallback for "cannot resolve this" must not quietly
+   accept the name as itself when the name passes through a link. *(Flaws 2
+   and 11.)*
 6. **Platform variance.** What does each supported OS do differently at
    this point: Linux `/proc` markers, Windows junctions, POSIX delete and
    drive roots, macOS firmlinks? Which of these did a test actually run, and
@@ -278,3 +285,40 @@ Each entry comes from a real finding and records its final status.
    on `main` without the bridge, live on Windows (debug app over CDP), and
    by two real-hook tests that failed first; verified fixed by those tests
    and live with the same script. JavaScript only.*
+9. **A selection outlived its project** (2026-09-30, Project API build plan
+   P3, medium: wrong state reported). Opening another project cleared the
+   canvas but not the selection or the selected group. Piece and group ids
+   are per-project counters, so the old selection landed on the new
+   project's pieces with the same ids, and the new `workspace.selection`
+   bridge operation would have reported it as the new project's. Found by
+   this pass, by asking what the new operation's answer rests on (Rule 2).
+   *Status: reproduced on Windows by a test that drives the real open
+   handler and selection behavior (it failed first); verified fixed by the
+   same test. JavaScript only.*
+10. **Names reported without being read** (2026-09-30, Project API build
+    plan P3, medium: names in withheld directories). The search walker lists
+    a directory by path. A directory swapped for a junction after its parent
+    was listed is listed through the junction, and a path search reports
+    the names it finds without opening anything, so no handle check ever
+    ran: names inside `.git`, or outside the project, surfaced under the
+    allowed alias (`src/HEAD`). Text matches were safe, because every file
+    read authorizes its opened handle (flaw 1). The fix re-checks each name
+    before it is reported: it must still resolve to exactly itself.
+    *Status: reproduced on Windows (a junction swapped in through a test
+    seam; the unfixed search returned `src/HEAD`); verified fixed on
+    Windows with the same test. Linux and macOS (symlink variant): CI.*
+11. **Names judged before they were understood** (2026-09-30, Project API
+    build plan P3, low: counts and stale text). Two variants.
+    - The walker counted entries the API cannot address *before* applying
+      the policy, so `.env.` and `id_rsa ` (which Windows opens as `.env`
+      and `id_rsa`) were counted as unreadable: denied files were counted.
+    - A name that cannot be resolved was judged as itself, so a buffer kept
+      under a name behind a dangling link was searched — its text came from
+      the withheld file the link used to name.
+
+    The fixes judge a segment by the name the OS would open, apply the
+    policy before counting, and deny an unresolvable name that passes
+    through a link.
+    *Status: both reproduced on Windows by tests that failed first
+    (verbatim-path odd names; a dangling junction); verified fixed on
+    Windows with the same tests. Linux and macOS: CI.*

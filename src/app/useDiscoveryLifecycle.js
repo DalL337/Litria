@@ -252,6 +252,15 @@ export function toDiscoverableAbsPaths(tree, root) {
 export const toJsTsAbsPaths = toDiscoverableAbsPaths;
 
 /**
+ * Whether discovery reads a file of this kind for import relationships. The
+ * Project API's capability matrix reads this
+ * (`src/app/languageCapabilities.js`), so the extension set keeps one owner.
+ */
+export function isDiscoverableFilename(filename) {
+  return typeof filename === 'string' && DISCOVERY_EXTENSIONS.test(filename);
+}
+
+/**
  * Run the discovery flow asynchronously.
  */
 async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connectionDomain, piecesById, persistedSides, onPendingEdges = null }) {

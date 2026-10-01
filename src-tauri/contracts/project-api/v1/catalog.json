@@ -10,6 +10,22 @@
       "request": "litria_files_read.request.schema.json",
       "resultIn": "litria_files_read.result.in.schema.json",
       "resultOut": "litria_files_read.result.out.schema.json"
+    },
+    {
+      "capability": "project.context.read",
+      "description": "Orientation for this project: its name, what is selected on the canvas, which documents the editor holds open or unsaved, what Litria can do for each kind of file, the operations this connection may call, the server's limits, and a summary of what the disclosure policy withholds. Paths are project-relative; withheld paths are never listed or counted.",
+      "name": "litria_project_context",
+      "request": "litria_project_context.request.schema.json",
+      "resultIn": "litria_project_context.result.in.schema.json",
+      "resultOut": "litria_project_context.result.out.schema.json"
+    },
+    {
+      "capability": "project.files.search",
+      "description": "Search project files for a literal string, in their text (target: text) or in their project-relative paths (target: path). Searches what the editor holds for documents that are open or unsaved, and the saved file otherwise. Matching is literal; case folding, when on, is ASCII only. Denied and unindexed paths are never searched, links are not followed, and .gitignore is not honoured. Results are ordered by path, then line; a search that stops early says why in truncatedBy.",
+      "name": "litria_files_search",
+      "request": "litria_files_search.request.schema.json",
+      "resultIn": "litria_files_search.result.in.schema.json",
+      "resultOut": "litria_files_search.result.out.schema.json"
     }
   ],
   "status": "draft"

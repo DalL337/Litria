@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesSearchRequest",
+  "type": "object",
+  "properties": {
+    "caseSensitive": {
+      "description": "Match case exactly. Defaults to false: ASCII letters then match either\ncase; every other character always matches exactly.",
+      "type": "boolean",
+      "default": false
+    },
+    "maxResults": {
+      "description": "At most this many matches; absent means the server default.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "maximum": 200,
+      "minimum": 1
+    },
+    "pathPrefix": {
+      "description": "Search only this file or directory (project-relative, forward\nslashes). The result's `scope` says whether it could be searched.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "maxLength": 1024,
+      "minLength": 1
+    },
+    "query": {
+      "description": "The literal text to find. No regular expressions; no line breaks.",
+      "type": "string",
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^[^\\r\\n]*$"
+    },
+    "target": {
+      "description": "What to search. Defaults to file text.",
+      "$ref": "#/$defs/SearchTarget",
+      "default": "text"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "query"
+  ],
+  "$defs": {
+    "SearchTarget": {
+      "description": "Inbound-only, but `Serialize` too so the schema shows the default.",
+      "oneOf": [
+        {
+          "description": "File contents, line by line.",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Project-relative file paths.",
+          "type": "string",
+          "const": "path"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "kind": "result",
+  "result": {
+    "selected": [
+      "src/auth.ts",
+      "src/session.ts"
+    ],
+    "omitted": 0,
+    "folder": "src",
+    "activeDocument": {
+      "path": "src/auth.ts",
+      "dirty": true
+    }
+  }
+}

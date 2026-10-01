@@ -66,6 +66,12 @@ pub(crate) fn is_ignored_dir(dir_name: &str) -> bool {
     IGNORED_DIRS.iter().any(|&ignored| dir_name.eq_ignore_ascii_case(ignored))
 }
 
+/// The directory names `is_ignored_dir` matches, for the Project API's policy
+/// summary (`litria_project_context`).
+pub(crate) fn ignored_dirs() -> &'static [&'static str] {
+    IGNORED_DIRS
+}
+
 pub(crate) fn collect_project_tree(root_path: &Path) -> Result<Vec<ProjectTreeEntry>, String> {
     let mut entries = Vec::new();
     let mut stack: Vec<(PathBuf, usize)> = vec![(root_path.to_path_buf(), 0)];

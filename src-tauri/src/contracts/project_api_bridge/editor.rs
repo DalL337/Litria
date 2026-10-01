@@ -19,7 +19,6 @@ use crate::contracts::project_api::files_read::{
 /// Opaque buffer revisions stay short; the owner chooses the format.
 pub(crate) const MAX_REVISION_LENGTH: usize = 128;
 /// Buffer index entries per reply (brief §10). More are counted, not listed.
-#[allow(dead_code)] // litria_files_search (build plan P3) is its consumer; P2 delivers the contract.
 pub(crate) const MAX_INDEX_ENTRIES: u32 = 500;
 /// Line numbers and counts are `u32` in Rust; the schema says so explicitly,
 /// because a `uint32` format is only an annotation to a validator.
@@ -151,7 +150,7 @@ pub(crate) struct BufferRange {
     pub end_line: u32,
 }
 
-fn check_path(path: &str) -> Result<(), ContractError> {
+pub(crate) fn check_path(path: &str) -> Result<(), ContractError> {
     let length = schema_length(path);
     if !(MIN_PATH_LENGTH..=MAX_PATH_LENGTH).contains(&length) {
         return Err(invalid(format!(
@@ -211,10 +210,9 @@ impl Validate for DocumentsResult {
 // editor.bufferIndex
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // litria_files_search (build plan P3) is its consumer; P2 delivers the contract.
 /// The buffer index (brief §7.3): what effective search plans its buffer
-/// coverage from. Its consumer, `litria_files_search`, arrives in build plan
-/// P3; P2 delivers the contract, the owner port and the client call.
+/// coverage from, and where `litria_project_context` finds open and unsaved
+/// documents.
 pub(crate) struct BufferIndexOp;
 
 impl BridgeOperation for BufferIndexOp {
@@ -226,7 +224,6 @@ impl BridgeOperation for BufferIndexOp {
     type Result = BufferIndexResult;
 }
 
-#[allow(dead_code)] // litria_files_search (build plan P3) is its consumer; P2 delivers the contract.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -235,7 +232,6 @@ pub(crate) struct BufferIndexRequest {
     pub max_entries: u32,
 }
 
-#[allow(dead_code)] // litria_files_search (build plan P3) is its consumer; P2 delivers the contract.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -247,7 +243,6 @@ pub(crate) struct BufferIndexResult {
     pub omitted: u32,
 }
 
-#[allow(dead_code)] // litria_files_search (build plan P3) is its consumer; P2 delivers the contract.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -263,7 +258,6 @@ pub(crate) struct BufferIndexEntry {
     pub byte_length: u32,
 }
 
-#[allow(dead_code)] // litria_files_search (build plan P3) is its consumer; P2 delivers the contract.
 impl Validate for BufferIndexResult {
     fn validate(&self) -> Result<(), ContractError> {
         if self.entries.len() > MAX_INDEX_ENTRIES as usize {

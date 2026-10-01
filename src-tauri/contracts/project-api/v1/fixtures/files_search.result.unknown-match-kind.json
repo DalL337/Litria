@@ -1,0 +1,20 @@
+{
+  "scope": "project",
+  "matches": [
+    {
+      "kind": "symbol",
+      "path": "a.ts"
+    }
+  ],
+  "truncated": false,
+  "truncatedBy": [],
+  "skipped": {
+    "tooLarge": 0,
+    "notText": 0,
+    "unreadable": 0,
+    "unreadableDirectories": 0,
+    "buffersNotSearched": 0
+  },
+  "filesSearched": 0,
+  "buffersSearched": 0
+}

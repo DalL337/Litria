@@ -172,6 +172,13 @@ Rules:
   These are per-item outcomes so that the request schema and the boundary keep identical verdicts (ADR-033 decision 3).
 - **Not a confidentiality guarantee.** Source files can contain secrets no rule anticipates. Runtime-native tools bypass this policy entirely, and ADR-031 decision 5 requires the connection label to say so.
 
+> **Addendum (2026-09-30, build plan P3, found by its adversarial pass):** three refinements to how names are judged. Each was reproduced on Windows before its fix (the build plan's P3 record has the tests and their outcomes).
+> - **A name is judged by the name it would open.** Patterns match a segment with its trailing dots and spaces removed, because Windows strips them: `.env.` is `.env`, `id_rsa ` is `id_rsa`. API paths cannot carry such names, but the search walker meets them on disk, and it now applies the policy before it counts anything (it used to count them as unreadable, so a denied file was counted).
+> - **A name that passes through a link it cannot resolve is denied.** When a path cannot be resolved, it used to be looked up in the editor session under its own name. That stays true for a name with no link in it (a buffer whose file was deleted), but a name passing through a dangling link (or one whose components cannot be read) is now denied: its buffer may hold the text of a withheld file the link used to name.
+> - **A name found on disk is reported only if it still resolves to exactly itself.** Search lists directories by path, so a directory swapped for a link after its parent was listed is listed through the link. Search now checks every path it reports from disk; names from the swapped-in directory, and names no longer present, are dropped and not counted.
+>
+> The policy's classes now live in one table in `project_api/policy.rs`, which also feeds the `litria_project_context` policy summary.
+
 ## 7. The read family: `project-api` v1
 
 The operation names are those in agent brief §7. Every result carries only project-relative paths; absolute paths, including the root, never appear. The limits in §10 bound every list.
@@ -191,6 +198,15 @@ A small orientation read. It returns:
 - **Policy:** a summary naming the denied and unindexed classes, not listing files.
 
 The workspace epoch is **not** returned. The channel is already bound, and exposing the epoch would invite the model to supply it back as if it conferred authority. (The S0 exemplar returned it; this corrects that.)
+
+> **As built in build plan P3 (2026-09-30).** The committed artifacts in `src-tauri/contracts/project-api/v1/` are the contract of record. These points refine the list above:
+> - **The project name** is read from the workspace's `project` row, which records the `litria.toml` name when the project opens. It is read through the epoch-checked connection, so it is always the bound workspace's name. Without a row, the root folder's name is used.
+> - **Erratum:** "Source transformations cover JS/TS only" was stale. Picking symbols on a wire whose target is a `.py` file writes a `from … import` line (`syntaxDomain.js` `computeResolveEdits`), so Python targets report source transformations too.
+> - **Language rows are capability classes:** a language plus the exact extensions its flags hold for. Flags differ within one language: relationship discovery covers `.ts` but not `.mts`, and `.py` but not `.pyi`. Each row also reports its language server's state (`installed`, `notInstalled`, `error`, `unknown` meaning not checked yet in this session, or `none`). Diagnostics from a language server are `true` only while that server is installed. The six flags mean "available in this session". The matrix is computed in `src/app/languageCapabilities.js` from its owners' exports (`LANGUAGE_EXTENSIONS`, `isDiscoverableFilename`, `writesImportsForTarget`, the LanguageSupportDomain selectors). Editor features with no exported owner (Monaco workers, local Python providers) are recorded there with their sources.
+> - **Lists are bounded and owners can be incomplete.** Selection and open documents list at most 100 paths each, with an `omitted` count of further allowed paths. When the editor itself reported more than it listed (more than 1,000 selected files, more than 500 buffers), those could not be checked against the policy, so they are not counted. Instead, `complete: false` says the counts are lower bounds. The result sheds listed paths, never shrinks other parts, to stay within the encoded ceiling.
+> - **The policy summary** names the denied classes (`litriaState`, `versionControl`, `environmentFiles`, `keyMaterial`, `sshKeys`, `credentials`), lists the unindexed directory names except those denied wins over, and says `.gitignore` is not honoured.
+> - **The editor's three owners answer through the bridge** (`workspace.selection`, `editor.bufferIndex`, `languages.capabilities`; §8). If the bridge is not attached, the call fails with `ownerUnavailable` rather than returning a partial orientation.
+> - **A defect found while building it:** opening another project kept the previous project's canvas selection and selected group. Piece and group ids repeat across projects, so the selection landed on the new project's same-id pieces, and the context would have reported a selection the user never made there. `handleOpenProjectInstance` now clears both in the same batch as the instance change. Reproduced and verified fixed with a test that runs the real hook (build plan P3 record).
 
 ### 7.2 `litria_files_read` — capability `project.files.read`
 
@@ -239,6 +255,24 @@ Per ADR-033 §6, a reader that meets an unfamiliar `kind` treats that one docume
 `.gitignore` is not honoured in v1 (§14, alternative 9). Files it lists are searched unless the policy's denied or unindexed classes exclude them, and the documentation says so.
 
 There are no cursors in v1. A truncated search is narrowed by the caller (prefix, longer query). This avoids a cursor store scoped to connection, epoch and permission generation (agent brief §7, "Reads") until measurements show it is needed.
+
+> **As built in build plan P3 (2026-09-30).** The committed artifacts in `src-tauri/contracts/project-api/v1/` are the contract of record. These points refine the text above:
+> - **A query cannot contain a line break.** Matching is within one line, so the request schema says so with a pattern, and the boundary checks the same rule.
+> - **The prefix is answered by name first.** A prefix the API cannot accept, a denied prefix, or one inside an unindexed directory returns at once with `scope` set to `prefixInvalid`, `prefixDenied` or `prefixUnindexed`; nothing is touched on disk, so nothing about existence is revealed. Otherwise the walk follows the prefix by exact names. `scope` is `prefix` when the prefix names a file or directory on disk or in the editor, and `prefixNotFound` when nothing searchable has that name, including a link, since links are not followed.
+> - **Two kinds of match.** A `text` match carries the path, line, column, preview, source and revision. A `path` match carries only the path and its source (`editor` when the editor holds the document open or unsaved). It has no line, column or revision, because it reports a name, not text.
+> - **One pass in path order.** Disk files and the editor's buffers are visited as one sequence, ordered by path. The reported matches are therefore always the first ones in path order, and the search stops as soon as `maxResults` matches come before everything left to visit.
+> - **Buffer text is fetched when the walk reaches it.** It arrives in pages of up to 20 buffers, each buffer in line-aligned chunks of at most 256 KiB (the bridge's per-document ceiling). Special cases:
+>   - A buffer with a line longer than one chunk is counted as too large: v1 cannot fetch part of a line.
+>   - A buffer whose text changes between chunks is not searched.
+>   - A buffer the editor has let go of between the index and the page (saved and closed) is read from disk.
+>   - A page that fails leaves its buffers not searched.
+>   - `workspaceChanged`, or a reply that misanswers its page, fails the whole call.
+> - **Coverage accounting.**
+>   - Buffers not yet reached when a work limit stops the search (time, files) count as not searched (`bufferCoverage`).
+>   - Buffers not yet reached when the result limit stops it do not count: they come after every reported match, so nothing they hold could have been reported.
+>   - When the editor holds more buffers than its index lists, `bufferCoverage` is reported without a count. Unlisted buffers cannot be checked against the policy, and a denied one must never be counted.
+> - **The result** reports `truncated` with every limit that applied (`truncatedBy`: `results`, `filesScanned`, `timeBudget`, `bufferCoverage`, `responseSize`), counts skipped files by reason (too large, not text, unreadable, unreadable directories, buffers not searched), and reports how many files and buffers were searched.
+> - **Names reported from disk are re-checked** (§6 addendum): a path is reported only if it still resolves to exactly itself.
 
 ### 7.4 `litria_graph_query` — capability `project.graph.read` (semantics; built after the first read set)
 
@@ -336,6 +370,11 @@ Tab ids and piece ids are mapped to paths inside the bridge; they never leave it
 - **Buffer lookups use the document's identity.** Rust looks a document up by its canonical project-relative path when the file exists, and by the requested path otherwise, after the policy has passed both. A case variant on a case-insensitive volume, or an in-project link, therefore finds the buffer of the file it names; the result still reports the requested path. Disk reads, when the session holds no buffer, repeat every check of §5.
 - **Debug builds only, until track T.** The three bridge commands and the frontend hook exist only in debug builds, like `project_api_dev_call`, their only consumer before an external transport.
 
+**As built in build plan P3 (2026-09-30).** Two more operations, under the same rules:
+- **`workspace.selection`** answers `{ selected, omitted, folder?, activeDocument? }`. `selected` lists the selected pieces' file paths, in path order and without duplicates, up to the requested `maxPaths` (at most 1,000) and within the reply ceiling; the rest are counted in `omitted`. `folder` is the selected group's folder, for folder groups only. `activeDocument` is the focused pane's document with its unsaved state (EditorDomain's `getActiveSessionDocument`). The bridge maps piece and group ids to paths (`selectionSnapshot`); no id leaves it. A path longer than the contract allows is counted, never sent. The same rule now applies to `editor.bufferIndex`, where such a path used to fail the whole reply.
+- **`languages.capabilities`** answers `{ languages }` with up to 32 capability rows (§7.1 addendum), computed by `src/app/languageCapabilities.js`.
+- **Readiness covers the selection too.** The bridge answers for a hydrated load only (§4.3), and the open handler now clears the selection in the same batch as the instance change (§7.1 addendum), so no render pairs a new project with an old selection.
+
 ## 9. Errors and outcomes
 
 **Request-level errors** use the family's contract error type. Its `code` is one of:
@@ -416,6 +455,18 @@ Byte budgets measure encoded UTF-8 bytes. The schema's `maxLength` counts code p
 
 The bridge applies the same shrink-to-fit rule to its pages. It measures each page's encoded size and shrinks a slice (fewer lines, then a cut line) rather than exceed the reply ceiling. The ceiling is sized so that ordinary text at the per-document ceiling fits in one page. Escape-heavy text takes more pages, or arrives truncated, but never overflows.
 
+> **Addendum (2026-09-30, build plan P3): limits added, and the first measurements.** The values live in code (`project_api/search.rs`, `contracts/project_api_bridge/`); `litria_project_context` reports them, so this note does not restate the ones above.
+> - **New limits.**
+>   - The search walker stops after examining 100,000 directory entries, reported as `filesScanned`. This bounds its memory when a single directory is enormous.
+>   - Bridge replies list at most 1,000 selected paths and 32 language rows.
+>   - A search's time budget can be exceeded by at most one bridge deadline, when a page request starts just before the budget runs out.
+> - **Measurements** (Windows 10, NTFS; the search service called directly, with no editor buffers; the build plan's P3 record has the full table and method):
+>   - **Response size.** 200 text matches with previews encode to 42–50 KB, about an eighth of the 384 KiB ceiling; 200 path matches, about 20 KB. Escape-heavy previews remain the case the ceiling exists for.
+>   - **Time is the limit that binds text search.** Each file costs about 0.3 ms in a release build (0.45–1 ms in a debug build); the time is spent resolving the path, opening the file and checking the open handle. Within 2 s, text search covers about 7,000–7,800 small files (release) or about 4,500–4,900 (debug), so searches of larger trees end on `timeBudget`, never on the 20,000-file limit. Path search reads no files: it walks 20,000 entries in about 70 ms (release) and stops on `filesScanned`.
+>   - **This repository.** A clean copy (815 searchable files) is searched completely: 260–380 ms (release), 0.8–0.9 s (debug).
+>   - **`.gitignore` matters more than expected (evidence for §15 question 2).** The working tree of this repository holds 5,855 walkable files, of which 840 are tracked. The rest are ignored by `.gitignore` without being unindexed: other worktrees, release source maps, bundled resources and research notes. A rare-word text search there ended on the time budget after 355–582 files, before it reached `src/`, because dot-directories sort first.
+>   - **Proposed next steps, not decided.** Either honour `.gitignore` (a dependency decision for the `ignore` crate) or give walked files a lighter per-file check path; re-measure after either. Small-context model budgets stay with track T.
+
 ## 11. Versioning and compatibility
 
 - Both families start at `apiVersion` 1. S0's version 0 was the exemplar and is deleted when v1 lands.
@@ -460,7 +511,7 @@ The write contract is written after the reads land. Today's inspection found the
 ## 15. Open questions
 
 1. User-configurable exclusions: which preference, and in which slice? They can only add restrictions (§6).
-2. `.gitignore`-aware search: adopt the `ignore` crate (a dependency change) once P3's measurements show the need?
+2. `.gitignore`-aware search: adopt the `ignore` crate (a dependency change) once P3's measurements show the need? *(2026-09-30: they do, on a real working tree — §10 addendum. Owner decision pending.)*
 3. Should `.env.example` and similar templates become readable by default? v1 denies them.
 4. Multiple windows: bridge requests target the main window. Revisit if Litria gains project windows.
 5. Diagnostics store (§7.5): Rust LSP-bridge cache or JS store, decided in its slice with the freshness evidence.

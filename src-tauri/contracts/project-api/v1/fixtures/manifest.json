@@ -216,6 +216,204 @@
       "expect": "reject",
       "errorCode": "invalidParams",
       "note": "Revisions are strings, never null."
+    },
+    {
+      "file": "project_context.request.json",
+      "operation": "litria_project_context",
+      "message": "request",
+      "expect": "accept",
+      "note": "No parameters."
+    },
+    {
+      "file": "project_context.request.unknown-field.json",
+      "operation": "litria_project_context",
+      "message": "request",
+      "expect": "reject",
+      "note": "Unknown fields are rejected; in particular, a caller cannot supply an epoch.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "project_context.result.json",
+      "operation": "litria_project_context",
+      "message": "result",
+      "expect": "accept",
+      "note": "Every optional part, language-server state and denied class, exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "project_context.result.unknown-denied-class.json",
+      "operation": "litria_project_context",
+      "message": "result",
+      "expect": "reject",
+      "note": "An unfamiliar denied class must never read as a known one.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.minimal.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "accept",
+      "note": "target, caseSensitive and maxResults take their defaults."
+    },
+    {
+      "file": "files_search.request.full.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "accept",
+      "note": "Every field explicit, at the result ceiling."
+    },
+    {
+      "file": "files_search.request.null-optional.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "accept",
+      "note": "null for an optional field reads as absent."
+    },
+    {
+      "file": "files_search.request.null-target.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "target is defaulted when absent, never null.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.missing-query.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "query is required.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.empty-query.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "A query has at least one character.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.query-over-length.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "At most 256 characters.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.query-max-length-non-ascii.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "accept",
+      "note": "256 code points (1,024 UTF-8 bytes): lengths count code points, never bytes."
+    },
+    {
+      "file": "files_search.request.query-over-length-non-ascii.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "257 code points.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.query-line-feed.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "A query is matched within one line, so it cannot contain a line break.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.query-carriage-return.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "Nor a carriage return.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.query-tab.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "accept",
+      "note": "Other control characters, a tab included, are literal text."
+    },
+    {
+      "file": "files_search.request.unknown-target.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "Only text and path.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.max-results-zero.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "At least one result.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.max-results-over-ceiling.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "At most 200.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.empty-prefix.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "A prefix has at least one character.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.request.invalid-prefix-syntax.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "accept",
+      "note": "Not a request error: answered with scope prefixInvalid, so the boundary and the schema keep identical verdicts."
+    },
+    {
+      "file": "files_search.request.unknown-field.json",
+      "operation": "litria_files_search",
+      "message": "request",
+      "expect": "reject",
+      "note": "Unknown fields are rejected.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.result.json",
+      "operation": "litria_files_search",
+      "message": "result",
+      "expect": "accept",
+      "note": "Both match kinds, both sources, every truncation reason, exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "files_search.result.unknown-match-kind.json",
+      "operation": "litria_files_search",
+      "message": "result",
+      "expect": "reject",
+      "note": "An unfamiliar match kind must never read as a known one.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.result.null-revision.json",
+      "operation": "litria_files_search",
+      "message": "result",
+      "expect": "reject",
+      "note": "Revisions are strings, never null.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "files_search.result.additive-field.json",
+      "operation": "litria_files_search",
+      "message": "result",
+      "expect": "accept",
+      "note": "Outputs are read tolerantly: unknown fields are ignored."
     }
   ]
 }
