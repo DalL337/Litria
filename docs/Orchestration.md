@@ -174,6 +174,11 @@ marked below.
 - Owns: language-pack prerequisite detection, canonical install-status state model,
   language support availability selectors, install/activate lifecycle orchestration.
 - Depends on: infrastructure adapters only (runtime/process detection); no UI imports.
+- Related read model: `src/app/languageCapabilities.js` (pure, no state) composes the
+  per-file-kind capability matrix the Project API reports, from this domain's selectors
+  and the owners' exported predicates (`editorLanguage.LANGUAGE_EXTENSIONS`,
+  `useDiscoveryLifecycle.isDiscoverableFilename`, `syntaxDomain.writesImportsForTarget`).
+  *(Added 2026-09-30, Project API build plan P3.)*
 
 13. `SyntaxDomain`
 - Module: `src/app/syntaxDomain.js` — wired via `useSyntaxDomainLifecycle` in App.jsx.
@@ -249,10 +254,13 @@ marked below.
 - Does not own: the disclosure policy (Rust only), any write, the editor engine (it
   reads the editor session, never Monaco), the app's own UI call paths (presentation
   keeps using domain selectors and commands — contract brief §1).
-- Depends on: read-only owner selectors (EditorDomain's `getSessionDocumentsByPath`;
-  SelectionDomain, GroupDomain, SyntaxDomain and LanguageSupportDomain selectors join
-  in later slices), `dbStorage.getWorkspaceEpoch`, and the hydration signal
-  `useProjectPersistence` returns. No UI imports, no state writes.
+- Depends on: read-only owner selectors (EditorDomain's `getSessionDocumentsByPath`
+  and `getActiveSessionDocument`; SelectionDomain's selected ids, PieceDomain's
+  pieces and GroupDomain's groups, passed in by the shell and mapped to paths by
+  `selectionSnapshot`; the capability matrix in `src/app/languageCapabilities.js`
+  over LanguageSupportDomain's selectors; SyntaxDomain joins in the graph slice),
+  `dbStorage.getWorkspaceEpoch`, and the hydration signal `useProjectPersistence`
+  returns. No UI imports, no state writes. *(Updated 2026-09-30, build plan P3.)*
 - Design: `docs/plans/agent-integration/brief-project-api-contract.md` §4.3, §8.
 
 ## 2.5 Presentation Layer
