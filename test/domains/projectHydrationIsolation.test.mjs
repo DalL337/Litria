@@ -74,6 +74,7 @@ async function mount(readFile) {
   function Harness() {
     const [projectInstance, setProject] = useState(null);
     const [pieces, setPieces] = useState([]);
+    const [viewportOffsetX, setViewportOffsetX] = useState(0);
     const piecesById = useMemo(() => new Map(pieces.map((piece) => [piece.id, piece])), [pieces]);
     const session = useEditorSession();
     const signals = useProjectPersistence({
@@ -86,11 +87,11 @@ async function mount(readFile) {
       closeTab: session.closeTab, configurePersistence: session.configurePersistence,
       setProjectInstanceId: session.setProjectInstanceId,
       projectDomain,
-      viewportScale: 1, viewportOffsetX: 0, viewportOffsetY: 0,
+      viewportScale: 1, viewportOffsetX, viewportOffsetY: 0,
       setViewportScale: noop, setViewportOffsetX: noop, setViewportOffsetY: noop,
       setConnections: noop, setNextConnectionIdValue: noop, writeProjectFile: noop
     });
-    latest = { projectInstance, setProject, pieces, setPieces, session, ...signals };
+    latest = { projectInstance, setProject, pieces, setPieces, setViewportOffsetX, session, ...signals };
     return null;
   }
   const root = createRoot(dom.document.createElement('div'));
@@ -199,5 +200,87 @@ test('a cancelled loader from the previous load cannot let B restore before its 
   const reply = await readThroughBridge(harness, 'main.ts');
   assert.ok(!reply.includes('project-A'), `the bridge returned A text: ${reply}`);
   assert.equal(JSON.parse(reply).result.documents[0].text, 'project-B: main.ts on disk\n');
+  await harness.unmount();
+});
+
+// ---------------------------------------------------------------------------
+// P4 gate item 7 (2026-10-01): the two P2 carry-overs.
+// ---------------------------------------------------------------------------
+
+/**
+ * Records Tauri commands for the duration of `body`. dbStorage reaches Tauri
+ * through `@tauri-apps/api/core`, whose `invoke` calls this window hook.
+ */
+async function recordingInvokes(body) {
+  const commands = [];
+  const previous = window.__TAURI_INTERNALS__;
+  window.__TAURI_INTERNALS__ = {
+    invoke: async (command) => { commands.push(command); return null; },
+    transformCallback: () => 0,
+  };
+  try {
+    await body(commands);
+  } finally {
+    window.__TAURI_INTERNALS__ = previous;
+  }
+}
+
+test('a cancelled loader from the previous load cannot open B\'s persistence early', async () => {
+  // P2 planted a mistake here that no test caught: a cancelled loader marking
+  // the shared "loaded" flag. The flag also gates viewport and position
+  // persistence, so a stale loader would let B write state before B's own
+  // contents had loaded. B must stay shut until its own load completes.
+  await recordingInvokes(async (commands) => {
+    const pending = new Map();
+    const readFile = (root, file) => new Promise((resolve) => {
+      pending.set(`${root}/${file}`, () => resolve(`${root}: ${file} on disk\n`));
+    });
+    const release = async (key) => {
+      const resolve = pending.get(key);
+      assert.ok(resolve, `a read of ${key} is pending`);
+      pending.delete(key);
+      await act(async () => { resolve(); });
+    };
+    const writable = (name) => ({ ...project(name, [{ id: 1, filePath: 'main.ts' }], [1]), readOnly: false });
+    const harness = await mount(readFile);
+
+    await harness.open(writable('project-A'));
+    await harness.open(writable('project-B'));
+    await release('project-A/main.ts');
+
+    // The user pans B while B's own read is still pending.
+    await act(async () => harness.get().setViewportOffsetX(120));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+    assert.deepEqual(commands.filter((c) => c === 'db_save_viewport'), [], 'B saved its viewport before its contents loaded');
+
+    // Once B has loaded, its persistence opens as normal.
+    await release('project-B/main.ts');
+    await act(async () => harness.get().setViewportOffsetX(160));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+    assert.equal(commands.filter((c) => c === 'db_save_viewport').length, 1);
+    await harness.unmount();
+  });
+});
+
+test('discarding an edit also resets the canvas piece\'s copy of it', async () => {
+  // Every edit is mirrored onto the canvas piece (`onWorkingCodeChange`).
+  // Discard reset only the editor tab, so the piece kept the discarded text:
+  // the root of P2's peer-review finding F4, where a later restore brought it
+  // back as an unsaved edit in another project.
+  const harness = await mount(async (root, file) => `${root}: ${file} on disk\n`);
+  await harness.open(project('project-A', [{ id: 1, filePath: 'main.ts' }, { id: 2, filePath: 'util.ts' }], [1, 2]));
+  const disk = 'project-A: main.ts on disk\n';
+  const pieceText = (id) => harness.get().pieces.find((piece) => piece.id === id).workingCode;
+
+  await act(async () => harness.get().session.updateWorkingCode(1, 'an edit to discard\n'));
+  assert.equal(pieceText(1), 'an edit to discard\n', 'the edit reached the piece');
+  await act(async () => harness.get().session.discardTab(1));
+  assert.equal(pieceText(1), disk, 'discarding one tab resets its piece');
+
+  await act(async () => harness.get().session.updateWorkingCode(1, 'another edit\n'));
+  await act(async () => harness.get().session.updateWorkingCode(2, 'and one more\n'));
+  await act(async () => harness.get().session.discardAllTabs());
+  assert.equal(pieceText(1), disk, 'discarding all resets every piece');
+  assert.equal(pieceText(2), 'project-A: util.ts on disk\n');
   await harness.unmount();
 });

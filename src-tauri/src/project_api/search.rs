@@ -1280,6 +1280,38 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// P4 gate item 6: the editor holds a buffer under a case variant of the
+    /// file's name. On a case-insensitive volume (Windows, default macOS) the
+    /// variant names the same file, so the document is searched once, in its
+    /// buffer, under the name on disk — its disk text never. On a
+    /// case-sensitive volume (Linux) the variant is a different document. Each
+    /// OS asserts the volume kind it expects, so neither branch can pass by
+    /// skipping (the case test in files_read used to return early silently).
+    #[test]
+    fn a_case_variant_buffer_is_the_same_document_only_on_a_case_insensitive_volume() {
+        let root = temp_root("case-variant");
+        put(&root, "Readme.md", "disk-only\n");
+        let insensitive = root.join("README.MD").exists();
+        #[cfg(any(windows, target_os = "macos"))]
+        assert!(insensitive, "expected a case-insensitive volume on this OS");
+        #[cfg(target_os = "linux")]
+        assert!(!insensitive, "expected a case-sensitive volume on this OS");
+        let mut editor = Scripted::with(vec![doc("README.MD", "openDirty", "buffer-only\n")]);
+
+        let in_buffer = run(&root, &query("buffer-only"), &mut editor);
+        let on_disk = run(&root, &query("disk-only"), &mut editor);
+
+        if insensitive {
+            assert_eq!(hits(&in_buffer), [hit("Readme.md", 1, 1, Editor)]);
+            assert!(hits(&on_disk).is_empty(), "the disk copy of a buffered document was searched");
+            assert_eq!((in_buffer.files_searched, in_buffer.buffers_searched), (0, 1));
+        } else {
+            assert_eq!(hits(&in_buffer), [hit("README.MD", 1, 1, Editor)]);
+            assert_eq!(hits(&on_disk), [hit("Readme.md", 1, 1, Disk)]);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_dirty_buffer_whose_file_was_deleted_is_searched_in_the_editor() {
         let root = temp_root("buffer-only");
