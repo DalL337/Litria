@@ -100,6 +100,15 @@ async function invokeDb(command, payload = {}, { epoch } = {}) {
 // Project lifecycle
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Check that a path could be opened as a project, without opening anything.
+ * Rejects with the same error `dbOpenProject` would refuse it with first (not
+ * a directory). Run it BEFORE tearing the current project down.
+ */
+export async function dbCheckProjectPath(path) {
+  await invokeDb('db_check_project_path', { path });
+}
+
 /** Open a project (handles returning, migration, and bootstrap). Returns ProjectState. */
 export async function dbOpenProject(path) {
   const state = await invokeDb('db_open_project', { path });

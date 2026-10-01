@@ -1289,6 +1289,7 @@ function App() {
   const {
     handleCreateProjectInstance,
     handleOpenProjectInstance,
+    handleSwitchProject,
     handleOpenFileInstance,
     handleNewFileInstance,
     handleMenuOpenProject,
@@ -1499,6 +1500,8 @@ function App() {
               buildLogDomain={buildLogDomain}
               buildLogActions={buildLogActions}
             />
+            {/* A project open that fails after teardown lands here; its toast must be visible. */}
+            <ToastViewport />
           </div>
         </WorkspaceProvider>
       </PlatformProvider>
@@ -1527,7 +1530,7 @@ function App() {
             currentProjectName={projectInstance.name}
             currentProjectRootPath={projectInstance.rootPath}
             recents={recents}
-            onOpen={handleOpenProjectInstance}
+            onOpen={handleSwitchProject}
           />
         }
       >
