@@ -380,6 +380,28 @@ mod tests {
         vec!["litria_project_context".into()]
     }
 
+    /// Codex review F2 (2026-10-01): the selected folder is a DIRECTORY, so it
+    /// is judged as one — a folder the user withholds (`private/`) or named
+    /// like an environment template is never named in the summary.
+    #[test]
+    fn a_withheld_selected_folder_is_not_named() {
+        let _serial = db::serial_guard();
+        let _user = crate::project_api::policy::tests::Withholding::patterns("private/");
+        let root = temp_root("withheld-folder");
+        put(&root, "private/plan.md");
+        put(&root, ".env.example/notes.md");
+        put(&root, "src/a.ts");
+        let epoch = open(&root, None);
+        for (folder, shown) in [("private", false), (".env.example", false), ("src", true)] {
+            let mut editor = Scripted {
+                folder: Some(folder.into()),
+                ..Scripted::default()
+            };
+            let result = handle_with(&context_for(&epoch), &mut editor, operations(), MAX_RESPONSE_BYTES).unwrap();
+            assert_eq!(result.selection.folder.is_some(), shown, "{folder}");
+        }
+    }
+
     #[test]
     fn orients_without_an_epoch_or_an_absolute_path() {
         let _serial = db::serial_guard();
