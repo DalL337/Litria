@@ -493,6 +493,6 @@ Done on acceptance (2026-09-30, PR #85). The items below are kept as written:
 
 These were found during the 2026-09-30 inspection and are tracked separately. They are not scheduled here:
 
-- `delete_project_path` checks `is_symlink()` on an already-canonicalized path, so deleting an in-project link to an in-project directory would remove the directory itself. `move_project_path` resolves its source the same way, so moving a link would move its target (brief §16). Both are confirmed by reading the code, not reproduced, and belong in one separate fix.
+- `delete_project_path` checks `is_symlink()` on an already-canonicalized path, so deleting an in-project link to an in-project directory would remove the directory itself. `move_project_path` resolves its source the same way, so moving a link would move its target (brief §16). Both are confirmed by reading the code, not reproduced, and belong in one separate fix. *(Fixed 2026-09-30 in PR #88. That fix also covers `remove_empty_directory` and a dangling link at the destination of a cross-device copy. Status: reproduced on all three platforms, then verified fixed on all three; see Agents/docs/adversarial-check-policy.md, learned flaw 6.)*
 - `docs/rust-module-ownership.md` and `docs/rust-command-contracts.md` are stale (P1 refreshes only the entries it touches).
 - The Domain Register omits `buildLogDomain` and `preferencesDomain`, and its introduction counts five guards where seven exist.

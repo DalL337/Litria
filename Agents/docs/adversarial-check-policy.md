@@ -97,7 +97,10 @@ and for the list of attacks. Each one names the flaw that taught it.
    parent directory swapped, a deletion, a rename, a re-creation, a
    workspace switch, state being rehydrated. Authorize the object actually
    used: the opened handle, the captured snapshot, the epoch-bound state.
-   *(Flaws 1 and 2.)*
+   Watch for a check that *returns* a different object: canonicalizing
+   follows links, so its result is the link's target, not the entry that
+   was selected. A containment check that accepts the root itself also
+   accepts every alias of the root. *(Flaws 1, 2 and 6.)*
 2. **Identity and aliasing.** Can two inputs reach one object (case,
    trailing dots or spaces, links, hard links, alternate data streams, device
    names)? Can one input reach a different object than intended? Read every
@@ -215,3 +218,25 @@ Each entry comes from a real finding and records its final status.
    minimum per-document budget that holds the largest UTF-8 character.
    *Status: reproduced on Windows; verified fixed on Windows (local run)
    and on Linux and macOS (CI).*
+6. **The check returned a different object than the one selected**
+   (2026-09-30, PR #88, high: data loss). Delete, move and "remove empty
+   directory" resolved their path through the canonicalizing read
+   resolver, which follows links, and then acted on the result. Deleting a
+   link deleted its target, and a link back to the project root deleted the
+   whole project, because the containment check accepts the root itself.
+   Moving a link moved its target. A dangling link reported success on
+   delete but stayed. While fixing it, one more variant turned up: the
+   cross-device copy fallback wrote *through* a dangling link at the
+   destination. The fix resolves the parent and keeps the final entry as
+   named, so a link is the object acted on, and never the root. No adversary
+   was needed: an ordinary project containing a link was enough. This flaw
+   predates the policy (the 2026-08-09 initial import) and was found during
+   P1 inspection.
+   *Status: the junction variant was reproduced on Windows by a second
+   agent's harness and again by failing-first tests. Native symlinks and
+   the destination variant were reproduced on Linux and macOS (CI on a
+   tests-only commit). All cases are verified fixed on Windows (local run)
+   and on Linux and macOS (CI). A residual is recorded but not pursued: a
+   parent directory swapped for a link while the operation runs. That needs
+   a process with the user's own write access, which could already delete
+   those files itself.*
