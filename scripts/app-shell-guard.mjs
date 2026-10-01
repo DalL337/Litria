@@ -69,6 +69,9 @@ const SHELL_COMPOSITION_MANIFEST = new Set([
   // adapter's write-failure observer to the project lifecycle; pure state in
   // project/persistenceNotices.js (node-tested).
   './project/usePersistenceNotices',
+  // Project API owner bridge (build plan P2) — attaches the editor session to
+  // Rust once a load has hydrated; the factory is pure (src/app/projectApiBridge.js).
+  './app/useProjectApiBridge',
   './terminal/useTerminalLifecycle',
   './app/usePythonLspLifecycle',
   // Python first-open offers (ADR-020 Slice 4) — per-open lifecycle hook,

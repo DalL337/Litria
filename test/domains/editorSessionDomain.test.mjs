@@ -17,7 +17,8 @@ import {
   PANE_RATIO_DEFAULT,
   MAX_OPEN_TABS,
   MAIN_PANE,
-  SIDE_PANE
+  SIDE_PANE,
+  getSessionDocumentsByPath
 } from '../../src/editor/editorSessionDomain.js';
 
 const piece = (id, filename, code = `// ${filename}`) => ({ id, filename, code });
@@ -395,4 +396,55 @@ test('save-tab with a non-string savedCode cannot advance the saved baseline', (
   s = reduce(s, { type: 'SAVE_TAB', tabId: 1, savedCode: null });
   assert.equal(s, before);
   assert.equal(s.tabsById[1].code, baseline);
+});
+
+// ── Session documents by path (Project API bridge read selector, P2) ──
+
+test('session documents: open, closed-dirty and closed-clean entries, by path', () => {
+  let s = openPieces(initial, piece(1, 'src/a.ts', 'a'), piece(2, 'src/b.ts', 'b'), piece(3, 'src/c.ts', 'c'));
+  s = reduce(s, { type: 'UPDATE_WORKING_CODE', tabId: 2, workingCode: 'b edited' });
+  s = reduce(s, { type: 'CLOSE_TAB', tabId: 2 });
+  s = reduce(s, { type: 'CLOSE_TAB', tabId: 3 });
+  const docs = getSessionDocumentsByPath(s);
+  assert.deepEqual(docs.get('src/a.ts'), { tabId: 1, path: 'src/a.ts', state: 'open', dirty: false, text: 'a' });
+  assert.deepEqual(docs.get('src/b.ts'), { tabId: 2, path: 'src/b.ts', state: 'closedDirty', dirty: true, text: 'b edited' });
+  assert.equal(docs.get('src/c.ts').state, 'closedClean');
+  assert.equal(docs.has('src/missing.ts'), false);
+});
+
+test('session documents: dirtiness follows the session rule (CRLF-insensitive)', () => {
+  // A restored snapshot keeps its text as stored (CRLF); the editor's edits
+  // normalize to LF. Same content, so not dirty — and the text is returned as held.
+  let s = reduce(initial, {
+    type: 'OPEN_FROM_SNAPSHOT',
+    tabs: [{ id: 1, pieceId: 1, filename: 'a.txt', code: 'x\r\ny\r\n', workingCode: 'x\r\ny\r\n' }],
+    activeTabId: 1
+  });
+  s = reduce(s, { type: 'UPDATE_WORKING_CODE', tabId: 1, workingCode: 'x\r\ny\r\n' });
+  const doc = getSessionDocumentsByPath(s).get('a.txt');
+  assert.equal(doc.dirty, false);
+  assert.equal(doc.text, 'x\ny\n');
+  const restored = getSessionDocumentsByPath(reduce(initial, {
+    type: 'OPEN_FROM_SNAPSHOT',
+    tabs: [{ id: 1, pieceId: 1, filename: 'a.txt', code: 'x\r\ny\r\n', workingCode: 'x\r\ny\r\n' }],
+    activeTabId: 1
+  })).get('a.txt');
+  assert.equal(restored.text, 'x\r\ny\r\n', 'restored text is returned as the session holds it');
+});
+
+test('session documents: a path held twice resolves to the open, then the dirty entry', () => {
+  // A deleted file's closed entry lingers; a new piece re-created at the same path opens.
+  const state = {
+    ...initial,
+    openTabIds: [7],
+    tabsById: {
+      3: { id: 3, pieceId: 3, filename: 'a.txt', code: 'old', workingCode: 'old edit', paneId: MAIN_PANE },
+      7: { id: 7, pieceId: 7, filename: 'a.txt', code: 'new', workingCode: 'new', paneId: MAIN_PANE }
+    }
+  };
+  assert.equal(getSessionDocumentsByPath(state).get('a.txt').tabId, 7);
+  const closed = { ...state, openTabIds: [] };
+  assert.equal(getSessionDocumentsByPath(closed).get('a.txt').tabId, 3, 'the dirty one beats the clean one');
+  const backslashed = { ...initial, tabsById: { 1: { id: 1, filename: 'src\\a.txt', code: '', workingCode: 'x' } } };
+  assert.equal(getSessionDocumentsByPath(backslashed).has('src/a.txt'), true);
 });

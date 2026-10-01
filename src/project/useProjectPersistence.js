@@ -92,6 +92,15 @@ export function useProjectPersistence({
   // does not wipe the canvas, so a per-load pass keyed on the instance can
   // run the previous project's state against the new project's workspace.
   const [hydratedLoad, setHydratedLoad] = useState(null);
+  // The load (`_dbState`) whose file contents finished loading — set only by
+  // that load's own reader, so a slower reader from the previous load can
+  // never mark this one. (`hasLoadedPiecesRef` is a ref and is not.)
+  const [piecesLoadedFor, setPiecesLoadedFor] = useState(null);
+  // The load whose hydration is complete: contents loaded AND the editor
+  // session restored for it. Read-only signal for the Project API bridge,
+  // which may answer for a project only from this point (contract brief
+  // §4.3); it compares it with the instance's own `_dbState`.
+  const [sessionReadyFor, setSessionReadyFor] = useState(null);
 
   const normalizeId = useCallback((value) => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -316,6 +325,7 @@ export function useProjectPersistence({
         setPieces(updated);
       }
       hasLoadedPiecesRef.current = true;
+      if (isMounted) setPiecesLoadedFor(dbState);
     })();
 
     return () => { isMounted = false; };
@@ -342,14 +352,27 @@ export function useProjectPersistence({
   useEffect(() => {
     if (!projectInstance?.rootPath || !projectInstance?.instanceId) return;
     if (projectInstance.manifestPath === null) return;
-    if (hasRestoredEditorSessionRef.current) return;
+    // Hydration is complete for this load once its own contents have loaded
+    // and the session has been restored for it — here, or by an earlier run
+    // of this effect (contract brief §4.3; the Project API bridge waits on it).
+    const loadToken = projectInstance._dbState;
+    const markSessionReady = () => {
+      if (loadToken && piecesLoadedFor === loadToken) setSessionReadyFor(loadToken);
+    };
+    if (hasRestoredEditorSessionRef.current) {
+      markSessionReady();
+      return;
+    }
     if (!hasLoadedPiecesRef.current) return;
     hasRestoredEditorSessionRef.current = true;
     let isMounted = true;
 
     (async () => {
       const dbState = projectInstance._dbState;
-      if (!dbState?.editorState) return;
+      if (!dbState?.editorState) {
+        if (isMounted) markSessionReady();
+        return;
+      }
 
       const es = dbState.editorState;
       const rawOpenIds = es.open_tab_piece_ids
@@ -385,12 +408,14 @@ export function useProjectPersistence({
         // The context's setter clamps/defaults — garbage restores to 50/50.
         setPaneSplitRatio(Number(es.pane_split_ratio));
       }
+      if (isMounted) markSessionReady();
     })();
 
     return () => { isMounted = false; };
   }, [
     openFromSnapshot,
     piecesById,
+    piecesLoadedFor,
     projectInstance?.instanceId,
     projectInstance?.rootPath,
     projectInstance?.manifestPath,
@@ -669,5 +694,5 @@ export function useProjectPersistence({
     });
   }, [projectInstance]);
 
-  return { persistConnectionSides, hydratedLoad };
+  return { persistConnectionSides, hydratedLoad, sessionReadyFor };
 }
