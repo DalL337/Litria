@@ -21,7 +21,9 @@ export function createPillDomain() {
       // (verified managed installs) — the click runs the callback instead of
       // the terminal; class-3 offers keep using `command` (the terminal IS
       // their consent surface).
-      addPill({ projectId, message, severity = 'info', exitCode = null, command = null, onActivated = null, action = null }) {
+      // `secondary` ({ label, run }): a small button beside the message that
+      // runs without dismissing the pill — an install's Cancel.
+      addPill({ projectId, message, severity = 'info', exitCode = null, command = null, onActivated = null, action = null, secondary = null }) {
         const pill = {
           id: nextId++,
           projectId,
@@ -31,11 +33,28 @@ export function createPillDomain() {
           command,
           onActivated,
           action,
+          secondary,
           timestamp: Date.now()
         };
         pills = [...pills, pill];
         notify();
         return pill.id;
+      },
+      // Live pills change in place (an install's progress, then "Cancelling…").
+      // Only the visible parts can change; a pill that is gone stays gone.
+      updatePill(id, { message, severity, secondary } = {}) {
+        let changed = false;
+        pills = pills.map((p) => {
+          if (p.id !== id) return p;
+          changed = true;
+          return {
+            ...p,
+            ...(message !== undefined && { message }),
+            ...(severity !== undefined && { severity }),
+            ...(secondary !== undefined && { secondary }),
+          };
+        });
+        if (changed) notify();
       },
       dismissPill(id) {
         pills = pills.filter((p) => p.id !== id);

@@ -70,3 +70,32 @@ test('PillDomain defaults severity to info', () => {
   domain.commands.addPill({ projectId: 'p1', message: 'test' });
   assert.equal(domain.selectors.getPills()[0].severity, 'info');
 });
+
+test('PillDomain updatePill changes a live pill in place and leaves a gone one gone', () => {
+  const domain = createPillDomain();
+  let notified = 0;
+  domain.subscribe(() => { notified += 1; });
+  const run = () => {};
+  const id = domain.commands.addPill({
+    projectId: 'p1',
+    message: 'Installing rust-analyzer',
+    secondary: { label: 'Cancel', run },
+  });
+  assert.equal(domain.selectors.getPills()[0].secondary.label, 'Cancel');
+
+  domain.commands.updatePill(id, { message: 'Installing rust-analyzer — 50%' });
+  let [pill] = domain.selectors.getPills();
+  assert.equal(pill.message, 'Installing rust-analyzer — 50%');
+  assert.equal(pill.secondary.run, run, 'fields not named are kept');
+  assert.equal(pill.id, id);
+
+  domain.commands.updatePill(id, { secondary: null });
+  [pill] = domain.selectors.getPills();
+  assert.equal(pill.secondary, null, 'the secondary action can be withdrawn');
+
+  domain.commands.dismissPill(id);
+  const before = notified;
+  domain.commands.updatePill(id, { message: 'late progress' });
+  assert.equal(domain.selectors.getPills().length, 0, 'a dismissed pill is not revived');
+  assert.equal(notified, before, 'and nobody is notified');
+});

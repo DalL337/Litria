@@ -10,7 +10,6 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
 
 **No frontend caller.** Every registered command can be invoked from the webview, so these are surface with no current purpose. The owner ruled on 2026-10-01 to wire them up; each leaves this list when its caller lands:
 - `greet`: the Tauri template's sample command.
-- `lsp_cancel_install`: nothing in `src/` calls it.
 - `check_scaffold_prerequisites`: nothing in `src/` calls it.
 
 The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand, from devtools or CDP.
@@ -48,7 +47,7 @@ The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand,
 |---|---|---|---|
 | `lsp_get_registry` | `src-tauri/src/commands.rs` | `src/app/useManagedServerOffers.js` |  |
 | `lsp_install_server` | `src-tauri/src/commands.rs` | `src/app/useManagedServerOffers.js`, `src/lsp/lspClient.js` |  |
-| `lsp_cancel_install` | `src-tauri/src/commands.rs` | — | **no frontend caller** |
+| `lsp_cancel_install` | `src-tauri/src/commands.rs` | `src/app/useManagedServerOffers.js`, `src/lsp/lspClient.js` | Takes the SERVER id. Cancels only the install in flight (false when none) and is honoured until extraction; the install then rejects with `lsp.install.cancelled`, never `download_failed` (wired 2026-10-01). |
 | `lsp_server_inventory` | `src-tauri/src/commands.rs` | `src/lsp/lspClient.js` |  |
 | `lsp_uninstall_server` | `src-tauri/src/commands.rs` | `src/lsp/lspClient.js` |  |
 | `lsp_reverify_server` | `src-tauri/src/commands.rs` | `src/lsp/lspClient.js` |  |

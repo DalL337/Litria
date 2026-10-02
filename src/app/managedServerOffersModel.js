@@ -82,8 +82,18 @@ export function buildServerOfferMessage(entry, platformKey) {
   );
 }
 
-export function buildInstallProgressMessage(entry) {
-  return `Installing ${entry.server} ${entry.version} — verified download in progress…`;
+export function buildInstallProgressMessage(entry, progressText = null) {
+  return progressText
+    ? `Installing ${entry.server} ${entry.version} — ${progressText}`
+    : `Installing ${entry.server} ${entry.version} — verified download in progress…`;
+}
+
+export function buildInstallCancellingMessage(entry) {
+  return `Cancelling the ${entry.server} install…`;
+}
+
+export function buildInstallCancelledMessage(entry) {
+  return `${entry.server} install cancelled — nothing was installed`;
 }
 
 export function buildInstallSuccessMessage(entry, { autoStart = false } = {}) {

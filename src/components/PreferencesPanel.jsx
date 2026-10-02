@@ -17,11 +17,14 @@ import { ROVING_KEYS, rovingTarget } from '../scaffold/wizardNavigation';
 import { prefsLoadGlobal, prefsSaveGlobal } from '../preferences/preferencesStore.js';
 import { createThemeDomain } from '../app/themeDomain';
 import {
+  lspCancelInstall,
   lspInstallServer,
   lspReverifyServer,
   lspServerInventory,
   lspUninstallServer
 } from '../lsp/lspClient.js';
+import { formatInstallProgress, isInstallCancelled } from '../lsp/installProgress.js';
+import { useInstallProgress } from '../app/useInstallProgress.js';
 import {
   formatBytes,
   groupInventoryRows,
@@ -152,6 +155,11 @@ function PreferencesPanel({
   const [serverNotice, setServerNotice] = useState('');
   const [serverBusy, setServerBusy] = useState(null);
   const [confirmingUninstall, setConfirmingUninstall] = useState(null);
+  // The server id of an install/update in flight (cancel takes the server
+  // id, not the language id) and whether Cancel was pressed for it.
+  const [installingServer, setInstallingServer] = useState(null);
+  const [cancelRequested, setCancelRequested] = useState(false);
+  const installProgress = useInstallProgress(installingServer);
 
   const reloadServers = async () => {
     try {
@@ -176,19 +184,36 @@ function PreferencesPanel({
     return () => { isMounted = false; };
   }, []);
 
-  const runServerAction = async (languageId, action, buildNotice) => {
+  const runServerAction = async (languageId, action, buildNotice, { installServer = null } = {}) => {
     setServersError('');
     setServerNotice('');
     setServerBusy(languageId);
+    setInstallingServer(installServer);
+    setCancelRequested(false);
     try {
       const result = await action();
       setServerNotice(buildNotice(result));
       await reloadServers();
     } catch (actionError) {
-      setServersError(toErrorMessage(actionError, 'Language server action failed.'));
+      if (isInstallCancelled(actionError)) {
+        setServerNotice(`${installServer} install cancelled — nothing was installed.`);
+      } else {
+        setServersError(toErrorMessage(actionError, 'Language server action failed.'));
+      }
     } finally {
       setServerBusy(null);
+      setInstallingServer(null);
+      setCancelRequested(false);
       setConfirmingUninstall(null);
+    }
+  };
+
+  const cancelServerInstall = async (serverId) => {
+    setCancelRequested(true);
+    try {
+      await lspCancelInstall(serverId);
+    } catch {
+      // The install itself reports how it ended.
     }
   };
 
@@ -635,6 +660,10 @@ function PreferencesPanel({
     const anyBusy = serverBusy !== null;
     const thisBusy = serverBusy === row.languageId;
     const confirming = confirmingUninstall === row.languageId;
+    // An install or update of this row is downloading: show its progress in
+    // the status line and offer Cancel (honoured until extraction starts).
+    const installing = thisBusy && installingServer === row.server;
+    const progressText = installing ? formatInstallProgress(installProgress) : null;
     return (
       <div key={row.languageId} className="pf-srv">
         <div>
@@ -643,7 +672,9 @@ function PreferencesPanel({
             <span className={`pf-tier ${tierClass(row)}`}>{tierBadge(row)}</span>
             {row.updateAvailable && <span className="pf-tier is-update">Update available</span>}
           </div>
-          <div className="pf-srv-status">{renderHighlighted(rowStatusLine(row))}</div>
+          <div className="pf-srv-status">
+            {progressText ? `Downloading — ${progressText}` : renderHighlighted(rowStatusLine(row))}
+          </div>
         </div>
         <div className="pf-srv-actions">
           {actions.includes('install') && (
@@ -654,7 +685,8 @@ function PreferencesPanel({
               onClick={() => runServerAction(
                 row.languageId,
                 () => lspInstallServer(row.languageId),
-                (r) => `${r.server} ${r.version} installed and verified.`
+                (r) => `${r.server} ${r.version} installed and verified.`,
+                { installServer: row.server }
               )}
             >
               {thisBusy ? 'Installing…' : 'Install'}
@@ -668,10 +700,21 @@ function PreferencesPanel({
               onClick={() => runServerAction(
                 row.languageId,
                 () => lspInstallServer(row.languageId),
-                (r) => `${r.server} updated to ${r.version} (verified).`
+                (r) => `${r.server} updated to ${r.version} (verified).`,
+                { installServer: row.server }
               )}
             >
               {thisBusy ? 'Updating…' : `Update to ${row.registryVersion}`}
+            </button>
+          )}
+          {installing && (
+            <button
+              className="pf-pill"
+              type="button"
+              disabled={cancelRequested}
+              onClick={() => cancelServerInstall(row.server)}
+            >
+              {cancelRequested ? 'Cancelling…' : 'Cancel'}
             </button>
           )}
           {actions.includes('reverify') && (

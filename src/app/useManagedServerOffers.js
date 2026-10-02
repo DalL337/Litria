@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
+  buildInstallCancelledMessage,
+  buildInstallCancellingMessage,
   buildInstallFailureMessage,
   buildInstallProgressMessage,
   buildInstallSuccessMessage,
@@ -22,6 +24,7 @@ import {
   decideServerOffer,
   matchRegistryLanguage,
 } from './managedServerOffersModel';
+import { formatInstallProgress, isInstallCancelled } from '../lsp/installProgress.js';
 
 export function useManagedServerOffers({
   projectInstance,
@@ -100,11 +103,40 @@ export function useManagedServerOffers({
           message: buildServerOfferMessage(entry, payload.platformKey),
           severity: 'info',
           action: async () => {
+            // The progress pill shows the download as it arrives and offers
+            // Cancel (lsp_cancel_install takes the SERVER id). A cancel is
+            // honoured until extraction starts; after that the install
+            // completes and reports success as usual.
+            const serverId = entry.server;
+            let cancelling = false;
             const progressId = pillDomain.commands.addPill({
               projectId,
               message: buildInstallProgressMessage(entry),
               severity: 'info',
+              secondary: {
+                label: 'Cancel',
+                run: () => {
+                  cancelling = true;
+                  pillDomain.commands.updatePill(progressId, {
+                    message: buildInstallCancellingMessage(entry),
+                    secondary: null,
+                  });
+                  invoke('lsp_cancel_install', { serverId }).catch(() => {});
+                },
+              },
             });
+            let finished = false;
+            let stopProgress = null;
+            listen('lsp:download-progress', (event) => {
+              const progress = event?.payload;
+              if (finished || cancelling || progress?.serverId !== serverId) return;
+              pillDomain.commands.updatePill(progressId, {
+                message: buildInstallProgressMessage(entry, formatInstallProgress(progress)),
+              });
+            }).then((stop) => {
+              if (finished) stop();
+              else stopProgress = stop;
+            }).catch(() => {});
             try {
               await invoke('lsp_install_server', { languageId, customUrl: null });
               pillDomain.commands.dismissPill(progressId);
@@ -128,16 +160,27 @@ export function useManagedServerOffers({
               }
             } catch (e) {
               pillDomain.commands.dismissPill(progressId);
-              const message = typeof e?.message === 'string' && e.message
-                ? e.message
-                : 'download or verification failed';
-              pillDomain.commands.addPill({
-                projectId,
-                message: buildInstallFailureMessage(entry, message),
-                severity: 'error',
-              });
+              if (isInstallCancelled(e)) {
+                pillDomain.commands.addPill({
+                  projectId,
+                  message: buildInstallCancelledMessage(entry),
+                  severity: 'info',
+                });
+              } else {
+                const message = typeof e?.message === 'string' && e.message
+                  ? e.message
+                  : 'download or verification failed';
+                pillDomain.commands.addPill({
+                  projectId,
+                  message: buildInstallFailureMessage(entry, message),
+                  severity: 'error',
+                });
+              }
               // Allow a retry offer on the next file-open this session.
               offeredKeysRef.current.delete(offer.key);
+            } finally {
+              finished = true;
+              stopProgress?.();
             }
           },
         });
