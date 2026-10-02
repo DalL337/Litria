@@ -215,6 +215,18 @@ Group changes by intent:
 - Ensure commit scope matches file set — and after committing, verify the
   files-changed count in the commit output (verification-policy Rule 3).
 - Run relevant checks/tests for code changes (verification-policy).
+- **Merging (added 2026-10-01).** `main` is protected: a PR can merge only
+  after `guard` and `cargo test (required)` pass on its head commit.
+  `cargo test (required)` reports on every PR, including when no Rust input
+  changed (see `.github/workflows/rust-tests.yml`). While a required check is
+  pending, GitHub shows the PR as `BLOCKED`.
+  - Wait until every check on the exact head commit has finished green, then
+    merge one PR per `gh pr merge` call.
+  - Never pass `--admin`. Administrators are exempt so that the direct
+    pushes in §7.2 rule 2 keep working, and `--admin` would skip the
+    protection.
+  - Origin: before the protection, GitHub showed `CLEAN` with checks still
+    pending, and two PRs merged commits nobody had checked (#94, #98).
 
 ### 7.5 Version Bump Order
 
