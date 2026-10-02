@@ -625,11 +625,27 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
   - per-node freshness from comparing each file's parsed-text revision with its effective revision;
   - the summary index state with its reasons.
 - *(Added 2026-10-01, owner decision.)* Fix the rename write that corrupts a multi-line import. `_applyRenamePlans` (`src/lsp/syntaxAdapter.js`) replaces only the first line of the import it finds (`computeImportLineForSpec` returns the statement's start line, not its end line). So renaming `utils.ts` to `core.ts` turns `import {⏎  helper,⏎  other,⏎} from './utils';` into `import { helper, other } from './core';` followed by the old statement's remaining lines, and writes that to disk for a closed file. This was reproduced on `main` (97ce1f5) by a script driving the real domain and adapter while the gate items before P4 were being fixed. It sits in the same SyntaxDomain write path P4 reads from. Reproduce it with a failing test first, then fix it.
+  > **Done in P4a (branch `fix/p4a-syntax-write-path`, 2026-10-01).**
+  >
+  > *Reproduced on 906a2eb.* Four adapter tests, against the real domain and adapter, showed the defect was wider than the multi-line case:
+  > - aliases and untracked names were dropped;
+  > - the import's quote and extension style was lost;
+  > - worst, a **discovered** import was replaced by the TODO stub. Every import found at project open is discovered, and its edge has no symbols yet.
+  >
+  > The stub rewrite also happens on tag v1.0.9: a released data-loss path, triggered by renaming or moving a file that is open in a tab.
+  >
+  > *Fixed.* Rename plans are now `respec` {old path, new path}, and `rewriteImportSpec` changes only the statement's `from` path. When no import matches, nothing is written.
 - *(Added 2026-10-01, owner decision.)* Clear the stale entries the syntax index keeps after deletes and moves. They were found while fixing the write manager's path keys and are confirmed by reading the code, not reproduced. Reproduce each one, then fix it or withdraw it:
   - **Files not on the canvas are never unregistered.** The write manager unregisters only files that map to a canvas piece. Discovery registers every discoverable file and never unregisters one that vanished. A deleted file that is indexed but not on the canvas therefore stays indexed until the project reopens.
   - **Only source-side edges are cleaned up.** `unregisterFile` breaks only edges where the file is the source. An edge where the file is the importer keeps a stale path.
   - **Delete leaves syntax edges behind.** A delete removes the canvas connections without disconnecting their syntax edges.
   - **Until these are fixed,** the graph must be built from pieces and pending edges, never from raw registrations, and must treat an edge's paths as possibly stale.
+  > **Done in P4a (2026-10-01).** All three were reproduced (five write-manager tests against the real domain, three discovery tests) and fixed; none was withdrawn.
+  > - SyntaxDomain gains `forgetFile`, with delete semantics. `unregisterFile` stays for a move's old path. With `forgetFile`, a file's own import edges go, edges into the file break, and links to wires removed with its piece go.
+  > - The write manager settles every indexed file at or under a deleted or moved path, on the canvas or not.
+  > - Discovery forgets the files its previous run registered that have vanished, unless they are held open.
+  >
+  > The graph rule above still stands: these fixes do not cover the off-canvas pending-edge set.
 - *(Added 2026-10-01, owner decision.)* Settle the two residuals that Codex's review of the gate work could not close by reading (see [Peer review of the gate work](#peer-review-of-the-gate-work-codex-2026-10-01)). Both are `suspected`. Reproduce each one, then fix it or withdraw it:
   - **The user-exclusion cache under real concurrency.**
     - The policy keeps the user's withheld paths in a process-global `OnceLock<RwLock<…>>` (`src-tauri/src/project_api/policy.rs`), but the unit tests swap in thread-local state.
