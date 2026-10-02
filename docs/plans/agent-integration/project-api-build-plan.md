@@ -658,6 +658,18 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
     - SyntaxDomain survives a project change (`useSyntaxDomainLifecycle.js`).
     - The graph is built from SyntaxDomain, so a scan that finishes after a switch could leave one project's files in the next project's graph.
     - This needs tests that control the interleaving.
+  > **Done in P4b (branch `fix/p4b-residuals`, 2026-10-01).**
+  > - **Exclusion cache: WITHDRAWN, with evidence.** The production cache is now a small type (`ExclusionsCell`), so its own code runs in tests. With real threads:
+  >   - concurrent first use loads the file once;
+  >   - readers never see a torn value while saves land;
+  >   - a poisoned lock still answers and accepts the next save.
+  >
+  >   All passed on the existing logic.
+  > - **Project-switch races: three REPRODUCED, three FIXED.**
+  >   - A discovery run still reading after a switch drew the old project's wire between the new project's same-id pieces. It could also prune the new project's wires, register the old project's files, and replace the new project's off-canvas badges. Runs are now tied to their load (`isCurrent`).
+  >   - SyntaxDomain was never reset, while each load restarts wire ids at `conn_1`. The next project's `conn_1` was linked to the previous project's edge. SyntaxDomain now has `reset()`, run on each new load.
+  >   - Overlapping opens ended on whichever finished last, and the loser skipped its teardown. Opens now run one at a time and the newest request wins. Teardown reads a live instance ref.
+- *(Found in P4b, 2026-10-01; for P4c.)* **Closing a tab drops its file from the index.** `syntaxAdapter.onFileClosed` calls `unregisterFile`, even though the file is still on disk. Until discovery runs again, wires from that file are marked broken, and the graph would report the file as not parsed. Reproduce it, then fix it (likely: re-index from disk on close) or withdraw it.
 
 ### Tests
 

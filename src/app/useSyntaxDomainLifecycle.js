@@ -14,19 +14,21 @@
  *   // inline in App.jsx before the Tier 1 debt cleanup.
  */
 
-import { useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useRef, useState } from 'react';
 import { createSyntaxDomain } from './syntaxDomain.js';
 import { createSyntaxAdapter } from '../lsp/syntaxAdapter.js';
 
 /**
  * @param {{
  *   projectRoot: string,
+ *   loadToken?: any,  identity of the current project load (projectInstance._dbState);
+ *                     a new one empties the index (see the reset effect)
  *   readProjectFile?: function,
  *   writeProjectFile?: function,
  * }} params
  * @returns {{ syntaxDomain: object, syntaxAdapter: object }}
  */
-export function useSyntaxDomainLifecycle({ projectRoot, readProjectFile, writeProjectFile }) {
+export function useSyntaxDomainLifecycle({ projectRoot, loadToken = null, readProjectFile, writeProjectFile }) {
   // Domain and adapter are singletons for the component lifetime.
   // They are recreated only if projectRoot changes (effectively on project switch).
   const syntaxDomain = useMemo(() => createSyntaxDomain(), []);
@@ -58,6 +60,19 @@ export function useSyntaxDomainLifecycle({ projectRoot, readProjectFile, writePr
       });
     });
   }, [syntaxDomain]);
+
+  // A new project load starts from an empty index. The domain outlives
+  // projects, and every load restarts canvas connection ids at conn_1, so
+  // the next project's wires were linked to the previous project's edges and
+  // its files stayed indexed (P4, 2026-10-01). Reopening the same project is
+  // a new load too: its wires are re-created with fresh ids.
+  const loadRef = useRef(loadToken);
+  useEffect(() => {
+    if (loadRef.current === loadToken) return;
+    loadRef.current = loadToken;
+    syntaxDomain.commands.reset();
+    setSyntaxConnStatuses(new Map());
+  }, [loadToken, syntaxDomain]);
 
   // Cleanup: unregister all files when the hook unmounts (project closed / app exits).
   // Currently a no-op at the JS level — GC handles closure memory.

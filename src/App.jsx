@@ -574,6 +574,8 @@ function App() {
 
   const { syntaxDomain, syntaxAdapter, syntaxConnStatuses } = useSyntaxDomainLifecycle({
     projectRoot: projectInstance?.rootPath ?? '',
+    // The same load identity discovery keys on: a new load empties the index.
+    loadToken: projectInstance?._dbState ?? null,
     readProjectFile,
     // Manager-backed + identity-stable: a churning writer identity would
     // recreate the adapter and wipe its Monaco model registry.

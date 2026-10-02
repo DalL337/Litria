@@ -180,3 +180,107 @@ test('a failed switch from the project switcher reports the error', async () => 
   assert.equal(app.renders.at(-1), 'A');
   app.unmount();
 });
+
+// ---------------------------------------------------------------------------
+// P4 (Codex residual, owner ruling 2026-10-01): opens had no fence. A second
+// open started while the first was still opening ran its own teardown and
+// open in between, so the two finished in either order: the window ended on
+// whichever open FINISHED last, not the one the user asked for last, and the
+// loser was replaced without its teardown (its terminals and language
+// servers never stopped). Opens now run one at a time, newest request wins.
+// ---------------------------------------------------------------------------
+
+/** B's database takes a while to open: it answers only when released. */
+function holdOpen(path) {
+  const inner = globalThis.__EPOCH_OPEN__;
+  let release = null;
+  globalThis.__EPOCH_OPEN__ = (p) => {
+    if (p !== path) return inner(p);
+    return new Promise((resolve, reject) => {
+      release = () => { try { resolve(inner(p)); } catch (e) { reject(e); } };
+    });
+  };
+  return () => release?.();
+}
+
+test('a second open waits for the one in flight, and the last one asked for wins', async () => {
+  resetBackend();
+  const app = mount();
+  await open(app, 'A');
+  const releaseB = holdOpen('B');
+  const before = commands().length;
+
+  let openingB;
+  let openingC;
+  await act(async () => {
+    openingB = app.launch().handleOpenProjectInstance({ rootPath: 'B' }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 0));
+    openingC = app.launch().handleOpenProjectInstance({ rootPath: 'C' }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    releaseB();
+    await openingB;
+    await openingC;
+  });
+
+  assert.equal(app.renders.at(-1), 'C', 'the window ends on the project asked for last');
+  assert.equal(globalThis.__EPOCH_BACKEND__?.workspace, 'C', 'and so does the workspace');
+  const seq = commands().slice(before).filter((c) => c === 'db_open_project' || c === 'db_close_project');
+  assert.deepEqual(seq, ['db_close_project', 'db_open_project', 'db_close_project', 'db_open_project'],
+    'A closed, B opened, B closed (its teardown ran), C opened — never interleaved');
+  app.unmount();
+});
+
+test('of several opens queued behind one in flight, only the newest runs', async () => {
+  resetBackend();
+  const app = mount();
+  await open(app, 'A');
+  const releaseB = holdOpen('B');
+  const before = commands().length;
+
+  const pending = [];
+  await act(async () => {
+    pending.push(app.launch().handleOpenProjectInstance({ rootPath: 'B' }).catch((e) => e));
+    await new Promise((r) => setTimeout(r, 0));
+    pending.push(app.launch().handleOpenProjectInstance({ rootPath: 'C' }).catch((e) => e));
+    pending.push(app.launch().handleOpenProjectInstance({ rootPath: 'D' }).catch((e) => e));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    releaseB();
+    await Promise.all(pending);
+  });
+
+  assert.equal(app.renders.at(-1), 'D');
+  const opened = globalThis.__EPOCH_CALLS__.slice(before)
+    .filter((c) => c.command === 'db_open_project').map((c) => c.payload.path);
+  assert.deepEqual(opened, ['B', 'D'], 'C was superseded before its turn and never opened');
+  app.unmount();
+});
+
+test('from the launcher, an open queued behind another tears that one down first', async () => {
+  resetBackend();
+  const app = mount(); // nothing open: the launcher
+  const releaseB = holdOpen('B');
+
+  let openingB;
+  let openingC;
+  await act(async () => {
+    openingB = app.launch().handleOpenProjectInstance({ rootPath: 'B' }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 0));
+    openingC = app.launch().handleOpenProjectInstance({ rootPath: 'C' }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    releaseB();
+    await openingB;
+    await openingC;
+  });
+
+  assert.equal(app.renders.at(-1), 'C');
+  const seq = commands().filter((c) => c === 'db_open_project' || c === 'db_close_project');
+  assert.deepEqual(seq, ['db_open_project', 'db_close_project', 'db_open_project'],
+    'B is closed before C opens, though C was asked for while the launcher showed nothing open');
+  app.unmount();
+});

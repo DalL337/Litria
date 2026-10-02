@@ -99,16 +99,43 @@ fn load_user_exclusions(dir: Option<&Path>) -> UserExclusions {
     }
 }
 
-/// Production: loaded from the preferences file on first use, then replaced
-/// whenever Preferences saves the key (`preferences::prefs_save_global`). A
-/// hand edit of the file while Litria runs applies on the next launch.
+/// Where the user's withheld patterns live while Litria runs: loaded on first
+/// use, replaced whenever Preferences saves the key
+/// (`preferences::prefs_save_global`, which writes the file first). A hand
+/// edit of the file while Litria runs applies on the next launch.
+///
+/// A type rather than a bare static so the production code path itself is
+/// tested: concurrent first use loads once, readers see a whole value while
+/// saves land, and a poisoned lock still answers (P4, Codex residual,
+/// 2026-10-01). Production holds one instance; tests make their own.
+struct ExclusionsCell(std::sync::OnceLock<std::sync::RwLock<UserExclusions>>);
+
+impl ExclusionsCell {
+    const fn new() -> Self {
+        Self(std::sync::OnceLock::new())
+    }
+
+    fn lock(&self, load: impl FnOnce() -> UserExclusions) -> &std::sync::RwLock<UserExclusions> {
+        self.0.get_or_init(|| std::sync::RwLock::new(load()))
+    }
+
+    fn read<R>(&self, load: impl FnOnce() -> UserExclusions, read: impl FnOnce(&UserExclusions) -> R) -> R {
+        let guard = self.lock(load).read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        read(&guard)
+    }
+
+    fn replace(&self, load: impl FnOnce() -> UserExclusions, next: UserExclusions) {
+        *self.lock(load).write().unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+    }
+}
+
 #[cfg(not(test))]
-fn user_exclusions_cell() -> &'static std::sync::RwLock<UserExclusions> {
-    static CELL: std::sync::OnceLock<std::sync::RwLock<UserExclusions>> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| {
-        let dir = crate::preferences::preferences_dir().ok();
-        std::sync::RwLock::new(load_user_exclusions(dir.as_deref()))
-    })
+static USER_EXCLUSIONS: ExclusionsCell = ExclusionsCell::new();
+
+#[cfg(not(test))]
+fn load_production_exclusions() -> UserExclusions {
+    let dir = crate::preferences::preferences_dir().ok();
+    load_user_exclusions(dir.as_deref())
 }
 
 // Tests: per thread, so tests running in parallel never see each other's
@@ -125,8 +152,7 @@ fn with_user_exclusions<R>(read: impl FnOnce(&UserExclusions) -> R) -> R {
     }
     #[cfg(not(test))]
     {
-        let guard = user_exclusions_cell().read().unwrap_or_else(|poisoned| poisoned.into_inner());
-        read(&guard)
+        USER_EXCLUSIONS.read(load_production_exclusions, read)
     }
 }
 
@@ -134,9 +160,7 @@ fn replace_user_exclusions(next: UserExclusions) {
     #[cfg(test)]
     TEST_USER_EXCLUSIONS.with(|cell| *cell.borrow_mut() = next);
     #[cfg(not(test))]
-    {
-        *user_exclusions_cell().write().unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
-    }
+    USER_EXCLUSIONS.replace(load_production_exclusions, next);
 }
 
 /// Replace the user's withheld patterns with a saved preference value: text
@@ -477,6 +501,92 @@ pub(crate) mod tests {
         set_user_exclusions_value(&serde_json::json!("private/"));
         assert_eq!(classify_directory("private"), Class::Denied);
         assert_eq!(classify("src/a.ts"), Class::Allowed);
+    }
+
+    // -- The production cache (ExclusionsCell) under real threads ------------
+    // P4 (Codex residual, 2026-10-01): the other tests use a per-thread
+    // stand-in, so the production cell's first-use load, saves racing reads
+    // and poison recovery were never exercised.
+
+    fn alpha_or_beta(e: &UserExclusions) -> (bool, bool) {
+        (e.withholds(&["alpha"], true), e.withholds(&["beta"], true))
+    }
+
+    #[test]
+    fn the_shared_cell_loads_once_under_concurrent_first_use() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cell = std::sync::Arc::new(ExclusionsCell::new());
+        let loads = std::sync::Arc::new(AtomicUsize::new(0));
+        let threads: Vec<_> = (0..16)
+            .map(|_| {
+                let (cell, loads) = (cell.clone(), loads.clone());
+                std::thread::spawn(move || {
+                    cell.read(
+                        || {
+                            loads.fetch_add(1, Ordering::SeqCst);
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                            compile_user_exclusions("alpha/")
+                        },
+                        alpha_or_beta,
+                    )
+                })
+            })
+            .collect();
+        for thread in threads {
+            assert_eq!(thread.join().unwrap(), (true, false), "every first reader sees the loaded rules");
+        }
+        assert_eq!(loads.load(Ordering::SeqCst), 1, "the preferences file is read once");
+    }
+
+    #[test]
+    fn readers_see_a_whole_value_while_saves_land() {
+        let cell = std::sync::Arc::new(ExclusionsCell::new());
+        let load = || compile_user_exclusions("alpha/");
+        cell.replace(load, compile_user_exclusions("alpha/"));
+        let writers: Vec<_> = (0..4)
+            .map(|w| {
+                let cell = cell.clone();
+                std::thread::spawn(move || {
+                    for i in 0..200 {
+                        let next = if (i + w) % 2 == 0 { "alpha/" } else { "beta/" };
+                        cell.replace(load, compile_user_exclusions(next));
+                    }
+                })
+            })
+            .collect();
+        let readers: Vec<_> = (0..8)
+            .map(|_| {
+                let cell = cell.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..500 {
+                        let seen = cell.read(load, alpha_or_beta);
+                        assert!(seen == (true, false) || seen == (false, true), "a torn value: {seen:?}");
+                    }
+                })
+            })
+            .collect();
+        for thread in writers.into_iter().chain(readers) {
+            thread.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_poisoned_cell_keeps_answering_with_its_last_value() {
+        let cell = std::sync::Arc::new(ExclusionsCell::new());
+        let load = || UserExclusions::Unavailable;
+        cell.replace(load, compile_user_exclusions("alpha/"));
+        let poisoner = {
+            let cell = cell.clone();
+            std::thread::spawn(move || {
+                let _guard = cell.lock(load).write().unwrap();
+                panic!("a save that panics while holding the lock");
+            })
+        };
+        assert!(poisoner.join().is_err());
+        assert!(cell.lock(load).is_poisoned());
+        assert_eq!(cell.read(load, alpha_or_beta), (true, false), "the last value still answers");
+        cell.replace(load, compile_user_exclusions("beta/"));
+        assert_eq!(cell.read(load, alpha_or_beta), (false, true), "and a later save still lands");
     }
 
     #[test]
