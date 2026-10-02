@@ -33,9 +33,13 @@ use crate::scaffold_types::*;
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Check whether the required CLI tools are available for a given wrapper +
-/// package manager combination.  Always succeeds — the `ready` field in the
-/// return value indicates whether all prerequisites are met.
+/// Check, before Create, whether this machine can run a scaffold for a given
+/// wrapper + package manager — the New Project wizard's preflight. Always
+/// succeeds; `ready` says whether every REQUIRED tool is available.
+///
+/// The package manager is judged by `resolve_pm`, the resolver the run itself
+/// uses, so the preflight and the run cannot disagree (a bare PATH lookup
+/// would call Yarn Classic "ready" and the run would then refuse it).
 pub(crate) fn check_prerequisites(
     wrapper: &ScaffoldWrapper,
     manager: &PackageManager,
@@ -46,31 +50,78 @@ pub(crate) fn check_prerequisites(
     // Node.js — required for all wrappers (bundled fallback available).
     tools.push(check_node(app));
 
-    // Package manager.
-    tools.push(check_package_manager(manager, app));
+    // Package manager, exactly as the run will resolve it.
+    tools.push(manager_status(
+        manager_name(manager),
+        resolve_pm(manager, app).map(|pm| {
+            let source = if pm.prefix_args.is_empty() { "global" } else { "bundled" };
+            (source.to_string(), version_of(&pm))
+        }),
+    ));
 
-    // Tauri wrapper needs the Rust toolchain for building (not for scaffolding,
-    // but the user won't be able to run the project without it).
+    // Tauri: not needed to scaffold, but the project cannot run without it.
     if matches!(wrapper, ScaffoldWrapper::Tauri) {
-        tools.push(check_command_tool("cargo", "Rust Toolchain"));
+        let mut cargo = check_command_tool("cargo", "Rust toolchain");
+        cargo.required = false;
+        if !cargo.available {
+            cargo.detail = Some(
+                "Litria can create the project without it, but running a Tauri app needs the \
+                 Rust toolchain (https://rustup.rs)."
+                    .into(),
+            );
+        }
+        tools.push(cargo);
     }
 
-    let ready = tools.iter().all(|t| t.available);
-    let message = if ready {
-        None
-    } else {
-        let missing: Vec<&str> = tools
-            .iter()
-            .filter(|t| !t.available)
-            .map(|t| t.name.as_str())
-            .collect();
-        Some(format!("Missing: {}", missing.join(", ")))
-    };
+    prerequisite_result(tools)
+}
 
+fn manager_name(manager: &PackageManager) -> &'static str {
+    match manager {
+        PackageManager::Npm => "npm",
+        PackageManager::Pnpm => "pnpm",
+        PackageManager::Yarn => "yarn",
+    }
+}
+
+/// A package manager's status from `resolve_pm`'s verdict: found (with how
+/// and which version), or refused with the run's own message.
+fn manager_status(name: &str, resolved: Result<(String, Option<String>), String>) -> ToolStatus {
+    match resolved {
+        Ok((source, version)) => ToolStatus {
+            name: name.into(),
+            available: true,
+            version,
+            source: Some(source),
+            required: true,
+            detail: None,
+        },
+        Err(reason) => ToolStatus {
+            name: name.into(),
+            available: false,
+            version: None,
+            source: None,
+            required: true,
+            detail: Some(reason),
+        },
+    }
+}
+
+/// Only required tools decide `ready`; the message names each missing one
+/// with its reason.
+fn prerequisite_result(tools: Vec<ToolStatus>) -> PrerequisiteResult {
+    let missing: Vec<String> = tools
+        .iter()
+        .filter(|t| t.required && !t.available)
+        .map(|t| match &t.detail {
+            Some(detail) => detail.clone(),
+            None => format!("{} is not installed.", t.name),
+        })
+        .collect();
     PrerequisiteResult {
-        ready,
+        ready: missing.is_empty(),
         tools,
-        message,
+        message: if missing.is_empty() { None } else { Some(missing.join(" ")) },
     }
 }
 
@@ -318,6 +369,8 @@ fn check_node(app: &AppHandle) -> ToolStatus {
             available: true,
             version: get_command_version("node", "--version"),
             source: Some("global".into()),
+            required: true,
+            detail: None,
         };
     }
 
@@ -329,6 +382,8 @@ fn check_node(app: &AppHandle) -> ToolStatus {
                 available: true,
                 version: Some(crate::lsp::packs::versions::NODE_VERSION.to_string()),
                 source: Some("bundled".into()),
+                required: true,
+                detail: None,
             };
         }
     }
@@ -338,41 +393,8 @@ fn check_node(app: &AppHandle) -> ToolStatus {
         available: false,
         version: None,
         source: None,
-    }
-}
-
-fn check_package_manager(manager: &PackageManager, app: &AppHandle) -> ToolStatus {
-    match manager {
-        PackageManager::Npm => {
-            // Bundled npm (always available when bundled Node.js is extracted).
-            if let Some(npm_path) = bundled_runtime::extracted_npm_cli(app) {
-                if npm_path.exists() {
-                    return ToolStatus {
-                        name: "npm".into(),
-                        available: true,
-                        version: None,
-                        source: Some("bundled".into()),
-                    };
-                }
-            }
-            // Global npm.
-            if probe_command_exists("npm") {
-                return ToolStatus {
-                    name: "npm".into(),
-                    available: true,
-                    version: get_command_version("npm", "--version"),
-                    source: Some("global".into()),
-                };
-            }
-            ToolStatus {
-                name: "npm".into(),
-                available: false,
-                version: None,
-                source: None,
-            }
-        }
-        PackageManager::Pnpm => check_command_tool("pnpm", "pnpm"),
-        PackageManager::Yarn => check_command_tool("yarn", "yarn"),
+        required: true,
+        detail: None,
     }
 }
 
@@ -391,6 +413,8 @@ fn check_command_tool(command: &str, display_name: &str) -> ToolStatus {
         } else {
             None
         },
+        required: true,
+        detail: None,
     }
 }
 
@@ -1604,6 +1628,52 @@ fn abort_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Wizard preflight (check_scaffold_prerequisites) ------------------------
+
+    #[test]
+    fn a_manager_the_run_would_refuse_is_unavailable_with_the_runs_reason() {
+        let refusal = "yarn 1.22.22 is not supported: Litria's yarn recipes need yarn 4+ (this is yarn 1.x). \
+                       Upgrade — for Yarn: `corepack enable && yarn set version stable` — or pick npm.";
+        let status = manager_status("yarn", Err(refusal.to_string()));
+        assert!(!status.available);
+        assert!(status.required);
+        assert_eq!(status.detail.as_deref(), Some(refusal), "the preflight speaks the run's words");
+
+        let found = manager_status("pnpm", Ok(("global".into(), Some("10.4.1".into()))));
+        assert!(found.available);
+        assert_eq!(found.source.as_deref(), Some("global"));
+        assert_eq!(found.version.as_deref(), Some("10.4.1"));
+        assert_eq!(found.detail, None);
+    }
+
+    #[test]
+    fn only_required_tools_decide_ready() {
+        let tool = |name: &str, available: bool, required: bool, detail: Option<&str>| ToolStatus {
+            name: name.into(),
+            available,
+            version: None,
+            source: None,
+            required,
+            detail: detail.map(str::to_string),
+        };
+        // Tauri without cargo: the scaffold can still run.
+        let result = prerequisite_result(vec![
+            tool("Node.js", true, true, None),
+            tool("npm", true, true, None),
+            tool("Rust toolchain", false, false, Some("running a Tauri app needs it")),
+        ]);
+        assert!(result.ready);
+        assert_eq!(result.message, None);
+
+        // A missing manager blocks, and the message carries its reason.
+        let result = prerequisite_result(vec![
+            tool("Node.js", true, true, None),
+            tool("pnpm", false, true, Some("pnpm is not installed. Run: npm install -g pnpm")),
+        ]);
+        assert!(!result.ready);
+        assert_eq!(result.message.as_deref(), Some("pnpm is not installed. Run: npm install -g pnpm"));
+    }
 
     /// Config builder mirroring what the wizard sends: the plan block is the
     /// registry derivation for the selection (ADR-028 §2).

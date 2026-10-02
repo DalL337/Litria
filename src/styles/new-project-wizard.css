@@ -875,6 +875,20 @@ button:disabled .npw-key { display: none; }
   margin-top: 8px;
 }
 
+/* ── Review warning: what the created project will need (not a refusal) ── */
+
+.npw-review-warning {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.07);
+  color: rgba(253, 230, 138, 0.9);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 /* ── Blank fallback offer (shown under a scaffold error) ── */
 
 .npw-fallback {

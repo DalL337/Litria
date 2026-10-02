@@ -424,6 +424,12 @@ function NewProjectWizard({
     uvAvailable: false,
   });
 
+  // Machine check for the npm route (`check_scaffold_prerequisites`, the
+  // run's own resolver): per package manager, can THIS computer run it, and
+  // what will the project need (Rust for Tauri)? Re-run when the wrapper
+  // changes. { wrapper, byManager: { npm|pnpm|yarn: PrerequisiteResult } }.
+  const [toolCheck, setToolCheck] = useState(null);
+
   // -- Page validation (the rules live in scaffold/wizardNavigation) --
   const isBlank = state.wrapper === 'blank';
   const isPython = isPythonWrapper(state.wrapper);
@@ -435,7 +441,39 @@ function NewProjectWizard({
   // receives. Memoized from the same inputs the preview uses, so no handler
   // can hold a stale probe (F15).
   const platformId = normalizePlatform(platform);
-  const plan = useMemo(() => buildScaffoldPlan(state, pyProbe, { platform: platformId }), [state, pyProbe, platformId]);
+  const plan = useMemo(
+    () => buildScaffoldPlan(state, pyProbe, { platform: platformId, tools: toolCheck }),
+    [state, pyProbe, platformId, toolCheck]
+  );
+
+  // A check that fails answers nothing for that manager: the wizard never
+  // blocks on its own probe, and the run's gate still decides.
+  useEffect(() => {
+    const wrapper = state.wrapper;
+    if (wrapperKind(wrapper) !== 'npm') return undefined;
+    let stale = false;
+    (async () => {
+      let invoke;
+      try {
+        ({ invoke } = await runtime.core());
+      } catch {
+        return;
+      }
+      const results = await Promise.all(PM_OPTIONS.map(async (manager) => {
+        try {
+          return [manager, await invoke('check_scaffold_prerequisites', { wrapper, manager })];
+        } catch {
+          return [manager, null];
+        }
+      }));
+      if (stale) return;
+      const byManager = Object.fromEntries(results.filter(([, result]) => result));
+      setToolCheck({ wrapper, byManager });
+    })();
+    return () => {
+      stale = true;
+    };
+  }, [state.wrapper, runtime]);
 
   const isHeld = runState === 'held';
   const navigable = canNavigate(runState, createdPayload !== null);
@@ -960,8 +998,17 @@ function NewProjectWizard({
     return availability({ wrapper: state.wrapper, framework: state.framework, language: languageId, manager: state.manager, platform: platformId });
   };
   const managerAvailability = (managerId) => {
-    if (!isNpmWrapper || !state.framework || !state.lang) return { selectable: true, reason: null };
-    return availability({ wrapper: state.wrapper, framework: state.framework, language: state.lang, manager: managerId, platform: platformId });
+    if (!isNpmWrapper) return { selectable: true, reason: null };
+    if (state.framework && state.lang) {
+      const evidence = availability({ wrapper: state.wrapper, framework: state.framework, language: state.lang, manager: managerId, platform: platformId });
+      if (!evidence.selectable) return evidence;
+    }
+    // Evidence allows it; can this computer run it? (No answer blocks nothing.)
+    const check = toolCheck?.wrapper === state.wrapper ? toolCheck.byManager?.[managerId] : null;
+    if (check?.ready === false) {
+      return { selectable: false, reason: check.message || `${managerId} cannot run on this computer.` };
+    }
+    return { selectable: true, reason: null };
   };
   // Add-ons and backends need evidence of their own recipe steps for this
   // combination (ADR-028 §4/§10): a card without it is disabled with the reason.
@@ -1578,6 +1625,9 @@ function NewProjectWizard({
                       </div>
                     )}
                   </div>
+                  {(plan.warnings ?? []).map((warning) => (
+                    <div key={warning} className="npw-review-warning" role="note">{warning}</div>
+                  ))}
                   <div className="npw-flag-preview">
                     {commandPreview && commandPreview.map((part, i) => (
                       <span key={i} className={`npw-flag-${part.type}`}>{part.text}</span>

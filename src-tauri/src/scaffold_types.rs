@@ -238,6 +238,12 @@ pub(crate) struct ToolStatus {
     pub version: Option<String>,
     /// How the tool was found: `"global"` (PATH) or `"bundled"` (shipped with CM).
     pub source: Option<String>,
+    /// False for a tool the scaffold itself does not need (cargo: only
+    /// running a Tauri project needs it). Only required tools decide `ready`.
+    pub required: bool,
+    /// Why the tool is unavailable, in the words the scaffold run would use
+    /// (e.g. the Yarn Classic refusal), or what a missing optional tool means.
+    pub detail: Option<String>,
 }
 
 /// Result of prerequisite checking.
@@ -395,6 +401,8 @@ mod tests {
                 available: true,
                 version: Some("v22.0.0".into()),
                 source: Some("global".into()),
+                required: true,
+                detail: None,
             }],
             message: None,
         };
