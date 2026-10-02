@@ -96,6 +96,32 @@ export function useBuildLogs(buildLogDomain) {
     }
   }, []);
 
+  /** Absolute path of the builds folder, for display; null when unknown. */
+  const getBuildLogDir = useCallback(async () => {
+    try {
+      return (await invoke('build_log_dir')) ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  /**
+   * Open the folder behind a viewer tab in the OS file manager. The webview
+   * has no opener IPC, so Rust opens a folder it chooses itself; no path is
+   * passed. Resolves false when the folder could not be opened.
+   */
+  const openLogFolder = useCallback(async (kind) => {
+    try {
+      if (kind === 'crash') {
+        await invoke('crash_open_logs_dir');
+        return true;
+      }
+      return (await invoke('build_log_open_dir')) === true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   return {
     copyText,
     copyCurrentRun,
@@ -104,5 +130,7 @@ export function useBuildLogs(buildLogDomain) {
     refreshEntries,
     readBuildLog,
     readCrashLog,
+    getBuildLogDir,
+    openLogFolder,
   };
 }

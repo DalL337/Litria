@@ -154,6 +154,7 @@ pub fn run() {
             commands::build_log_list,
             commands::build_log_read,
             commands::build_log_dir,
+            commands::build_log_open_dir,
             commands::crash_log_list,
             commands::crash_log_read,
             commands::copy_to_clipboard,
