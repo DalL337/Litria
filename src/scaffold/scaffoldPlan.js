@@ -73,9 +73,30 @@ function npmPreview({ managerId, argv, steps }) {
 // ---- plan ------------------------------------------------------------------
 
 /**
+ * What `check_scaffold_prerequisites` (the run's own resolver) said about this
+ * machine, for this wrapper: { wrapper, byManager: { npm|pnpm|yarn:
+ * { ready, message, tools } } }. Null for a check made for another wrapper,
+ * so a stale snapshot never decides.
+ */
+function machineCheck(tools, wrapper, managerId) {
+  if (!tools || tools.wrapper !== wrapper) return null;
+  return tools.byManager?.[managerId] ?? null;
+}
+
+/** Tools a scaffold does not need but the project does (cargo for Tauri). */
+function machineWarnings(tools, wrapper, managerId) {
+  const check = machineCheck(tools, wrapper, managerId);
+  if (!Array.isArray(check?.tools)) return [];
+  return check.tools
+    .filter((t) => t && t.required === false && t.available === false && t.detail)
+    .map((t) => t.detail);
+}
+
+/**
  * @param {object} state  wizard reducer state
  * @param {object} probe  python probe snapshot ({ interpreters, uvAvailable })
- * @param {{ platform?: string }} env  the running platform ('windows' | 'macos' | 'linux')
+ * @param {{ platform?: string, tools?: object }} env  the running platform
+ *   ('windows' | 'macos' | 'linux') and the machine check (see machineCheck)
  */
 export function buildScaffoldPlan(state, probe, env = {}) {
   const platform = normalizePlatform(env.platform);
@@ -159,6 +180,16 @@ export function buildScaffoldPlan(state, probe, env = {}) {
       if (!b.selectable) combined = { selectable: false, status: 'unverified', reason: b.reason };
     }
   }
+  // Evidence says the recipe works; the machine check says whether THIS
+  // computer can run it. A manager the run would refuse is refused here
+  // first, in the run's own words. No answer (not checked yet, or the check
+  // failed) blocks nothing: the run's gate still decides.
+  if (combined.selectable) {
+    const check = machineCheck(env.tools, wrapper, managerId);
+    if (check?.ready === false) {
+      combined = { selectable: false, status: 'unavailable', reason: check.message || `${managerId} cannot run on this computer.` };
+    }
+  }
   if (!combined.selectable) {
     preview.push({ type: 'comment', text: `\n# not offered: ${combined.reason}` });
   }
@@ -167,6 +198,9 @@ export function buildScaffoldPlan(state, probe, env = {}) {
     kind: 'npm',
     preview,
     availability: combined,
+    // Not reasons to refuse: what the created project will need (Rust for
+    // Tauri), shown on the review page.
+    warnings: machineWarnings(env.tools, wrapper, managerId),
     route,
     argv,
     steps,
