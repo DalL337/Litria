@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 
 import { createProjectInstanceId, normalizeAppearance, DEFAULT_THEME_ID } from '../project/manifest';
 import { getRandomPieceColor } from '../utils/pieceColors';
@@ -59,6 +59,12 @@ export function useProjectLaunch({
   clearHistory,
   guardUnsavedChanges
 }) {
+  // The project this hook last put on screen, kept current without waiting
+  // for a render: a queued open (below) must tear down the project the open
+  // before it just opened, even if React has not rendered it yet.
+  const liveInstanceRef = useRef(projectInstance);
+  liveInstanceRef.current = projectInstance;
+
   const getStorageErrorMessage = useCallback((error, fallback) => {
     if (!error || typeof error !== 'object') return fallback;
     const message = typeof error.message === 'string' && error.message.trim()
@@ -257,7 +263,8 @@ export function useProjectLaunch({
   // can't drift. See docs/plans/persistence/project-switch-crash-
   // investigation.md Phase 3 for the ordering rationale.
   const teardownActiveProject = useCallback(async () => {
-    if (!projectInstance || !projectInstance.instanceId) return;
+    const current = liveInstanceRef.current;
+    if (!current || !current.instanceId) return;
     if (terminalDomain) {
       await withTimeout(terminalDomain.commands.teardownAll(), 5000, 'terminal teardown');
     }
@@ -297,7 +304,7 @@ export function useProjectLaunch({
     } catch (e) {
       console.warn('[project-teardown] dbCloseProject failed:', e);
     }
-  }, [projectInstance, terminalDomain, languageSupportDomain, clearHistory]);
+  }, [terminalDomain, languageSupportDomain, clearHistory]);
 
   // Wipe the workspace state back to pristine and show the launcher. App
   // itself never unmounts, so without the wipe stale pieces would flash
@@ -319,6 +326,7 @@ export function useProjectLaunch({
     setConnections?.([]);
     setNextConnectionIdValue?.(1);
     setProjectInstance(null);
+    liveInstanceRef.current = null;
   }, [
     clearSelection,
     setConnections,
@@ -332,7 +340,7 @@ export function useProjectLaunch({
     setSelectedGroupId
   ]);
 
-  const handleOpenProjectInstance = useCallback(async ({ rootPath }) => {
+  const openProjectInstanceNow = useCallback(async ({ rootPath }) => {
     const trimmedRootPath = typeof rootPath === 'string' ? rootPath.trim() : '';
     if (!trimmedRootPath) {
       throw new Error('Project path is required.');
@@ -363,7 +371,7 @@ export function useProjectLaunch({
     }
 
     // Tear down the OLD project before opening the NEW one.
-    const tearingDown = Boolean(projectInstance?.instanceId);
+    const tearingDown = Boolean(liveInstanceRef.current?.instanceId);
     await teardownActiveProject();
 
     // ─── Open the NEW project ─────────────────────────────────────────
@@ -395,7 +403,7 @@ export function useProjectLaunch({
     // the new project with the old selection (Project API build plan P3).
     clearSelection();
     setSelectedGroupId(null);
-    setProjectInstance({
+    const opened = {
       instanceId: projectState.project.instanceId || createProjectInstanceId(),
       name: projectState.project.name || normalizedRoot.split(/[\\\/]/).pop() || 'Litria Project',
       rootPath: trimmedRootPath,
@@ -407,18 +415,43 @@ export function useProjectLaunch({
       // canvas shows the pill and persistence skips its writes.
       readOnly: projectState.readOnly === true,
       _dbState: projectState
-    });
+    };
+    setProjectInstance(opened);
+    liveInstanceRef.current = opened;
   }, [
     guardUnsavedChanges,
     teardownActiveProject,
     resetToLauncher,
-    projectInstance,
     getProjectStorageError,
     getStorageErrorMessage,
     clearSelection,
     setSelectedGroupId,
     setProjectInstance
   ]);
+
+  // Opens run one at a time (P4, 2026-10-01). A second open used to run its
+  // own teardown and open while the first was still opening, so the two
+  // finished in either order: the window ended on whichever FINISHED last,
+  // not the project asked for last, and the loser was replaced without its
+  // teardown — its terminals and language servers kept running.
+  //
+  // A request waits for the open in flight. When its turn comes, only the
+  // newest waiting request runs — the user's last choice; older ones resolve
+  // without opening anything. It runs through the latest handler, one task
+  // after the previous open, so it sees the project that open left.
+  const openNowRef = useRef(openProjectInstanceNow);
+  openNowRef.current = openProjectInstanceNow;
+  const openTurnRef = useRef(Promise.resolve());
+  const openSeqRef = useRef(0);
+  const handleOpenProjectInstance = useCallback((args) => {
+    const seq = ++openSeqRef.current;
+    const turn = openTurnRef.current.then(() => (
+      seq === openSeqRef.current ? openNowRef.current(args) : undefined
+    ));
+    const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+    openTurnRef.current = turn.then(nextTask, nextTask);
+    return turn;
+  }, []);
 
   // The in-workspace ProjectSwitcher fires and forgets. Calling the open
   // handler bare there made every failed switch an unhandled rejection the
