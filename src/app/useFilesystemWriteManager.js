@@ -102,6 +102,8 @@ export function useFilesystemWriteManager({
     unregisterFile: syntaxDomain?.commands?.unregisterFile ?? null,
     notifyFileChanged: syntaxDomain?.commands?.notifyFileChanged ?? null,
     registerFileIfAbsent: syntaxDomain?.commands?.registerFileIfAbsent ?? null,
+    forgetFile: syntaxDomain?.commands?.forgetFile ?? null,
+    getSyntaxFilesUnder: syntaxDomain?.selectors?.getRegisteredFilesUnder ?? null,
     bumpScaffoldRefresh,
     normalizePath,
     getBasename,

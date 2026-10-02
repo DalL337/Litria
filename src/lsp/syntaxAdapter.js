@@ -447,28 +447,27 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
   }
 
   /**
-   * Apply rename patch plans (replace by line) to a string. Local to the
-   * adapter; rename plans only ever 'replace' a single import line.
+   * Apply rename patch plans to a string. Local to the adapter; a rename
+   * plan only ever re-points one import at the moved module ('respec').
    *
-   * The stored plan.line is a HINT, not an address: edge.importLine goes
-   * stale the moment the user edits lines above the import, and a blind
-   * lines[plan.line] replace then overwrites arbitrary code (the JS twin of
-   * the 2026-07-17 python line-0 corruption). Locate the import by its
-   * pre-rename spec (plan.matchSpec) in the text actually being edited, and
-   * fail closed — no matching import, no write.
+   * The import is found by its pre-rename spec (plan.matchSpec) in the text
+   * actually being edited — never by a stored line, which goes stale the
+   * moment the user edits above it (the JS twin of the 2026-07-17 python
+   * line-0 corruption) — and only its module path changes, however many
+   * lines the statement spans. No matching import: no write (fail closed).
    */
   function _applyRenamePlans(text, plans) {
-    const lines = text.split('\n');
+    let current = text;
     for (const plan of plans) {
-      if (plan.kind !== 'replace') continue;
-      const line = syntaxDomain.commands.computeImportLineForSpec({
-        text: lines.join('\n'),
-        spec: plan.matchSpec,
+      if (plan.kind !== 'respec') continue;
+      const next = syntaxDomain.commands.rewriteImportSpec({
+        text: current,
+        matchSpec: plan.matchSpec,
+        newSpec: plan.newSpec,
       });
-      if (line == null) continue;
-      lines[line] = plan.text.replace(/\n$/, '');
+      if (next != null) current = next;
     }
-    return lines.join('\n');
+    return current;
   }
 
   // ---- Introspection --------------------------------------------------------

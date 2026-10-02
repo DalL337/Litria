@@ -29,6 +29,7 @@ function createMockDeps(overrides = {}) {
     removePiecesFromGroups: [],
     removeConnectionsForPieces: [],
     unregisterFile: [],
+    forgetFile: [],
     notifyFileChanged: [],
     bumpScaffoldRefresh: [],
     addPieceToGroup: [],
@@ -118,6 +119,9 @@ function createMockDeps(overrides = {}) {
     removePiecesFromGroups: (ids) => { calls.removePiecesFromGroups.push(ids); },
     removeConnectionsForPieces: (ids) => { calls.removeConnectionsForPieces.push(ids); },
     unregisterFile: (path) => { calls.unregisterFile.push(path); },
+    // The mock indexes every path it is asked about (SyntaxDomain's getRegisteredFilesUnder).
+    getSyntaxFilesUnder: (key) => [key],
+    forgetFile: (path, options) => { calls.forgetFile.push({ path, options }); },
     notifyFileChanged: (path, text) => { calls.notifyFileChanged.push({ path, text }); },
     bumpScaffoldRefresh: () => { calls.bumpScaffoldRefresh.push(true); },
     normalizePath: (p) => (typeof p === 'string' ? p.replace(/\\/g, '/').replace(/^\//, '') : ''),
@@ -479,8 +483,10 @@ test('deleteFile — runs full delete pipeline', async () => {
   assert.equal(calls.closeTab[0], 1);
   assert.equal(calls.removeConnectionsForPieces.length, 1, 'removes connections');
   assert.deepEqual(calls.removeConnectionsForPieces[0], [1]);
-  assert.equal(calls.unregisterFile.length, 1, 'unregisters from syntax domain');
-  assert.equal(calls.unregisterFile[0], '/test/project/src/foo.py');
+  // A delete settles the syntax index for good (P4, 2026-10-01): the file is
+  // forgotten, and with it the links to the wires removed with its piece.
+  assert.deepEqual(calls.forgetFile, [{ path: '/test/project/src/foo.py', options: { connectionsRemoved: true } }], 'forgets the file in the syntax domain');
+  assert.equal(calls.unregisterFile.length, 0, 'a delete does not use the move-only unregister');
   assert.equal(calls.deletePieces.length, 1, 'removes piece from state');
   assert.deepEqual(calls.deletePieces[0].ids, [1]);
   assert.equal(calls.removePiecesFromGroups.length, 1, 'removes from groups');

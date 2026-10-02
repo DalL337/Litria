@@ -1182,17 +1182,22 @@ test('renameFile: pending py→py edge emits zero patchPlans but still renames e
   assert.ok(edge.relSpec.includes('oauth_helper'), 'relSpec recomputed');
 });
 
-test('renameFile: pending JS edge still emits the stub rewrite (non-regression)', () => {
+test('renameFile: a pending JS edge re-points its import at the new path (path only)', () => {
   const { domain, srcPath, tgtPath } = setupDomain();
   domain.commands.connect({ connectionId: 'conn-1', sourceFilePath: srcPath, targetFilePath: tgtPath });
 
   const newSrcPath = '/project/src/lib/utils.js';
   const result = domain.commands.renameFile(srcPath, newSrcPath);
 
+  // A rename changes where the module lives, not what is imported (P4,
+  // 2026-10-01): the plan carries the old and new paths, never import text.
   assert.equal(result.patchPlans.length, 1);
-  assert.equal(result.patchPlans[0].filePath, tgtPath);
-  assert.ok(result.patchPlans[0].text.includes('TODO: select symbol'));
-  assert.ok(result.patchPlans[0].text.includes('lib/utils'));
+  const [plan] = result.patchPlans;
+  assert.equal(plan.kind, 'respec');
+  assert.equal(plan.filePath, tgtPath);
+  assert.ok(plan.newSpec.includes('lib/utils'));
+  assert.notEqual(plan.matchSpec, plan.newSpec);
+  assert.equal(plan.text, undefined, 'no rebuilt import text');
 });
 
 test('disconnectConnection: py edge yields no import-removal patchPlan', () => {
