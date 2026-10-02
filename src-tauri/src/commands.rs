@@ -490,8 +490,9 @@ pub(crate) async fn lsp_install_server(
 }
 
 #[tauri::command]
-pub(crate) fn lsp_cancel_install(server_id: String) {
-    crate::lsp::download::cancel_install(&server_id);
+pub(crate) fn lsp_cancel_install(server_id: String) -> bool {
+    // False when no install of this server is running.
+    crate::lsp::download::cancel_install(&server_id)
 }
 
 #[tauri::command]
@@ -660,10 +661,28 @@ pub(crate) fn build_log_read(name: String) -> Option<String> {
     build_log::read(&name)
 }
 
-/// Absolute path of the builds directory, for the viewer's "reveal" affordance.
+/// Absolute path of the builds directory, which the log viewer shows next to
+/// its "Open folder" button. Display only: the webview cannot open a path
+/// (no opener IPC), so opening goes through `build_log_open_dir`.
 #[tauri::command]
 pub(crate) fn build_log_dir() -> Option<String> {
     build_log::builds_dir().map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Open the builds directory in the OS file manager (the log viewer's
+/// "Open folder"). It takes no argument: the target is fixed in Rust, like
+/// `crash_open_logs_dir`, so this cannot be used to open an arbitrary path.
+/// False when the directory cannot be created or the opener refuses.
+#[tauri::command]
+pub(crate) fn build_log_open_dir(app: tauri::AppHandle) -> bool {
+    use tauri_plugin_opener::OpenerExt;
+    match build_log::builds_dir() {
+        Some(dir) => app
+            .opener()
+            .open_path(dir.to_string_lossy(), None::<&str>)
+            .is_ok(),
+        None => false,
+    }
 }
 
 /// True only for a bare `crash-*.json` name — the same read boundary the

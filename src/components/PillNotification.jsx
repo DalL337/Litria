@@ -158,6 +158,21 @@ function PillNotification({ pillDomain, terminalDomain, buildLogActions = null }
           {statusById[pill.id] && (
             <span className="pill-notification-status">{statusById[pill.id]}</span>
           )}
+          {pill.secondary && (
+            <button
+              className="pill-notification-secondary"
+              type="button"
+              onClick={() => {
+                try {
+                  pill.secondary.run();
+                } catch {
+                  // The owner of the pill reports its own outcome.
+                }
+              }}
+            >
+              {pill.secondary.label}
+            </button>
+          )}
           <div className="pill-notification-menu-wrap">
             <button
               className="pill-notification-caret"

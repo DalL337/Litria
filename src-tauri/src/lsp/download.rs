@@ -177,21 +177,78 @@ pub(crate) fn file_sha256(path: &Path) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 // Cancellation
 // ---------------------------------------------------------------------------
+//
+// Each install registers its own flag for its server while it runs, so a
+// cancel reaches only the install in flight: with nothing installing it does
+// nothing, and it can never carry over into a later install. The flag is
+// honoured between download chunks and once more after verification, before
+// anything is extracted. Past that point the install finishes.
+
+/// Error code of an install the user cancelled (distinct from a failure).
+pub(crate) const INSTALL_CANCELLED: &str = "lsp.install.cancelled";
 
 static CANCEL_FLAGS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
-fn cancel_flag(server_id: &str) -> Arc<AtomicBool> {
-    let map = CANCEL_FLAGS.get_or_init(|| Mutex::new(HashMap::new()));
-    map.lock()
-        .unwrap()
-        .entry(server_id.to_string())
-        .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-        .clone()
+fn cancel_flags() -> std::sync::MutexGuard<'static, HashMap<String, Arc<AtomicBool>>> {
+    CANCEL_FLAGS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Request cancellation of an in-flight install for this server.
-pub(crate) fn cancel_install(server_id: &str) {
-    cancel_flag(server_id).store(true, Ordering::Relaxed);
+/// The cancel flag of one running install. It unregisters itself when the
+/// install ends, however it ends.
+struct InstallInFlight {
+    server_id: String,
+    flag: Arc<AtomicBool>,
+}
+
+impl InstallInFlight {
+    fn begin(server_id: &str) -> Self {
+        let flag = Arc::new(AtomicBool::new(false));
+        cancel_flags().insert(server_id.to_string(), flag.clone());
+        Self {
+            server_id: server_id.to_string(),
+            flag,
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for InstallInFlight {
+    fn drop(&mut self) {
+        let mut flags = cancel_flags();
+        // A later install of the same server may have registered since; its
+        // flag is not ours to remove.
+        if flags
+            .get(&self.server_id)
+            .is_some_and(|flag| Arc::ptr_eq(flag, &self.flag))
+        {
+            flags.remove(&self.server_id);
+        }
+    }
+}
+
+/// Request cancellation of the install in flight for this server. False when
+/// no install of it is running, so there is nothing to cancel.
+pub(crate) fn cancel_install(server_id: &str) -> bool {
+    match cancel_flags().get(server_id) {
+        Some(flag) => {
+            flag.store(true, Ordering::Relaxed);
+            true
+        }
+        None => false,
+    }
+}
+
+fn cancelled_error(server: &str) -> CommandError {
+    CommandError::conflict(
+        INSTALL_CANCELLED,
+        format!("The {server} install was cancelled. Nothing was installed."),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -884,6 +941,11 @@ pub(crate) fn install_server(
         )
     })?;
 
+    // Cancellable from here until extraction (see Cancellation above).
+    // Registered as early as the server id is known, to keep the window in
+    // which a cancel finds nothing to cancel as small as possible.
+    let install = InstallInFlight::begin(&entry.server);
+
     let (url, pinned_sha) = match &custom_url {
         Some(url) => {
             require_https_custom_url(url)?;
@@ -904,9 +966,6 @@ pub(crate) fn install_server(
     })?;
     let staging_file = staging_dir.join(format!("{}-{}.download", entry.server, entry.version));
 
-    let cancel = cancel_flag(&entry.server);
-    cancel.store(false, Ordering::Relaxed);
-
     // Download (streamed + hashed). Any failure below cleans staging and
     // leaves whatever version is currently active untouched.
     let cleanup = |version_dir: Option<&Path>| {
@@ -916,10 +975,16 @@ pub(crate) fn install_server(
         }
     };
 
-    let actual_sha = download_to(app, &entry.server, &url, &staging_file, &cancel)
+    let actual_sha = download_to(app, &entry.server, &url, &staging_file, &install.flag)
         .map_err(|e| {
             cleanup(None);
-            CommandError::internal("lsp.install.download_failed", e)
+            // A cancel ends the download with an error too; report it as
+            // the cancel it was, not as a network failure.
+            if install.is_cancelled() {
+                cancelled_error(&entry.server)
+            } else {
+                CommandError::internal("lsp.install.download_failed", e)
+            }
         })?;
 
     // Verify BEFORE extraction (ADR §2) — pinned installs only; custom URLs
@@ -936,6 +1001,13 @@ pub(crate) fn install_server(
                 ),
             ));
         }
+    }
+
+    // The last point a cancel is honoured: nothing is extracted or activated
+    // yet, so stopping leaves the current version exactly as it was.
+    if install.is_cancelled() {
+        cleanup(None);
+        return Err(cancelled_error(&entry.server));
     }
 
     // Extract into the version-stamped dir, beside any running version.
@@ -1041,6 +1113,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_cancel_reaches_only_the_install_in_flight() {
+        let server = "test-cancel-in-flight";
+        assert!(!cancel_install(server), "nothing is installing, so nothing to cancel");
+
+        let install = InstallInFlight::begin(server);
+        assert!(!install.is_cancelled());
+        assert!(cancel_install(server));
+        assert!(install.is_cancelled());
+        drop(install);
+
+        // A cancel after the install ended neither applies nor carries over.
+        assert!(!cancel_install(server));
+        let next = InstallInFlight::begin(server);
+        assert!(!next.is_cancelled(), "a later install starts uncancelled");
+    }
+
+    #[test]
+    fn an_older_install_ending_leaves_a_newer_installs_flag_registered() {
+        let server = "test-cancel-overlap";
+        let first = InstallInFlight::begin(server);
+        let second = InstallInFlight::begin(server);
+        drop(first);
+        assert!(cancel_install(server), "the newer install is still cancellable");
+        assert!(second.is_cancelled());
+    }
+
+    #[test]
+    fn a_cancelled_install_reports_its_own_code() {
+        let error = cancelled_error("rust-analyzer");
+        assert_eq!(error.code(), INSTALL_CANCELLED);
+        assert_eq!(INSTALL_CANCELLED, "lsp.install.cancelled");
+        assert!(error.message().contains("Nothing was installed"));
     }
 
     #[test]
