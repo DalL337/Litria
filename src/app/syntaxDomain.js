@@ -1027,6 +1027,61 @@ export function createSyntaxDomain() {
     },
 
     /**
+     * The file no longer exists (deleted, or gone from disk). Unlike
+     * `unregisterFile`, which a move uses for the old path while its edges
+     * wait to be re-pointed, this settles every edge the file was part of:
+     *
+     * - as the IMPORTER: its import is gone with it, so the edge is removed,
+     *   with its links to canvas wires;
+     * - as the EXPORTER: the importer's import is real and now broken, so the
+     *   edge stays, broken. When the file's canvas wires were removed with it
+     *   (`connectionsRemoved`, a delete through Litria), their links go too;
+     *   a file that vanished from disk keeps its piece and wires.
+     *
+     * The graph query reads this index (P4), so a deleted file must not stay
+     * indexed and an edge must not outlive its importer (2026-10-01).
+     *
+     * @param {string} filePath
+     * @param {{ connectionsRemoved?: boolean }} [options]
+     */
+    forgetFile(filePath, { connectionsRemoved = false } = {}) {
+      fileTextCache.delete(filePath);
+      definitionIndex.delete(filePath);
+      symbolIndex.delete(filePath);
+      portIndex.delete(filePath);
+      fileStatus.delete(filePath);
+
+      const changedEdges = [];
+      const changedConns = [];
+      const dropLinks = (edge) => {
+        for (const connId of edge.connectionIds) {
+          connectionToEdge.delete(connId);
+          bindingMap.delete(connId);
+          changedConns.push(connId);
+        }
+        edge.connectionIds = [];
+      };
+      for (const [edgeId, edge] of [...syntaxEdges]) {
+        if (edge.targetFilePath === filePath) {
+          dropLinks(edge);
+          syntaxEdges.delete(edgeId);
+          changedEdges.push(edgeId);
+          continue;
+        }
+        if (edge.sourceFilePath !== filePath) continue;
+        if (edge.status !== 'broken') {
+          for (const sym of edge.symbols) sym.status = 'broken';
+          edge.status = 'broken';
+          changedConns.push(...edge.connectionIds);
+        }
+        if (connectionsRemoved) dropLinks(edge);
+        changedEdges.push(edgeId);
+      }
+
+      _notify({ portsChanged: [filePath], connectionsChanged: changedConns, edgesChanged: changedEdges, fileChanged: filePath });
+    },
+
+    /**
      * Notify the domain that a file's content has changed.
      * Re-parses definitions/exports and reconciles edge states.
      *
@@ -1809,6 +1864,18 @@ export function createSyntaxDomain() {
     /** Get the edge ID for a canvas connection ID. */
     getEdgeIdForConnection(connectionId) {
       return connectionToEdge.get(connectionId) ?? null;
+    },
+
+    /**
+     * Registered files at `path` or under it as a folder (absolute keys).
+     * The filesystem write manager uses it to forget or re-key every indexed
+     * file a delete or move touches, on the canvas or not.
+     */
+    getRegisteredFilesUnder(path) {
+      if (typeof path !== 'string' || !path) return [];
+      const base = path.replace(/\/+$/, '');
+      const files = new Set([...fileStatus.keys(), ...fileTextCache.keys()]);
+      return [...files].filter((file) => file === base || file.startsWith(`${base}/`)).sort();
     },
   };
 

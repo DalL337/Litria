@@ -294,6 +294,8 @@ export function createFilesystemWriteManager(deps) {
     unregisterFile,
     notifyFileChanged,
     registerFileIfAbsent,
+    forgetFile = null,
+    getSyntaxFilesUnder = null,
 
     // Scaffold refresh
     bumpScaffoldRefresh,
@@ -329,6 +331,32 @@ export function createFilesystemWriteManager(deps) {
   function indexSyntaxFileIfAbsent(relativePath, contents) {
     const key = toProjectAbsPath(getRootPath(), relativePath);
     if (registerFileIfAbsent && key) registerFileIfAbsent(key, contents);
+  }
+
+  // Every indexed file a delete or move touches — the path itself, or every
+  // file under it for a folder — on the canvas or not, as project-relative
+  // paths. Deletes and moves used to update only files with a canvas piece,
+  // so an off-canvas file stayed indexed at a path that no longer existed
+  // (P4, 2026-10-01).
+  function indexedRelativePaths(relativePath) {
+    const rootPath = getRootPath();
+    // The same normalization toProjectAbsPath applies to the root.
+    const root = typeof rootPath === 'string' ? rootPath.replace(/\\/g, '/').replace(/\/$/, '') : '';
+    const key = toProjectAbsPath(rootPath, relativePath);
+    if (!root || !key || !getSyntaxFilesUnder) return [];
+    return getSyntaxFilesUnder(key)
+      .filter((file) => file.startsWith(`${root}/`))
+      .map((file) => file.slice(root.length + 1));
+  }
+
+  // A delete settles the index for good: the files are gone, and so are the
+  // canvas wires of any piece that went with them.
+  function forgetSyntaxPath(relativePath) {
+    for (const rel of indexedRelativePaths(relativePath)) {
+      const key = toProjectAbsPath(getRootPath(), rel);
+      if (forgetFile) forgetFile(key, { connectionsRemoved: true });
+      else if (unregisterFile) unregisterFile(key);
+    }
   }
 
   // ---- Delete journal ------------------------------------------------------
@@ -390,15 +418,42 @@ export function createFilesystemWriteManager(deps) {
     const moved = await moveProjectPath(rootPath, sourcePath, destPath);
     if (!moved) return fail(`Cannot move "${sourcePath}" to "${destPath}"`, 'fs.move_failed');
 
+    // Indexed files the move carried, on the canvas or not (the index still
+    // holds their old paths). Files with a piece are re-keyed by Steps 6 and
+    // 8 below; the rest are re-keyed here, or they stayed indexed at a path
+    // that no longer existed (P4, 2026-10-01).
+    const movedIndexed = indexedRelativePaths(sourcePath);
+    const rekeyOffCanvas = async (pieceRelPaths = new Set()) => {
+      const from = normalizePath(sourcePath);
+      const to = normalizePath(destPath);
+      for (const rel of movedIndexed) {
+        if (pieceRelPaths.has(rel)) continue;
+        const next = `${to}${rel.slice(from.length)}`;
+        unregisterSyntaxFile(rel);
+        let text = null;
+        try {
+          text = readProjectFile ? await readProjectFile(rootPath, next) : null;
+        } catch (_) {
+          // Unreadable: left for discovery's next run.
+        }
+        if (typeof text === 'string') indexSyntaxFileIfAbsent(next, text);
+      }
+    };
+
     const piecesByFilename = getPiecesByFilename();
-    if (!piecesByFilename) return ok(dispatchedPersistence ? 'dispatched' : 'none'); // No piece tracking available
+    if (!piecesByFilename) {
+      await rekeyOffCanvas();
+      return ok(dispatchedPersistence ? 'dispatched' : 'none'); // No piece tracking available
+    }
 
     // Step 2: Identify affected pieces
     const affected = collectAffectedPieces(piecesByFilename, normalizePath, sourcePath, isDir);
     if (affected.length === 0) {
+      await rekeyOffCanvas();
       if (!opts.skipScaffold) bumpScaffoldRefresh();
       return ok(dispatchedPersistence ? 'dispatched' : 'none');
     }
+    await rekeyOffCanvas(new Set(affected.map((piece) => normalizePath(piece.filename))));
 
     // Step 3: Update piece filenames
     const updates = buildFilenameUpdates(affected, normalizePath, sourcePath, destPath);
@@ -677,6 +732,11 @@ export function createFilesystemWriteManager(deps) {
       deleteJournal.delete(normalizePath(path));
       return fail(`Cannot delete "${path}"`, 'fs.delete_failed');
     }
+
+    // Step 1b: Syntax domain — every indexed file the delete removed, on the
+    // canvas or not: edges it imported through go, edges into it break, and
+    // links to the canvas wires removed with its piece go (P4, 2026-10-01).
+    forgetSyntaxPath(path);
     if (isDir) {
       // Any auto-created-group bookkeeping under this folder is now moot.
       const normalizedDir = normalizePath(path);
@@ -732,10 +792,8 @@ export function createFilesystemWriteManager(deps) {
       removeConnectionsForPieces(pieceIds);
     }
 
-    // Step 5: Syntax domain cleanup
-    for (const piece of affected) {
-      unregisterSyntaxFile(normalizePath(piece.filename));
-    }
+    // Step 5: Syntax domain cleanup — done in Step 1b for every indexed file
+    // the delete removed, these pieces' files included.
 
     // Step 6: Remove pieces from state (with filesystem restore on undo)
     const piecesById = getPiecesById();

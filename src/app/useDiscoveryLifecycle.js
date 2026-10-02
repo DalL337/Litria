@@ -261,6 +261,38 @@ export function isDiscoverableFilename(filename) {
 }
 
 /**
+ * Forget the files a previous discovery run registered that the project
+ * listing no longer has (deleted from a terminal, a checkout, another editor).
+ * Discovery used to register and never unregister, so a vanished file stayed
+ * indexed as `ok` and its wires resolved (P4, 2026-10-01). Only discovery's
+ * own registrations under this root are judged: a file the editor holds open
+ * is left to the editor, and a file discovery never listed (an opened
+ * dependency under node_modules) is not discovery's to forget. The file's
+ * piece and wires, if any, stay on the canvas, so their links are kept.
+ *
+ * @param {{ syntaxDomain: object, root: string, previous: Set<string>,
+ *   listed: Iterable<string>, isHeldOpen?: (path: string) => boolean }} args
+ * @returns {string[]} the forgotten absolute paths
+ */
+export function forgetVanishedFiles({ syntaxDomain, root, previous, listed, isHeldOpen = () => false }) {
+  if (!syntaxDomain?.commands?.forgetFile || !previous || previous.size === 0) return [];
+  const base = String(root ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+  if (!base) return [];
+  const present = new Set(listed);
+  const forgotten = [];
+  for (const path of [...previous].sort()) {
+    if (!path.startsWith(`${base}/`) || present.has(path) || isHeldOpen(path)) continue;
+    syntaxDomain.commands.forgetFile(path, { connectionsRemoved: false });
+    forgotten.push(path);
+  }
+  return forgotten;
+}
+
+// The files each SyntaxDomain was given by discovery's last run, so the next
+// run can tell which of them vanished.
+const discoveryRegistrations = new WeakMap();
+
+/**
  * Run the discovery flow asynchronously.
  */
 async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connectionDomain, piecesById, persistedSides, onPendingEdges = null }) {
@@ -272,6 +304,18 @@ async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connect
 
   // 2. Filter to discoverable files (absolute, forward-slashed).
   const discoverableFiles = toDiscoverableAbsPaths(tree, root);
+
+  // 2b. Forget what the last run registered and the listing no longer has —
+  // before the empty-project return, so deleting the last file counts too.
+  forgetVanishedFiles({
+    syntaxDomain,
+    root,
+    previous: discoveryRegistrations.get(syntaxDomain) ?? new Set(),
+    listed: discoverableFiles,
+    isHeldOpen: (path) => Boolean(syntaxAdapter?.getModelRegistry?.()?.has(path)),
+  });
+  discoveryRegistrations.set(syntaxDomain, new Set(discoverableFiles));
+
   if (discoverableFiles.length === 0) return;
 
   // 3. Build path→piece lookup

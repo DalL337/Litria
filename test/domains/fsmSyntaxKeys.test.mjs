@@ -42,7 +42,14 @@ function setup({ root = '/proj', files = {}, pieces = [] } = {}) {
       disk.set(path, contents);
       return true;
     },
-    deleteProjectPath: async (_root, path) => disk.delete(path),
+    // A file, or a folder: every entry under it (the real command deletes recursively).
+    deleteProjectPath: async (_root, path) => {
+      let removed = disk.delete(path);
+      for (const key of [...disk.keys()]) {
+        if (key.startsWith(`${path}/`)) removed = disk.delete(key) || removed;
+      }
+      return removed;
+    },
     removeEmptyDirectory: async () => true,
     createProjectDirectory: async () => true,
     readProjectFile: async (_root, path) => disk.get(path) ?? null,
@@ -62,6 +69,8 @@ function setup({ root = '/proj', files = {}, pieces = [] } = {}) {
     unregisterFile: domain.commands.unregisterFile,
     notifyFileChanged: domain.commands.notifyFileChanged,
     registerFileIfAbsent: domain.commands.registerFileIfAbsent,
+    forgetFile: domain.commands.forgetFile,
+    getSyntaxFilesUnder: domain.selectors.getRegisteredFilesUnder,
     bumpScaffoldRefresh: () => {},
     normalizePath,
     getBasename,
@@ -261,3 +270,68 @@ for (const order of ['rename-then-read', 'read-then-rename']) {
     assert.deepEqual(names, ['saved', 'unsaved']);
   });
 }
+
+// ---------------------------------------------------------------------------
+// P4 (owner ruling 2026-10-01): stale entries the syntax index kept after
+// deletes and moves. The graph query reads this index, so a deleted file must
+// not stay "indexed and ok", and an edge must not outlive its importer.
+// ---------------------------------------------------------------------------
+
+test('deleting a file that is not on the canvas removes it from the index too', async () => {
+  const ctx = setup({ files: { 'src/utils.ts': UTILS_TS, 'src/app.ts': APP_TS }, pieces: [] });
+  const edgeId = indexProject(ctx.domain, '/proj');
+
+  await ctx.manager.deleteFile('src/utils.ts');
+
+  assert.equal(ctx.domain.selectors.getFileStatus('/proj/src/utils.ts'), undefined, 'no longer indexed');
+  assert.equal(ctx.domain.selectors.getSyntaxEdge(edgeId).status, 'broken', 'its importer\'s import is broken');
+});
+
+test('deleting a folder forgets every indexed file under it, on the canvas or not', async () => {
+  const ctx = setup({
+    files: { 'src/utils.ts': UTILS_TS, 'src/app.ts': APP_TS, 'srcx/keep.ts': UTILS_TS },
+    pieces: [{ id: 2, filename: 'src/app.ts', label: 'app.ts' }],
+  });
+  indexProject(ctx.domain, '/proj');
+  ctx.domain.commands.registerFile('/proj/srcx/keep.ts', UTILS_TS);
+
+  await ctx.manager.deleteFolder('src');
+
+  assert.equal(ctx.domain.selectors.getFileStatus('/proj/src/utils.ts'), undefined);
+  assert.equal(ctx.domain.selectors.getFileStatus('/proj/src/app.ts'), undefined);
+  assert.equal(ctx.domain.selectors.getFileStatus('/proj/srcx/keep.ts'), 'ok', 'a sibling with a shared prefix is untouched');
+});
+
+test('moving a file that is not on the canvas re-keys it in the index', async () => {
+  const ctx = setup({ files: { 'src/utils.ts': UTILS_TS, 'src/app.ts': APP_TS }, pieces: [] });
+  indexProject(ctx.domain, '/proj');
+
+  await ctx.manager.moveFile('src/utils.ts', 'lib/utils.ts');
+
+  assert.equal(ctx.domain.selectors.getFileStatus('/proj/src/utils.ts'), undefined, 'nothing at the old path');
+  assert.equal(ctx.domain.selectors.getFileStatus('/proj/lib/utils.ts'), 'ok', 'indexed at the new path');
+});
+
+test('deleting an importer removes its edges and their wire links', async () => {
+  const ctx = setup({ files: { 'src/utils.ts': UTILS_TS, 'src/app.ts': APP_TS }, pieces: PIECES });
+  const edgeId = indexProject(ctx.domain, '/proj');
+  assert.equal(ctx.domain.selectors.getEdgeIdForConnection('conn_1'), edgeId);
+
+  await ctx.manager.deleteFile('src/app.ts');
+
+  assert.equal(ctx.domain.selectors.getSyntaxEdge(edgeId), null, 'the import is gone with its file');
+  assert.equal(ctx.domain.selectors.getEdgeIdForConnection('conn_1'), null, 'no link to a wire that was removed');
+  assert.deepEqual(ctx.domain.selectors.getEdgesForFile('/proj/src/utils.ts'), [], 'the exporter keeps no edge to it');
+});
+
+test('deleting an exporter on the canvas breaks the edge and drops the removed wire\'s link', async () => {
+  const ctx = setup({ files: { 'src/utils.ts': UTILS_TS, 'src/app.ts': APP_TS }, pieces: PIECES });
+  const edgeId = indexProject(ctx.domain, '/proj');
+
+  await ctx.manager.deleteFile('src/utils.ts');
+
+  const edge = ctx.domain.selectors.getSyntaxEdge(edgeId);
+  assert.equal(edge.status, 'broken', 'the importer still imports it: a real, broken import');
+  assert.equal(ctx.domain.selectors.getEdgeIdForConnection('conn_1'), null, 'the wire went with the piece');
+  assert.deepEqual(edge.connectionIds, []);
+});
