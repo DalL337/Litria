@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability surface for the main window (audit #2). Filesystem access is via custom, path-guarded Tauri commands (src-tauri/src/path_guard.rs) — the fs plugin is NOT enabled, so there is no unscoped fs surface to grant. The opener plugin is used only server-side via the Rust OpenerExt (crash report/logs open, both repo/app-scoped in Rust); the webview is intentionally NOT granted opener IPC. Keep this set minimal — capabilityScope.test.mjs enforces it.",
+  "description": "Minimal capability surface for the main window (audit #2). Filesystem access is via custom, path-guarded Tauri commands (src-tauri/src/path_guard.rs) — the fs plugin is NOT enabled, so there is no unscoped fs surface to grant. The opener plugin is used only server-side via the Rust OpenerExt (the crash report URL, prefix-checked in Rust, and the crash and build log folders, fixed in Rust); the webview is intentionally NOT granted opener IPC. Keep this set minimal — capabilityScope.test.mjs enforces it.",
   "windows": ["main"],
   "permissions": [
     "core:default",

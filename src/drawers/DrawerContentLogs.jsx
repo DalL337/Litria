@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Copy, RefreshCw } from 'lucide-react';
+import { Copy, FolderOpen, RefreshCw } from 'lucide-react';
 import { formatRecord } from '../app/buildLogDomain';
 
 /**
@@ -14,6 +14,10 @@ import { formatRecord } from '../app/buildLogDomain';
  *
  * Text is selectable (the drawer's `user-select: none` applies only to the
  * rail, not content), and "Copy all" covers the select-nothing case.
+ *
+ * "Open folder" opens the active tab's folder in the OS file manager. Rust
+ * picks the folder (`build_log_open_dir`, `crash_open_logs_dir`); the webview
+ * has no opener IPC and never sends a path. `build_log_dir` is display only.
  *
  * Protected zone conventions (ADR-008): no shadcn/Radix — native buttons.
  */
@@ -71,6 +75,17 @@ function DrawerContentLogs({ buildLogDomain, buildLogActions, initialTab = 'buil
   const [selected, setSelected] = useState(null);
   const [body, setBody] = useState('');
   const [status, setStatus] = useState('');
+  const [buildDir, setBuildDir] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    buildLogActions?.getBuildLogDir?.().then((dir) => {
+      if (live) setBuildDir(dir ?? null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [buildLogActions]);
 
   useEffect(() => {
     if (!buildLogDomain) return;
@@ -116,6 +131,18 @@ function DrawerContentLogs({ buildLogDomain, buildLogActions, initialTab = 'buil
     setStatus(ok ? 'Copied to clipboard.' : 'Copy failed.');
   }, [body, buildLogActions]);
 
+  const openFolder = useCallback(async () => {
+    setStatus('');
+    const ok = await buildLogActions?.openLogFolder?.(tab);
+    if (!ok) setStatus('Couldn’t open the folder.');
+  }, [buildLogActions, tab]);
+
+  const folderTitle = tab === 'build' && buildDir
+    ? `Open ${buildDir}`
+    : tab === 'crash'
+      ? 'Open the crash records folder'
+      : 'Open the build logs folder';
+
   const list = tab === 'crash'
     ? crashEntries.map((name) => ({ name, label: name, meta: '' }))
     : entries.map((entry) => ({
@@ -157,6 +184,14 @@ function DrawerContentLogs({ buildLogDomain, buildLogActions, initialTab = 'buil
           >
             <Copy size={13} /> Copy all
           </button>
+          <button
+            type="button"
+            className="drawer-logs-btn"
+            onClick={openFolder}
+            title={folderTitle}
+          >
+            <FolderOpen size={13} /> Open folder
+          </button>
         </div>
       </div>
 
@@ -166,7 +201,7 @@ function DrawerContentLogs({ buildLogDomain, buildLogActions, initialTab = 'buil
             <div className="drawer-logs-empty">
               {tab === 'crash'
                 ? 'No crash records.'
-                : 'No build logs yet. Use “Send to logs” on a build trace.'}
+                : `No build logs yet. Use “Send to logs” on a build trace.${buildDir ? ` Runs are saved in ${buildDir}.` : ''}`}
             </div>
           )}
           {list.map((item) => (
