@@ -6,10 +6,14 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
 
 ## Command inventory
 
-89 commands are registered; 5 of them exist only in debug builds.
+88 commands are registered; 5 of them exist only in debug builds.
 
-**No frontend caller.** Every registered command can be invoked from the webview, so these are surface with no current purpose. The owner ruled on 2026-10-01 to wire them up; each leaves this list when its caller lands:
-- `greet`: the Tauri template's sample command.
+**Every release-build command has a frontend caller.**
+- Any registered command can be invoked from the webview, so a command with no caller is surface with no purpose.
+- The 2026-10-01 refresh found four. On the owner's ruling the same day:
+  - `build_log_dir`, `lsp_cancel_install` and `check_scaffold_prerequisites` were wired (PRs #101–#103);
+  - `greet`, the Tauri template's sample command, was removed.
+- Keep it that way: a new command lands with its caller.
 
 The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand, from devtools or CDP.
 
@@ -17,7 +21,6 @@ The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand,
 
 | Command | Defined in | Frontend caller | Notes |
 |---|---|---|---|
-| `greet` | `src-tauri/src/commands.rs` | — | **no frontend caller** |
 | `read_project_file` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
 | `open_file_dialog` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
 | `write_project_file` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |

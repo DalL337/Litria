@@ -21,11 +21,6 @@ use tauri::ipc::Channel;
 use serde_json::Value;
 
 #[tauri::command]
-pub(crate) fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[tauri::command]
 pub(crate) fn read_project_file(root_path: &str, relative_path: &str) -> CommandResult<String> {
     project_ops::read_project_file(root_path, relative_path)
 }
