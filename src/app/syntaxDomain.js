@@ -1510,21 +1510,35 @@ export function createSyntaxDomain() {
     },
 
     /**
-     * Locate the line of an existing JS/TS import from `spec` in the given
-     * authoritative text. Pure text query — no domain state read or written.
+     * Rewrite the module path of the import that names `matchSpec`, and
+     * nothing else: the statement keeps its names, aliases, default and
+     * namespace bindings, line breaks, quote character and extension style.
+     * A rename changes where a module lives, never what is imported from it.
      *
-     * Rename patch plans carry the pre-rename spec as `matchSpec`; the
-     * adapter uses this to find where the import ACTUALLY lives at apply
-     * time instead of trusting the stored edge.importLine, which goes stale
-     * as soon as the user adds or removes lines above the import (the JS
-     * twin of the 2026-07-17 python line-0 corruption).
+     * Pure text query on the authoritative text — no domain state read or
+     * written. Rename patch plans carry the pre-rename spec as `matchSpec`,
+     * so the import is found where it ACTUALLY lives at apply time, never at
+     * the stored edge.importLine, which goes stale as soon as the user edits
+     * above it (the JS twin of the 2026-07-17 python line-0 corruption).
      *
-     * @param {{ text: string, spec: string }} params
-     * @returns {number|null} 0-indexed line, or null when no import matches
+     * @param {{ text: string, matchSpec: string, newSpec: string }} params
+     * @returns {string|null} the new text, or null when no import names
+     *   `matchSpec` (fail closed: nothing to rewrite, nothing written)
      */
-    computeImportLineForSpec({ text, spec }) {
-      if (typeof text !== 'string' || !spec) return null;
-      return _findImportFromSpec(text, spec)?.line ?? null;
+    rewriteImportSpec({ text, matchSpec, newSpec }) {
+      if (typeof text !== 'string' || !matchSpec || !newSpec) return null;
+      const found = _findImportFromSpec(text, matchSpec);
+      if (!found) return null;
+      // Keep the extension the code wrote (`./utils.js` → `./util-belt.js`).
+      const ext = found.spec.startsWith(matchSpec) ? found.spec.slice(matchSpec.length) : '';
+      const escaped = found.spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const fromRe = new RegExp(`(from\\s*)(['"\`])${escaped}\\2`);
+      const lines = text.split('\n');
+      const statement = lines.slice(found.line, found.endLine + 1).join('\n');
+      if (!fromRe.test(statement)) return null;
+      const rewritten = statement.replace(fromRe, (_m, from, quote) => `${from}${quote}${newSpec}${ext}${quote}`);
+      lines.splice(found.line, found.endLine - found.line + 1, ...rewritten.split('\n'));
+      return lines.join('\n');
     },
 
     /**
@@ -1612,30 +1626,22 @@ export function createSyntaxDomain() {
         edge.relSpec = _stripImportExt(_computeRelativePath(edge.targetFilePath, edge.sourceFilePath));
         edge.edgeId = _edgeKey(edge.sourceFilePath, edge.targetFilePath);
 
-        // Update import line — JS/TS targets with a known line only. This is
-        // the path that corrupted a Python file (2026-07-17): a pending py→py
-        // edge held importLine 0 (the JS insert heuristic doesn't read Python),
-        // and the rename replaced line 0 — the file's real first import — with
-        // the JS stub.
-        if (_canWriteImportLine(edge) && edge.importLine != null) {
-          if (edge.symbols.length > 0) {
-            const importText = _buildImportLine(edge.symbols, edge.relSpec, edge.sourceFilePath);
-            patchPlans.push({
-              kind: 'replace',
-              filePath: edge.targetFilePath,
-              line: edge.importLine,
-              matchSpec: priorRelSpec,
-              text: importText,
-            });
-          } else if (edge.status === 'pending') {
-            patchPlans.push({
-              kind: 'replace',
-              filePath: edge.targetFilePath,
-              line: edge.importLine,
-              matchSpec: priorRelSpec,
-              text: `import { /* TODO: select symbol */ } from '${edge.relSpec}';\n`,
-            });
-          }
+        // Re-point the importer's import at the new path — JS/TS targets
+        // only (a pending py→py edge once had a JS stub written over a
+        // Python file's first import, 2026-07-17). Only the module path
+        // changes: the adapter finds the statement by `matchSpec` and
+        // rewrites its path in place (`rewriteImportSpec`). Rebuilding the
+        // statement from the edge's symbols kept only a multi-line import's
+        // first line, and dropped every alias, untracked name and style —
+        // a discovered edge (no symbols yet) even became the TODO stub (P4,
+        // 2026-10-01). No matching import: no write.
+        if (_canWriteImportLine(edge)) {
+          patchPlans.push({
+            kind: 'respec',
+            filePath: edge.targetFilePath,
+            matchSpec: priorRelSpec,
+            newSpec: edge.relSpec,
+          });
         }
 
         syntaxEdges.set(edge.edgeId, edge);

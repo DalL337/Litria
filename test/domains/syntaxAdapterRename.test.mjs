@@ -93,13 +93,19 @@ test('rename fails closed when the user already deleted the import', async () =>
   assert.equal(disk.get('src/app.js'), edited, 'no write when the import is gone');
 });
 
-test('computeImportLineForSpec locates extension-tolerant matches and misses cleanly', () => {
+test('rewriteImportSpec finds the import extension-tolerantly, rewrites only its path, and misses cleanly', () => {
   const domain = createSyntaxDomain();
+  const rewrite = (text, matchSpec, newSpec = './util-belt') => domain.commands.rewriteImportSpec({ text, matchSpec, newSpec });
   const text = "// header\nimport { a } from './other';\nimport { helper } from './utils.js';\n";
-  assert.equal(domain.commands.computeImportLineForSpec({ text, spec: './utils' }), 2);
-  assert.equal(domain.commands.computeImportLineForSpec({ text, spec: './missing' }), null);
-  assert.equal(domain.commands.computeImportLineForSpec({ text: null, spec: './utils' }), null);
-  assert.equal(domain.commands.computeImportLineForSpec({ text, spec: '' }), null);
+  assert.equal(rewrite(text, './utils'), "// header\nimport { a } from './other';\nimport { helper } from './util-belt.js';\n");
+  assert.equal(rewrite(text, './missing'), null);
+  assert.equal(rewrite(null, './utils'), null);
+  assert.equal(rewrite(text, ''), null);
+  // A string equal to the path elsewhere in the statement is not touched.
+  assert.equal(
+    rewrite("import { /* './utils' */ helper } from `./utils`;\n", './utils'),
+    "import { /* './utils' */ helper } from `./util-belt`;\n"
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -139,4 +145,58 @@ test('after a rename, a symbol already on the edge is not offered again', async 
     .getAvailableSymbolsForEdge('/proj/src/util-belt.js', edge.edgeId)
     .map((s) => s.name);
   assert.deepEqual(offered, ['other']);
+});
+
+// ---------------------------------------------------------------------------
+// P4 (owner ruling 2026-10-01): a rename rewrote only the FIRST line of the
+// import it found (the statement's start line) with an import rebuilt from
+// the edge's symbols. A multi-line import kept its old closing lines (a
+// syntax error, written to disk for a closed file), and anything the edge
+// does not track — an alias, an extra name, the file's quote and extension
+// style, or a discovered edge's whole import list — was replaced. A rename
+// changes where the module lives, so only the module path may change.
+// ---------------------------------------------------------------------------
+
+async function renameWith(appText, { resolve = true, discovered = false } = {}) {
+  const { domain, adapter, disk } = setupAdapter({
+    'src/utils.js': 'export function helper() {}\nexport function other() {}\nexport const extra = 1;\n',
+    'src/app.js': discovered ? appText : 'helper();\n',
+  });
+  if (discovered) {
+    domain.commands.connectDiscovered({
+      connectionId: 'conn-1',
+      sourceFilePath: '/proj/src/utils.js',
+      targetFilePath: '/proj/src/app.js',
+      moduleSpecifier: './utils',
+      importLine: 0,
+    });
+  } else {
+    if (resolve) await connectAndResolve(domain, adapter);
+    disk.set('src/app.js', appText);
+    adapter.onFileChanged('/proj/src/app.js', appText);
+  }
+  await adapter.onFileRenamed('/proj/src/utils.js', '/proj/src/util-belt.js');
+  return disk.get('src/app.js');
+}
+
+test('a multi-line import is renamed whole: only its module path changes', async () => {
+  const before = "import {\n  helper,\n  other,\n} from './utils';\nhelper(); other();\n";
+  const after = await renameWith(before);
+  assert.equal(after, "import {\n  helper,\n  other,\n} from './util-belt';\nhelper(); other();\n");
+});
+
+test('a rename keeps aliases and names the edge does not track', async () => {
+  const after = await renameWith("import { helper as h, extra } from './utils';\nh(extra);\n");
+  assert.equal(after, "import { helper as h, extra } from './util-belt';\nh(extra);\n");
+});
+
+test('a rename keeps the import\'s quote and extension style', async () => {
+  const after = await renameWith('import { helper } from "./utils.js";\nhelper();\n');
+  assert.equal(after, 'import { helper } from "./util-belt.js";\nhelper();\n');
+});
+
+test('a discovered import keeps its names through a rename (no TODO stub)', async () => {
+  const before = "import { helper, other } from './utils';\nhelper(); other();\n";
+  const after = await renameWith(before, { discovered: true });
+  assert.equal(after, "import { helper, other } from './util-belt';\nhelper(); other();\n");
 });
