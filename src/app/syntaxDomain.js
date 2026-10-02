@@ -1027,6 +1027,24 @@ export function createSyntaxDomain() {
     },
 
     /**
+     * Forget everything: files, symbols, edges and their links to canvas
+     * wires. Called when a new project load begins. The domain lives for the
+     * app's lifetime, and every load restarts canvas connection ids at
+     * conn_1, so without this the next project's conn_1 was linked to the
+     * previous project's edge (its status, and the graph's provenance) and
+     * the previous project's files stayed indexed (P4, 2026-10-01).
+     */
+    reset() {
+      const connectionsChanged = [...connectionToEdge.keys()];
+      const edgesChanged = [...syntaxEdges.keys()];
+      const portsChanged = [...new Set([...fileStatus.keys(), ...fileTextCache.keys(), ...portIndex.keys()])];
+      for (const map of [definitionIndex, symbolIndex, portIndex, syntaxEdges, connectionToEdge, bindingMap, fileTextCache, fileStatus]) {
+        map.clear();
+      }
+      _notify({ portsChanged, connectionsChanged, edgesChanged, fileChanged: null });
+    },
+
+    /**
      * The file no longer exists (deleted, or gone from disk). Unlike
      * `unregisterFile`, which a move uses for the old path while its edges
      * wait to be re-pointed, this settles every edge the file was part of:
