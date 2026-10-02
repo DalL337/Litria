@@ -630,6 +630,18 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
   - **Only source-side edges are cleaned up.** `unregisterFile` breaks only edges where the file is the source. An edge where the file is the importer keeps a stale path.
   - **Delete leaves syntax edges behind.** A delete removes the canvas connections without disconnecting their syntax edges.
   - **Until these are fixed,** the graph must be built from pieces and pending edges, never from raw registrations, and must treat an edge's paths as possibly stale.
+- *(Added 2026-10-01, owner decision.)* Settle the two residuals that Codex's review of the gate work could not close by reading (see [Peer review of the gate work](#peer-review-of-the-gate-work-codex-2026-10-01)). Both are `suspected`. Reproduce each one, then fix it or withdraw it:
+  - **The user-exclusion cache under real concurrency.**
+    - The policy keeps the user's withheld paths in a process-global `OnceLock<RwLock<…>>` (`src-tauri/src/project_api/policy.rs`), but the unit tests swap in thread-local state.
+    - Nothing tests production initialisation, a preferences save racing a read, or the poisoned-lock recovery (`into_inner`).
+    - The graph applies this policy to every node and edge.
+    - The other half of Codex's note, invalid patterns being discarded silently, was fixed by F1 in PR #98: an invalid pattern now withholds everything.
+  - **Project-switch races.**
+    - Opening a project has no serialisation fence (`useProjectLaunch.js`).
+    - Discovery cancels pending timers but not a scan that is already running (`useDiscoveryLifecycle.js`).
+    - SyntaxDomain survives a project change (`useSyntaxDomainLifecycle.js`).
+    - The graph is built from SyntaxDomain, so a scan that finishes after a switch could leave one project's files in the next project's graph.
+    - This needs tests that control the interleaving.
 
 ### Tests
 
@@ -747,8 +759,8 @@ At the owner's request, Codex reviewed the gate work merged on 2026-10-01 (PRs #
 
 Codex's "checked, no finding" list and residuals are in the session journal. The residuals:
 - the P4 carry-overs, already assigned;
-- production cache concurrency, which the unit tests cannot exercise;
-- project-switch races without a serialization fence;
+- production cache concurrency, which the unit tests cannot exercise (assigned to P4 by the owner, 2026-10-01);
+- project-switch races without a serialization fence (assigned to P4 by the owner, 2026-10-01);
 - the accepted disclosure residuals.
 
 CI evidence (PR #98, code head 44af4d3): guard (JS domain tests) 1388/1388, cargo test Linux 517 passed and macOS 516 passed, 0 failed on either. Windows ran locally: 517 passed, 0 warnings.
