@@ -103,6 +103,15 @@ export function useDiscoveryLifecycle({
   const refreshInFlightRef = useRef(false);
   const prevDirtyRef = useRef(null);
   const prevScaffoldTokenRef = useRef(scaffoldRefreshToken);
+  // The project load discovery may act for. A run is tied to the load it
+  // started under and stops at its next step once that load is no longer
+  // current: a run still reading when the user switched projects used to
+  // finish against the NEW project's domains with the OLD project's file and
+  // piece lookups, and piece ids repeat across projects (P4, 2026-10-01).
+  const currentLoadRef = useRef(loadToken);
+  currentLoadRef.current = enabled ? loadToken : null;
+  useEffect(() => () => { currentLoadRef.current = null; }, []);
+  const stillCurrent = (token) => () => token != null && currentLoadRef.current === token;
 
   // Discovery refreshes read CURRENT args (pieces placed since load matter).
   latestArgsRef.current = {
@@ -123,7 +132,7 @@ export function useDiscoveryLifecycle({
       const args = latestArgsRef.current;
       if (!args?.projectRoot) return;
       refreshInFlightRef.current = true;
-      _runDiscovery(args)
+      _runDiscovery({ ...args, isCurrent: stillCurrent(currentLoadRef.current) })
         .catch((err) => {
           // eslint-disable-next-line no-console
           console.warn('[discovery] Error during incremental refresh:', err);
@@ -191,6 +200,7 @@ export function useDiscoveryLifecycle({
       piecesById,
       persistedSides,
       onPendingEdges,
+      isCurrent: stillCurrent(loadToken),
     }).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn('[discovery] Error during import discovery:', err);
@@ -294,10 +304,20 @@ const discoveryRegistrations = new WeakMap();
 
 /**
  * Run the discovery flow asynchronously.
+ *
+ * `isCurrent` says whether the project load this run started under is still
+ * the current one. The run checks it after every wait and before it touches
+ * any shared domain, and stops once its load is gone: a run that finished
+ * after a project switch drew the old project's wires between the new
+ * project's same-id pieces, pruned the new project's wires, registered the
+ * old project's files and replaced its off-canvas badges (P4, 2026-10-01).
+ * Between two checks the run makes no `await`, so nothing it does lands in
+ * a project it did not start under.
  */
-async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connectionDomain, piecesById, persistedSides, onPendingEdges = null }) {
+async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connectionDomain, piecesById, persistedSides, onPendingEdges = null, isCurrent = () => true }) {
   // 1. List all project files
   const tree = await listProjectTree(projectRoot);
+  if (!isCurrent()) return;
   if (!tree || !Array.isArray(tree)) return;
 
   const root = projectRoot.replace(/\\/g, '/').replace(/\/$/, '');
@@ -321,15 +341,17 @@ async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connect
   // 3. Build path→piece lookup
   const pathToPiece = buildPathToPiece(piecesById, projectRoot);
 
-  // 4. Read files and register with syntaxDomain
+  // 4. Read files, then register them with syntaxDomain — all at once, after
+  // the last read, so a run stopped mid-read registers nothing.
   const fileContents = new Map();
   for (const absPath of discoverableFiles) {
     const relPath = absPath.slice(root.length + 1);
     const text = await readProjectFile(projectRoot, relPath);
-    if (text != null) {
-      fileContents.set(absPath, text);
-      syntaxDomain.commands.registerFile(absPath, text);
-    }
+    if (!isCurrent()) return;
+    if (text != null) fileContents.set(absPath, text);
+  }
+  for (const [absPath, text] of fileContents) {
+    syntaxDomain.commands.registerFile(absPath, text);
   }
 
   // 5. Discover edges
@@ -372,12 +394,14 @@ async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connect
     },
   });
   for (const connId of staleConnectionIds) {
+    if (!isCurrent()) return;
     connectionDomain.commands.removeConnectionById(connId);
     await Promise.resolve(syntaxAdapter.handleDisconnect({ connectionId: connId })).catch(() => {});
   }
 
   // 8. Surface off-canvas edges to the badge flow (S3). Full-replace
   // semantics: each discovery run re-derives the pending set.
+  if (!isCurrent()) return;
   onPendingEdges?.(pendingEdges);
 }
 
