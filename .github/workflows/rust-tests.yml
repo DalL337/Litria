@@ -12,11 +12,26 @@ name: Rust Tests
 #   (verification-policy Rule 1), so this job covers the two it cannot.
 #
 # The steps mirror release.yml's proven sequence; keep them in step with it.
+#
+# THE REQUIRED CHECK
+#   `main`'s branch protection requires `cargo test (required)` (the last job
+#   here) as well as the architecture guard. A required check that never
+#   reports blocks a pull request forever, so this workflow runs on EVERY pull
+#   request: the `changes` job decides whether the suite has to run, and
+#   `cargo test (required)` reports the outcome either way. The per-platform
+#   jobs cannot be the required checks themselves, because a matrix job that
+#   is skipped reports one check under its unexpanded name.
 
 on:
   workflow_dispatch:
+  # No path filter on pull requests; see THE REQUIRED CHECK above.
   pull_request:
-    paths: &rust_inputs
+  push:
+    branches:
+      - main
+    # The inputs that can affect the Rust suite. The `changes` job repeats
+    # this list as shell patterns; keep the two in step.
+    paths:
       - "src-tauri/**"
       # Files the crate compiles in from outside src-tauri (include_str!).
       - "src/scaffold/recipes.json"
@@ -28,10 +43,6 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/rust-tests.yml"
-  push:
-    branches:
-      - main
-    paths: *rust_inputs
 
 permissions:
   contents: read
@@ -41,8 +52,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: rust inputs changed?
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - name: Compare the pull request's files with the Rust inputs
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # A push to main is already filtered by its trigger; a manual run tests everything.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Both names of a renamed file count. A failed listing fails this job,
+          # and with it the required check (fail closed).
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          rust=false
+          # The listing stops at 3000 files; past that, assume the worst.
+          if [ "$(printf '%s\n' "$files" | grep -c .)" -ge 3000 ]; then rust=true; fi
+          # Same list as the push trigger's `paths` above.
+          while IFS= read -r f; do
+            case "$f" in
+              src-tauri/*|src/scaffold/recipes.json|resources/language-server-registry.json|\
+              test/fixtures/scaffold-plans/*|scripts/bundle-node.mjs|scripts/bundle-servers.mjs|\
+              package.json|package-lock.json|.github/workflows/rust-tests.yml)
+                rust=true ;;
+            esac
+          done <<< "$files"
+          echo "Rust inputs changed: $rust"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+
   test:
     name: cargo test (${{ matrix.label }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # A healthy run takes minutes; a hung step (2026-10-01: apt on the Linux
+    # runner) would otherwise hold the required check for six hours.
+    timeout-minutes: 45
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -101,3 +157,39 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test
+
+  # The check `main`'s branch protection requires. It passes when the suite
+  # passed on every platform, or when no Rust input changed; anything else
+  # fails it, including a cancelled or timed-out platform job. It runs under
+  # `always()`, not `!cancelled()`, on purpose: a SKIPPED required check counts
+  # as passing, so a cancelled run must still reach this job and fail here.
+  required:
+    name: cargo test (required)
+    needs: [changes, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the suite's outcome
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUST: ${{ needs.changes.outputs.rust }}
+          TEST: ${{ needs.test.result }}
+        run: |
+          echo "changes=$CHANGES rust=$RUST test=$TEST"
+          if [ "$CHANGES" != "success" ]; then
+            echo "::error::Could not tell whether a Rust input changed."
+            exit 1
+          fi
+          if [ "$RUST" = "true" ]; then
+            if [ "$TEST" != "success" ]; then
+              echo "::error::cargo test did not pass on every platform ($TEST)."
+              exit 1
+            fi
+            echo "cargo test passed on every platform."
+          else
+            if [ "$TEST" != "skipped" ]; then
+              echo "::error::No Rust input changed, but the suite reported $TEST."
+              exit 1
+            fi
+            echo "No Rust input changed; the suite was not needed."
+          fi
