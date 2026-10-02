@@ -54,7 +54,6 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .invoke_handler(tauri::generate_handler![
             // Core project ops
-            commands::greet,
             commands::read_project_file,
             commands::open_file_dialog,
             commands::write_project_file,
