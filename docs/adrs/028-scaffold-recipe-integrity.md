@@ -184,6 +184,18 @@ carries the excluded-combinations section the matrix cites and states these
 support limits and per-framework add-on coverage; it does not describe
 Angular as a Vite template.
 
+> **Addendum (2026-10-01): the machine is a second reason source.** Evidence
+> says a combination works; it does not say whether this computer can run it.
+> The wizard now calls `check_scaffold_prerequisites` for each package manager
+> when an npm-route wrapper is picked. That check judges the manager with the
+> run's own resolver (`resolve_pm`, including the §5 major floor), so a missing
+> pnpm or a refused Yarn Classic is disabled with the run's own reason before
+> Create, not after the age-gate's network call. The plan applies the same
+> verdict (`buildScaffoldPlan` `env.tools`). A check that fails or has not
+> answered blocks nothing, and the runner's gate still decides. Tools the
+> scaffold does not need are not reasons to refuse: Tauri without the Rust
+> toolchain is a review-page warning.
+
 ## Consequences
 
 Positive:

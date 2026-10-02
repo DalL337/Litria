@@ -11,7 +11,6 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
 **No frontend caller.** Every registered command can be invoked from the webview, so these are surface with no current purpose. Whether to wire or remove each one is an open product question; they are recorded here, not changed:
 - `greet`: the Tauri template's sample command.
 - `lsp_cancel_install`: nothing in `src/` calls it.
-- `check_scaffold_prerequisites`: nothing in `src/` calls it.
 - `build_log_dir`: nothing in `src/` calls it (the log viewer uses `build_log_list` and `build_log_read`).
 
 The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand, from devtools or CDP.
@@ -64,7 +63,7 @@ The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand,
 
 | Command | Defined in | Frontend caller | Notes |
 |---|---|---|---|
-| `check_scaffold_prerequisites` | `src-tauri/src/commands.rs` | — | **no frontend caller** |
+| `check_scaffold_prerequisites` | `src-tauri/src/commands.rs` | `src/components/NewProjectWizard.jsx` | The wizard's preflight, once per package manager for the chosen wrapper. It judges the manager with the run's resolver (`resolve_pm`), so it cannot disagree with the run. Only required tools decide `ready`; cargo for Tauri is optional and becomes a warning (wired 2026-10-01; ADR-028 §10 addendum). |
 | `scaffold_project` | `src-tauri/src/commands.rs` | `src/components/NewProjectWizard.jsx` |  |
 | `create_blank_project` | `src-tauri/src/commands.rs` | `src/components/NewProjectWizard.jsx` |  |
 | `scaffold_python_project` | `src-tauri/src/commands.rs` | `src/components/NewProjectWizard.jsx` |  |
