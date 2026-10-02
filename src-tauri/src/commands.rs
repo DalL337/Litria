@@ -490,8 +490,9 @@ pub(crate) async fn lsp_install_server(
 }
 
 #[tauri::command]
-pub(crate) fn lsp_cancel_install(server_id: String) {
-    crate::lsp::download::cancel_install(&server_id);
+pub(crate) fn lsp_cancel_install(server_id: String) -> bool {
+    // False when no install of this server is running.
+    crate::lsp::download::cancel_install(&server_id)
 }
 
 #[tauri::command]
