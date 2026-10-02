@@ -6,13 +6,12 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
 
 ## Command inventory
 
-88 commands are registered; 5 of them exist only in debug builds.
+89 commands are registered; 5 of them exist only in debug builds.
 
-**No frontend caller.** Every registered command can be invoked from the webview, so these are surface with no current purpose. Whether to wire or remove each one is an open product question; they are recorded here, not changed:
+**No frontend caller.** Every registered command can be invoked from the webview, so these are surface with no current purpose. The owner ruled on 2026-10-01 to wire them up; each leaves this list when its caller lands:
 - `greet`: the Tauri template's sample command.
 - `lsp_cancel_install`: nothing in `src/` calls it.
 - `check_scaffold_prerequisites`: nothing in `src/` calls it.
-- `build_log_dir`: nothing in `src/` calls it (the log viewer uses `build_log_list` and `build_log_read`).
 
 The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand, from devtools or CDP.
 
@@ -138,7 +137,7 @@ The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand,
 | `crash_mark_phase` | `src-tauri/src/commands.rs` | `src/crash/useCrashBoot.js` |  |
 | `crash_mark_clean` | `src-tauri/src/commands.rs` | `src/crash/shutdown.js` |  |
 | `crash_mark_seen` | `src-tauri/src/commands.rs` | `src/crash/CrashNoticeBanner.jsx` |  |
-| `crash_open_logs_dir` | `src-tauri/src/commands.rs` | `src/crash/CrashBoundary.jsx`, `src/crash/CrashNoticeBanner.jsx` |  |
+| `crash_open_logs_dir` | `src-tauri/src/commands.rs` | `src/crash/CrashBoundary.jsx`, `src/crash/CrashNoticeBanner.jsx`, `src/app/useBuildLogs.js` |  |
 | `crash_open_report_url` | `src-tauri/src/commands.rs` | `src/crash/CrashBoundary.jsx`, `src/crash/CrashNoticeBanner.jsx` |  |
 | `crash_home_dir` | `src-tauri/src/commands.rs` | `src/crash/CrashBoundary.jsx`, `src/crash/CrashNoticeBanner.jsx` |  |
 | `crash_test_panic` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller** |
@@ -161,7 +160,8 @@ The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand,
 | `build_log_write` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` |  |
 | `build_log_list` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` |  |
 | `build_log_read` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` |  |
-| `build_log_dir` | `src-tauri/src/commands.rs` | — | **no frontend caller** |
+| `build_log_dir` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` | Display only: the path the log viewer shows (wired 2026-10-01). |
+| `build_log_open_dir` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` | No argument: Rust opens the builds folder, as `crash_open_logs_dir` does for crashes (added 2026-10-01). |
 | `copy_to_clipboard` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` |  |
 
 ## Contract notes
