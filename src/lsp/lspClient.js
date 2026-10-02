@@ -66,6 +66,23 @@ export async function lspInstallServer(languageId, customUrl = null) {
 }
 
 /**
+ * Cancel the install in flight for a server. Takes the SERVER id
+ * (`rust-analyzer`), not the language id. Resolves false when no install of
+ * it is running. The cancelled install rejects with `lsp.install.cancelled`.
+ */
+export async function lspCancelInstall(serverId) {
+  return invoke('lsp_cancel_install', { serverId });
+}
+
+/**
+ * Subscribe to install download progress: handler({ serverId, receivedBytes,
+ * totalBytes }), throttled by Rust. Resolves to the unsubscribe function.
+ */
+export async function listenInstallProgress(handler) {
+  return listen('lsp:download-progress', (e) => handler(e.payload));
+}
+
+/**
  * Remove a managed server install (stops its sessions first).
  * Returns UninstallResultPayload: { languageId, server, freedBytes, stoppedSessions }.
  */

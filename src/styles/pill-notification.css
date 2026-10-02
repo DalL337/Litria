@@ -141,6 +141,28 @@
   color: #ffffff;
 }
 
+/* A pill's own second action (an install's Cancel): a text button between the
+   message and the caret, styled like the caret so the pill stays one strip. */
+.pill-notification-secondary {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 10px;
+  margin: 0;
+  background: none;
+  border: none;
+  border-left: 1px solid rgba(92, 107, 192, 0.25);
+  color: rgba(220, 220, 230, 0.9);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pill-notification-secondary:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
 .pill-notification-status {
   display: flex;
   align-items: center;
