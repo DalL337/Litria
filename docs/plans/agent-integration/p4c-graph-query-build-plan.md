@@ -9,6 +9,9 @@ that review partway with a content-safety refusal while it probed the
 disclosure policy, but not before it found the defects listed under
 "First review" below. Each was reproduced against `e6e0285` and became one of
 tasks 9–17. The next review is done by a Claude reviewer (owner decision).
+Revised again 2026-10-03 after the second review (approved) and the live pass:
+the live pass found four defects no test or review had caught, listed under
+"Live pass" below, and they became tasks 18–21.
 
 Authority: [Project API contract brief](brief-project-api-contract.md) §4.5
 (revisions), §5 (effective reads), §6 (disclosure policy), §7.4 (graph query)
@@ -53,6 +56,10 @@ relationships, with derived provenance and honest per-node freshness (brief
 - [x] Symbol truncation at 50 per edge is flagged in the response (first review 7).
 - [x] Discovery-in-flight signal: true while a refresh is armed but not started, and a previous project's run finishing never clears the current project's signal (first review 9 and 10).
 - [x] Off-canvas files get the same node facts as on-canvas ones, including `discoverable` from the file name, proven by a test (first review 11).
+- [ ] Empty canvas: while discovery for the current load is waiting for pieces on the canvas, the graph reports a distinct reason saying so instead of `discoveryInFlight`; the in-flight signal means discovery is reading or about to read (live pass 1, owner decision: report honestly, keep discovery canvas-driven).
+- [ ] Folder facts come from group membership (`group.pieceIds`), the way production stores it, and every test builds pieces the way production does, with no `groupId` field on a piece (live pass 2).
+- [ ] No literal NUL or other control characters in source files: the key separator in `src/app/projectApiBridge.js` is written as an escape, and `git diff --numstat` reports the file as text (live pass 3).
+- [ ] A focus that does not exist answers the way `litria_files_read` answers that path (`notFound`, no nodes), never as a resolved node (live pass 4).
 
 ## Requirements
 
@@ -239,6 +246,52 @@ has `a_junction_into_a_denied_directory_is_denied` and a `junction` helper
 **Reviewer:** put any scratch reproduction files in the operating system's temp
 directory, never inside the repository copy; files created in the copy mark the
 review as modified.
+
+## Live pass (2026-10-03)
+
+Run against `707c205` in a debug build, driven over the WebView2 debugging
+port, with a scratch JS/TS project: `d` imports `a`; `a` imports `b` and a
+denied `src/.env.local.ts`; `b` imports `c`. App data was redirected to a
+scratch folder.
+
+**Passed:** the denied file never appeared, even as a piece on the canvas;
+edges ran importer to exporter with `sourceDerived`/`resolved` and their
+symbols; nodes were `current` after discovery and `stale` (reason
+`staleNodes`) after `c.ts` was edited on disk outside the app;
+`discoveryInFlight` was reported while the initial run was reading; `maxNodes`
+truncation was flagged; `importedBy` walked the right way; a denied focus
+answered `focus: "denied"`, as a read does.
+
+**Found:**
+
+1. **Empty canvas.** `decideDiscoveryStep` arms on a new load and skips while
+   the canvas has no pieces, so a project with an empty canvas never runs
+   discovery, and the in-flight signal (armed and not yet run) stayed true for
+   minutes: every answer was `partial` with `discoveryInFlight`, no edges, and
+   every node `unknown`. Owner decision: keep discovery canvas-driven and
+   report this state honestly with its own reason.
+2. **No folder facts in production.** After importing `src` as a folder group
+   (`folderPath: "src"`, five pieces), no node carried `folder` and no folder
+   node appeared. The snapshot reads `piece.groupId`, but production pieces have
+   no such field (`id, x, y, filename, label, color, code, workingCode, scale,
+   isSpawning, adjacentTo, references`); membership lives in `group.pieceIds`.
+   `graphSnapshotProduction.test.mjs` and `projectApiBridgeGraph.test.mjs`
+   build pieces with `groupId`, so they pass.
+3. **NUL bytes.** `src/app/projectApiBridge.js` contains four literal NUL
+   characters inside a template-string key. Git and grep treat the file as
+   binary, so a diff or pull-request review of the bridge shows nothing.
+4. **Missing focus.** `{"focus":"src/nope.ts"}` answered `focus: "resolved"`
+   with a file node for the missing path; `litria_files_read` answers the same
+   path with `notFound`.
+
+**Failing-first for tasks 9–17,** which the second review flagged as skipped,
+was verified after that run: the seven JavaScript tests it added fail against
+`e6e0285` and pass against `707c205`, and the first reviewer's Rust harness,
+rebuilt against `707c205`, passes every case it failed on `e6e0285`.
+
+**For tasks 18–21,** run each new test against `707c205` before the fix, record
+the failing output under Evidence, then fix. A test that already passes on
+`707c205` does not prove the fix; say so if that happens.
 
 ## Models and commands
 
