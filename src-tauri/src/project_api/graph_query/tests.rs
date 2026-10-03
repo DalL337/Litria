@@ -84,6 +84,7 @@ struct Scripted {
     buffers: Vec<(String, String)>,
     index_omitted: u32,
     discovery_in_flight: bool,
+    awaiting_canvas_pieces: bool,
     graph_error: Option<crate::contracts::error::ErrorCode>,
     graph_calls: usize,
 }
@@ -182,6 +183,7 @@ impl GraphEditor for Scripted {
             nodes,
             edges,
             discovery_in_flight: self.discovery_in_flight,
+            awaiting_canvas_pieces: self.awaiting_canvas_pieces,
             omitted: 0,
         })
     }
@@ -814,6 +816,72 @@ fn an_owner_symbol_cut_is_flagged() {
     let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "imports" })), &mut editor);
     assert_eq!(result.edges[0].symbols.len(), 1, "the owner already carried at most the ceiling");
     assert!(result.truncated_by.contains(&TruncationReason::Symbols), "the owner's cut is flagged");
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Live-pass defects (tasks 18, 21) ---------------------------------------
+
+/// Task 21 / live pass 4: a disclosed focus that does not exist (no file on
+/// disk, no buffer, no node the owner knows) answers `notFound` with no nodes,
+/// exactly as `litria_files_read` answers that path.
+#[test]
+fn a_missing_focus_answers_not_found() {
+    let root = temp_root("missing-focus");
+    // The owner knows no node for nope.ts, it is not on disk, and no buffer
+    // holds it.
+    let mut editor = Scripted::default();
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "nope.ts" })), &mut editor);
+    assert_eq!(result.focus, FocusOutcome::NotFound);
+    assert!(result.nodes.is_empty() && result.edges.is_empty(), "a missing focus returns no nodes");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Task 21: a focus that exists only in a buffer (a new file not yet saved)
+/// still resolves — the buffer is where `litria_files_read` would find it.
+#[test]
+fn a_focus_held_only_in_a_buffer_resolves() {
+    let root = temp_root("buffer-focus");
+    // Not on disk, no node fact from the owner, but the editor holds a buffer.
+    let mut editor = Scripted {
+        buffers: vec![("a.ts".into(), "b1-live".into())],
+        ..Scripted::default()
+    };
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor);
+    assert_eq!(result.focus, FocusOutcome::Resolved);
+    assert_eq!(file_paths(&result), ["a.ts"]);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Task 18 / live pass 1: discovery armed on an empty canvas is waiting for
+/// pieces, not reading. The graph reports `awaitingCanvasPieces` as its own
+/// reason — distinct from `discoveryInFlight`, which it never claims here.
+#[test]
+fn awaiting_canvas_pieces_is_its_own_reason() {
+    let root = temp_root("awaiting");
+    put(&root, "a.ts", "x\n");
+    let revision = match reader::read_disk(&root, "a.ts") {
+        DiskRead::Text { revision, .. } => revision,
+        other => panic!("{other:?}"),
+    };
+    let mut editor = Scripted {
+        awaiting_canvas_pieces: true,
+        discovery_in_flight: false,
+        ..Scripted::default()
+    }
+    .node(
+        "a.ts",
+        Node {
+            parsed: Some((BSource::Disk, revision)),
+            ..Node::default()
+        },
+    );
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor);
+    assert_eq!(result.summary, IndexState::Partial);
+    assert!(result.reasons.contains(&IndexReason::AwaitingCanvasPieces), "the empty-canvas state is reported");
+    assert!(
+        !result.reasons.contains(&IndexReason::DiscoveryInFlight),
+        "a waiting discovery does not claim to be in flight"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 

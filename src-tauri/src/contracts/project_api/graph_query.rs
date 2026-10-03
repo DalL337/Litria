@@ -137,6 +137,10 @@ pub(crate) enum FocusOutcome {
     Unindexed,
     /// The focus is not a path the API accepts (contract brief §6).
     InvalidPath,
+    /// The focus is disclosed but no such file exists (not on disk, not held in
+    /// a buffer): answered exactly as `litria_files_read` answers it, revealing
+    /// nothing more and returning no nodes (P4c live pass 4).
+    NotFound,
     /// No focus was given and nothing disclosable is selected on the canvas.
     NoSelection,
 }
@@ -244,6 +248,9 @@ pub(crate) enum IndexReason {
     NotParsed,
     /// A discovery run is in flight.
     DiscoveryInFlight,
+    /// Discovery is armed for this load but waiting for pieces on an empty
+    /// canvas, so no relationships have been read yet (P4c live pass 1).
+    AwaitingCanvasPieces,
     /// A returned node is stale.
     StaleNodes,
     /// A returned node's freshness is unknown.

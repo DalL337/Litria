@@ -50,6 +50,14 @@ const MAX_PATH_LENGTH = 1024;
 const REMEMBERED_REQUESTS = 256;
 /** Rust's pending ceiling: no more requests than this can be waiting. */
 const HELD_WHILE_ATTACHING = 32;
+/**
+ * Separator for the composite edge-dedup keys below. It must be a byte that
+ * never occurs in a path or provenance token; U+0000 fits. It is built with an
+ * escape (`String.fromCharCode(0)`) rather than written literally so the source
+ * file stays text — a literal NUL makes git and grep treat the file as binary
+ * and hide every diff (P4c live pass 3).
+ */
+const EDGE_KEY_SEP = String.fromCharCode(0);
 
 const REFUSALS = Object.freeze({
   workspaceChanged: "the editor's state belongs to another workspace",
@@ -451,7 +459,8 @@ export function answerSelection(request, snapshot, ceiling = MAX_REPLY_BYTES) {
  * @param {Array} owners.pendingEdges        off-canvas pending edges (exporter/importer paths)
  * @param {(path:string)=>({source,revision}|null)} owners.parsedRevision  SyntaxDomain selector
  * @param {(path:string)=>boolean} owners.discoverable  `isDiscoverableFilename`
- * @param {boolean} owners.discoveryInFlight an initial run or refresh is reading
+ * @param {boolean} owners.discoveryInFlight an initial run or refresh is reading or about to read
+ * @param {boolean} owners.awaitingCanvasPieces discovery is armed for this load but the canvas has no pieces to drive it (P4c live pass 1)
  * @param {Array} [owners.connections]  ConnectionDomain's canvas connections (manual wires)
  * @param {string} [owners.projectRoot] the absolute project root, to relativise keys
  * @returns {{nodes: Map<string,object>, edges: Array, discoveryInFlight: boolean, discoverable: Function}}
@@ -464,6 +473,7 @@ export function graphSnapshot({
   parsedRevision,
   discoverable,
   discoveryInFlight,
+  awaitingCanvasPieces,
   connections,
   projectRoot
 }) {
@@ -473,7 +483,12 @@ export function graphSnapshot({
   // for the parsed-revision selector, keyed the way the domain stored it.
   const absOf = (relPath) => (root ? `${root}/${relPath}` : relPath);
 
-  const groupById = new Map((groups ?? []).map((group) => [group.id, group]));
+  // Group membership is stored on the GROUP, as `group.pieceIds`, the way
+  // production stores it — a piece carries no `groupId` field (P4c live pass 2).
+  const groupByPieceId = new Map();
+  for (const group of groups ?? []) {
+    for (const memberId of group?.pieceIds ?? []) groupByPieceId.set(memberId, group);
+  }
   // Files a piece places on the canvas, with their folder-group facts, and the
   // piece-id → relative-path map manual wires are resolved through.
   const onCanvasPaths = new Map();
@@ -481,7 +496,7 @@ export function graphSnapshot({
   for (const [pieceId, piece] of piecesById?.entries?.() ?? []) {
     const path = rel(piece?.filename);
     if (!path) continue;
-    const group = piece.groupId == null ? null : groupById.get(piece.groupId);
+    const group = groupByPieceId.get(piece?.id ?? pieceId) ?? null;
     const folder = (group ? rel(group.folderPath) : null) || null;
     // A legacy group without a folderPath is named by an opaque id.
     const groupId = group && !folder ? String(group.id) : null;
@@ -515,7 +530,7 @@ export function graphSnapshot({
     const importerPath = rel(importer);
     const exporterPath = rel(exporter);
     if (!importerPath || !exporterPath) return;
-    const key = `${importerPath} ${exporterPath} ${provenance}`;
+    const key = [importerPath, exporterPath, provenance].join(EDGE_KEY_SEP);
     if (seen.has(key)) return;
     seen.add(key);
     noteNode(importerPath);
@@ -556,7 +571,14 @@ export function graphSnapshot({
   // names a placed-but-unwired piece still carries its folder and canvas facts.
   for (const path of onCanvasPaths.keys()) noteNode(path);
 
-  return { nodes, edges, discoveryInFlight: discoveryInFlight === true, noteNode, discoverable: discoverableOf };
+  return {
+    nodes,
+    edges,
+    discoveryInFlight: discoveryInFlight === true,
+    awaitingCanvasPieces: awaitingCanvasPieces === true,
+    noteNode,
+    discoverable: discoverableOf
+  };
 }
 
 /**
@@ -569,7 +591,8 @@ export function graphSnapshot({
  * Bounded like the other operations: at most `MAX_EDGES_PER_NODE` edges per
  * frontier node and within `ceiling`; anything that does not fit is counted in
  * `omitted`, never dropped silently. The reply also carries the
- * discovery-in-flight signal.
+ * discovery-in-flight signal and, distinct from it, whether discovery is armed
+ * for this load but waiting for pieces on an empty canvas (P4c live pass 1).
  */
 export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
   const paths = request?.paths;
@@ -583,7 +606,8 @@ export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
     ? Math.min(request.maxEdgesPerNode, MAX_EDGES_PER_NODE)
     : MAX_EDGES_PER_NODE;
 
-  const { nodes, edges, discoveryInFlight, discoverable } = snapshot ?? { nodes: new Map(), edges: [], discoveryInFlight: false };
+  const { nodes, edges, discoveryInFlight, awaitingCanvasPieces, discoverable } = snapshot
+    ?? { nodes: new Map(), edges: [], discoveryInFlight: false, awaitingCanvasPieces: false };
   const discoverableOf = typeof discoverable === 'function' ? discoverable : () => false;
   const frontier = [...new Set(paths)];
   // Edge keeps when it is incident to `path` in `direction` (importer→exporter).
@@ -598,9 +622,10 @@ export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
   const outEdges = [];
   const emittedEdge = new Set();
   // Room for the largest possible omitted count and the signal, then content.
+  const awaiting = awaitingCanvasPieces === true;
   let used = encodedLength({
     kind: 'result',
-    result: { nodes: [], edges: [], discoveryInFlight, omitted: 4294967295 }
+    result: { nodes: [], edges: [], discoveryInFlight, awaitingCanvasPieces: awaiting, omitted: 4294967295 }
   });
   const fits = (value) => {
     const bytes = encodedLength(value) + 1;
@@ -632,7 +657,7 @@ export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
     for (const edge of edges) {
       if (!incident(edge, path)) continue;
       if (perNode >= maxEdges) { omitted += 1; continue; }
-      const key = `${edge.importer} ${edge.exporter} ${edge.provenance}`;
+      const key = [edge.importer, edge.exporter, edge.provenance].join(EDGE_KEY_SEP);
       if (emittedEdge.has(key)) { perNode += 1; continue; }
       const out = {
         importer: edge.importer,
@@ -649,7 +674,7 @@ export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
       perNode += 1;
     }
   }
-  return { kind: 'result', result: { nodes: outNodes, edges: outEdges, discoveryInFlight, omitted } };
+  return { kind: 'result', result: { nodes: outNodes, edges: outEdges, discoveryInFlight, awaitingCanvasPieces: awaiting, omitted } };
 }
 
 /**

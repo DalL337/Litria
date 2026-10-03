@@ -112,6 +112,11 @@
           "const": "invalidPath"
         },
         {
+          "description": "The focus is disclosed but no such file exists (not on disk, not held in\na buffer): answered exactly as `litria_files_read` answers it, revealing\nnothing more and returning no nodes (P4c live pass 4).",
+          "type": "string",
+          "const": "notFound"
+        },
+        {
           "description": "No focus was given and nothing disclosable is selected on the canvas.",
           "type": "string",
           "const": "noSelection"
@@ -273,6 +278,11 @@
           "description": "A discovery run is in flight.",
           "type": "string",
           "const": "discoveryInFlight"
+        },
+        {
+          "description": "Discovery is armed for this load but waiting for pieces on an empty\ncanvas, so no relationships have been read yet (P4c live pass 1).",
+          "type": "string",
+          "const": "awaitingCanvasPieces"
         },
         {
           "description": "A returned node is stale.",

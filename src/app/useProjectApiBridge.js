@@ -48,7 +48,7 @@ const transport = serializeAttachments({
  * @param {*} owners.selectedGroupId  the selected group pill
  * @param {Array} owners.groups  GroupDomain's groups (folder groups carry `folderPath`)
  * @param {object} owners.languageSupportDomain  for language-server state
- * @param {{current: {syntaxDomain?: object, getPendingEdges?: ()=>Array, isDiscoveryInFlight?: ()=>boolean}}} [owners.graphOwnersRef]
+ * @param {{current: {syntaxDomain?: object, getPendingEdges?: ()=>Array, isDiscoveryInFlight?: ()=>boolean, isDiscoveryAwaitingCanvasPieces?: ()=>boolean}}} [owners.graphOwnersRef]
  *   The graph owners (SyntaxDomain, the off-canvas pending-edge set, the
  *   discovery-in-flight signal). A ref because they are created after this hook
  *   in App.jsx; the port reads `.current` at request time.
@@ -102,7 +102,10 @@ export function useProjectApiBridge({
             projectRoot: owners.projectRoot ?? '',
             parsedRevision: (path) => syntax?.getParsedRevision?.(path) ?? null,
             discoverable: isDiscoverableFilename,
-            discoveryInFlight: owners.isDiscoveryInFlight?.() === true
+            discoveryInFlight: owners.isDiscoveryInFlight?.() === true,
+            // Distinct from in-flight: armed on an empty canvas, waiting for
+            // pieces, so the graph reports its own reason (P4c live pass 1).
+            awaitingCanvasPieces: owners.isDiscoveryAwaitingCanvasPieces?.() === true
           });
         }
       },

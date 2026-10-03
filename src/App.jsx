@@ -760,7 +760,7 @@ function App() {
     PIECE_WIDTH,
   });
 
-  const { isDiscoveryInFlight } = useDiscoveryLifecycle({
+  const { isDiscoveryInFlight, isDiscoveryAwaitingCanvasPieces } = useDiscoveryLifecycle({
     projectRoot: projectInstance?.rootPath ?? null,
     // Fresh object per dbOpenProject (incl. reopening the same project), so
     // discovery re-runs on every project load — not just the first of a session.
@@ -783,6 +783,7 @@ function App() {
     syntaxDomain,
     getPendingEdges,
     isDiscoveryInFlight,
+    isDiscoveryAwaitingCanvasPieces,
     connectionDomain,
     projectRoot: projectInstance?.rootPath ?? ''
   };

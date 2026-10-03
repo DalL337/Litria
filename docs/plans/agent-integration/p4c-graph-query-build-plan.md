@@ -56,10 +56,10 @@ relationships, with derived provenance and honest per-node freshness (brief
 - [x] Symbol truncation at 50 per edge is flagged in the response (first review 7).
 - [x] Discovery-in-flight signal: true while a refresh is armed but not started, and a previous project's run finishing never clears the current project's signal (first review 9 and 10).
 - [x] Off-canvas files get the same node facts as on-canvas ones, including `discoverable` from the file name, proven by a test (first review 11).
-- [ ] Empty canvas: while discovery for the current load is waiting for pieces on the canvas, the graph reports a distinct reason saying so instead of `discoveryInFlight`; the in-flight signal means discovery is reading or about to read (live pass 1, owner decision: report honestly, keep discovery canvas-driven).
-- [ ] Folder facts come from group membership (`group.pieceIds`), the way production stores it, and every test builds pieces the way production does, with no `groupId` field on a piece (live pass 2).
-- [ ] No literal NUL or other control characters in source files: the key separator in `src/app/projectApiBridge.js` is written as an escape, and `git diff --numstat` reports the file as text (live pass 3).
-- [ ] A focus that does not exist answers the way `litria_files_read` answers that path (`notFound`, no nodes), never as a resolved node (live pass 4).
+- [x] Empty canvas: while discovery for the current load is waiting for pieces on the canvas, the graph reports a distinct reason saying so instead of `discoveryInFlight`; the in-flight signal means discovery is reading or about to read (live pass 1, owner decision: report honestly, keep discovery canvas-driven).
+- [x] Folder facts come from group membership (`group.pieceIds`), the way production stores it, and every test builds pieces the way production does, with no `groupId` field on a piece (live pass 2).
+- [x] No literal NUL or other control characters in source files: the key separator in `src/app/projectApiBridge.js` is written as an escape, and `git diff --numstat` reports the file as text (live pass 3).
+- [x] A focus that does not exist answers the way `litria_files_read` answers that path (`notFound`, no nodes), never as a resolved node (live pass 4).
 
 ## Requirements
 
@@ -614,8 +614,85 @@ hardcoding `false`. Tested in `graphSnapshotProduction.test.mjs`.
   artifacts/fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and verified
   drift-free.
 
+### Build pass — live-pass fixes (2026-10-03) — tasks 18–21
+
+This run addressed the four live-pass defects. Journal:
+`.research/2026-10-03-p4c-graph-query-live-pass-fixes.md`.
+
+**Task 18 — empty canvas is its own reason (live pass 1).** The
+discovery-in-flight signal used to be true while discovery was merely armed on an
+empty canvas (where `decideDiscoveryStep` never runs it, because discovery is
+canvas-driven), so an empty project read `partial` with `discoveryInFlight`
+forever. `useDiscoveryLifecycle` now splits the signal:
+`isDiscoveryInFlight()` is true only when reading or ABOUT to read (armed with
+pieces on the canvas), and a new `isDiscoveryAwaitingCanvasPieces()` is true for
+the armed-but-empty-canvas state. The `workspace.graph` reply carries both
+(`awaitingCanvasPieces`, a new `#[serde(default)]` field on the bridge
+`GraphResult`), and the handler reports a new
+`IndexReason::AwaitingCanvasPieces` (summary `partial`) instead of
+`DiscoveryInFlight`. Wired through `useProjectApiBridge.js` and `App.jsx`.
+Owner decision honoured: discovery stays canvas-driven; the state is reported
+honestly.
+
+**Task 19 — folder facts from `group.pieceIds` (live pass 2).** `graphSnapshot`
+built a piece→group map from `piece.groupId`, a field production pieces do not
+have (membership lives on `group.pieceIds`), so no folder/folder-node ever
+appeared in production. It now builds `groupByPieceId` from each group's
+`pieceIds`. The graph tests were rebuilt to construct pieces the production way
+(no `groupId` field; groups carry `pieceIds`), and a new production test proves a
+folder group yields `folder`, a legacy group (no `folderPath`) yields an opaque
+`groupId`, and a piece in no group yields neither.
+
+**Task 20 — no control characters in source (live pass 3).**
+`src/app/projectApiBridge.js` held four literal NUL bytes as the key separator in
+two `const key = …` template literals, so git and grep treated the file as
+binary and hid every diff. Replaced with a named constant
+`EDGE_KEY_SEP = String.fromCharCode(0)` (an escape, not a literal control char)
+joined into the keys. `git diff --numstat` now reports the file as text (10/2),
+and `git ls-files --eol` shows the working tree as `w/lf`.
+
+**Task 21 — a missing focus answers `notFound` (live pass 4).** An explicit
+focus that passed the policy was resolved into a node without checking the file
+existed, so `src/nope.ts` came back as a resolved node. The handler now judges
+existence the way `litria_files_read` does: a disclosed focus with no file on
+disk, no buffer holding it, and no node the owner knows (a piece or wire) answers
+the new `FocusOutcome::NotFound` with no nodes, revealing nothing a read would
+not. A new `FocusOutcome::NotFound` variant was added to the contract.
+
+**Decisions where the brief was silent.**
+- Existence for the focus is `on disk OR in a buffer OR the owner returns node
+  facts for it`. Disk-or-buffer alone mirrors `litria_files_read` exactly, but
+  would have called a focus that is a live on-canvas piece (no disk file yet)
+  `notFound`; the owner-facts clause keeps a genuinely-placed file resolved while
+  still answering `notFound` for a path with no file, no buffer and no piece —
+  the live-pass case. The one extra owner probe runs only for a focus absent from
+  disk and buffers.
+- `awaiting_canvas_pieces` is `#[serde(default)]` on the bridge `GraphResult`, so
+  an owner that never sets it stays valid; the schema artifact was regenerated
+  and verified drift-free.
+- The key separator is built with `String.fromCharCode(0)` rather than a ` `
+  string escape: both keep the U+0000 record separator and keep the file text;
+  the named constant also documents intent at its single definition.
+
+**Tests added (all pass, against the fixed behaviour).**
+- Rust (`project_api/graph_query/tests.rs`): `a_missing_focus_answers_not_found`,
+  `a_focus_held_only_in_a_buffer_resolves`, `awaiting_canvas_pieces_is_its_own_reason`.
+- JS: `projectApiBridgeGraph.test.mjs` — the awaiting-vs-in-flight signal, plus
+  the whole suite rebuilt to the production piece shape;
+  `graphSnapshotProduction.test.mjs` — folder facts from `group.pieceIds`;
+  `discoveryInFlightSignal.test.mjs` — an empty canvas is awaiting, not in flight.
+
+**Check results (2026-10-03, Windows).**
+- `npm run check:architecture` — all seven guards pass.
+- `npm run test:domains` — 1487 passed, 0 failed.
+- `npm run build` — built (usual chunk-size advisory only).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 555 passed, 0 failed.
+- `cargo build --manifest-path src-tauri/Cargo.toml` — zero warnings. Contract
+  artifacts/fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and verified
+  drift-free.
+
 ## Blockers
 
-None. All seventeen tasks are built and all four configured checks pass. The
+None. All twenty-one tasks are built and all four configured checks pass. The
 owner's live pass on a JS/TS scratch project (out of scope, run after the
 review) remains the only outstanding acceptance step.

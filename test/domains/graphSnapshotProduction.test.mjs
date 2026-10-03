@@ -28,8 +28,10 @@ test('absolute SyntaxDomain keys meet the project-relative paths pieces use', ()
   });
 
   const snapshot = graphSnapshot({
-    piecesById: new Map([[1, { filename: 'src/a.ts', groupId: 10 }]]),
-    groups: [{ id: 10, folderPath: 'src' }],
+    // Production shape: the piece carries no `groupId`; the group lists its
+    // members in `pieceIds` (P4c live pass 2).
+    piecesById: new Map([[1, { id: 1, filename: 'src/a.ts' }]]),
+    groups: [{ id: 10, folderPath: 'src', pieceIds: [1] }],
     edgeProvenance: syntax.selectors.getAllEdgeProvenance(),
     pendingEdges: [],
     parsedRevision: (path) => syntax.selectors.getParsedRevision(path),
@@ -57,8 +59,8 @@ test('a canvas wire with no syntax edge is a manual edge', () => {
   const syntax = createSyntaxDomain();
   const snapshot = graphSnapshot({
     piecesById: new Map([
-      [1, { filename: 'src/a.ts', groupId: null }],
-      [2, { filename: 'src/d.ts', groupId: null }],
+      [1, { id: 1, filename: 'src/a.ts' }],
+      [2, { id: 2, filename: 'src/d.ts' }],
     ]),
     groups: [],
     edgeProvenance: syntax.selectors.getAllEdgeProvenance(),
@@ -90,8 +92,8 @@ test('a wire backed by a syntax edge is not duplicated as manual', () => {
   });
   const snapshot = graphSnapshot({
     piecesById: new Map([
-      [1, { filename: 'src/a.ts', groupId: null }],
-      [2, { filename: 'src/b.ts', groupId: null }],
+      [1, { id: 1, filename: 'src/a.ts' }],
+      [2, { id: 2, filename: 'src/b.ts' }],
     ]),
     groups: [],
     edgeProvenance: syntax.selectors.getAllEdgeProvenance(),
@@ -128,12 +130,49 @@ test('an off-canvas file reports discoverable from its name', () => {
   assert.equal(node.discoverable, true, 'a .js off-canvas file is discoverable by name');
 });
 
+// Live pass 2 (task 19): folder facts come from GROUP membership
+// (`group.pieceIds`) — production pieces carry no `groupId`. A folder group
+// yields the file node's `folder`; a legacy group without a `folderPath`
+// yields an opaque `groupId`.
+test('folder facts derive from group.pieceIds, not a piece groupId field', () => {
+  const syntax = createSyntaxDomain();
+  const snapshot = graphSnapshot({
+    piecesById: new Map([
+      [1, { id: 1, filename: 'src/a.ts' }], // in a folder group
+      [2, { id: 2, filename: 'lib/legacy.ts' }], // in a legacy group
+      [3, { id: 3, filename: 'loose.ts' }], // in no group
+    ]),
+    groups: [
+      { id: 10, folderPath: 'src', pieceIds: [1] },
+      { id: 77, pieceIds: [2] }, // legacy: no folderPath
+    ],
+    edgeProvenance: [],
+    pendingEdges: [],
+    connections: [],
+    parsedRevision: () => null,
+    discoverable: isDiscoverableFilename,
+    discoveryInFlight: false,
+    projectRoot: ROOT,
+  });
+  const reply = answerGraph(
+    { paths: ['src/a.ts', 'lib/legacy.ts', 'loose.ts'], direction: 'both', maxEdgesPerNode: 50 },
+    snapshot,
+  );
+  const node = (p) => reply.result.nodes.find((n) => n.path === p);
+  assert.equal(node('src/a.ts').folder, 'src', 'folder group membership from pieceIds');
+  assert.equal(node('src/a.ts').groupId, undefined);
+  assert.equal(node('lib/legacy.ts').groupId, '77', 'legacy group named by opaque id');
+  assert.equal(node('lib/legacy.ts').folder, undefined);
+  assert.equal(node('loose.ts').folder, undefined, 'a piece in no group has no folder');
+  assert.equal(node('loose.ts').groupId, undefined);
+});
+
 // First review 7 (task 15): the owner cuts symbols at 50 and FLAGS it, so the
 // tool is not left to guess.
 test('symbol truncation at 50 is flagged in the owner reply', () => {
   const symbols = Array.from({ length: 80 }, (_, i) => ({ name: `s${i}`, kind: 'function' }));
   const snapshot = graphSnapshot({
-    piecesById: new Map([[1, { filename: 'src/a.ts', groupId: null }]]),
+    piecesById: new Map([[1, { id: 1, filename: 'src/a.ts' }]]),
     groups: [],
     edgeProvenance: [{
       edgeId: 'x', sourceFilePath: abs('src/x.ts'), targetFilePath: abs('src/a.ts'),

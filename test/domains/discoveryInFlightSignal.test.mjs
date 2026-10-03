@@ -106,6 +106,30 @@ test('a previous project run finishing does not clear the current project signal
   await act(async () => root.unmount());
 });
 
+test('an empty canvas is awaiting pieces, not in flight (task 18 / live pass 1)', async () => {
+  // Discovery is canvas-driven: with no pieces it never reads, so it must not
+  // claim to be in flight — it is waiting for pieces, its own distinct signal.
+  globalThis.__INVOKE__ = async (command) => {
+    throw new Error(`discovery read on an empty canvas: ${command}`);
+  };
+  const syntaxDomain = createSyntaxDomain();
+  const adapter = { getModelRegistry: () => new Map(), handleDisconnect: async () => {} };
+  let api = {};
+  function Harness(props) {
+    api = useDiscoveryLifecycle({ ...props, syntaxDomain, syntaxAdapter: adapter, connectionDomain: conns() });
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  const render = (props) => act(async () => root.render(createElement(Harness, props)));
+
+  const token = {};
+  await render({ projectRoot: '/a', loadToken: token, piecesById: new Map() });
+  await flush();
+  assert.equal(api.isDiscoveryInFlight(), false, 'nothing is reading on an empty canvas');
+  assert.equal(api.isDiscoveryAwaitingCanvasPieces(), true, 'discovery is armed, waiting for pieces');
+  await act(async () => root.unmount());
+});
+
 test('a refresh that is armed but not started reads in-flight (review 9)', async () => {
   // Immediate reads (nothing held), so the initial run settles before we probe.
   globalThis.__INVOKE__ = async (command, payload) => {

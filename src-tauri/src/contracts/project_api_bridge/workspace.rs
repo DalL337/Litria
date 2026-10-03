@@ -176,8 +176,13 @@ pub(crate) struct GraphResult {
     pub nodes: Vec<GraphNode>,
     #[cfg_attr(test, schemars(length(max = MAX_GRAPH_EDGES)))]
     pub edges: Vec<GraphEdge>,
-    /// An initial discovery run or a refresh is reading files or armed.
+    /// An initial discovery run or a refresh is reading files or about to read.
     pub discovery_in_flight: bool,
+    /// Distinct from `discovery_in_flight`: discovery is armed for this load but
+    /// the canvas has no pieces to drive it, so it is waiting, not reading (P4c
+    /// live pass 1). Defaulted so older owners that never set it stay valid.
+    #[serde(default)]
+    pub awaiting_canvas_pieces: bool,
     /// Nodes or edges that did not fit a bound or the reply ceiling.
     #[cfg_attr(test, schemars(range(max = MAX_U32)))]
     pub omitted: u32,

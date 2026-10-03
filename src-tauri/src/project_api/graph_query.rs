@@ -109,6 +109,19 @@ fn run(
     editor: &mut dyn GraphEditor,
     ceiling: usize,
 ) -> Result<GraphQueryResult, ContractError> {
+    let depth = request.depth.unwrap_or(DEFAULT_DEPTH).clamp(MIN_DEPTH, MAX_DEPTH);
+    let max_nodes = request.max_nodes.unwrap_or(DEFAULT_MAX_NODES).min(MAX_NODES) as usize;
+    let direction = match request.direction {
+        GraphDirection::Imports => BridgeDirection::Imports,
+        GraphDirection::ImportedBy => BridgeDirection::ImportedBy,
+        GraphDirection::Both => BridgeDirection::Both,
+    };
+
+    // The buffer index, fetched once: the focus existence check (task 21) and
+    // per-node freshness both read it. Fetched lazily, after a withheld focus
+    // has already returned, so a denied focus still pokes no owner.
+    let mut buffer_index: Option<BufferIndexResult> = None;
+
     // 1. The focus, judged by the same policy a read applies, before any walk.
     let seeds = match &request.focus {
         Some(focus) => {
@@ -121,6 +134,31 @@ fn run(
                 Identity::Key(key) => {
                     if classify(focus) == Class::Unindexed || classify(&key) == Class::Unindexed {
                         return Ok(empty(FocusOutcome::Unindexed));
+                    }
+                    // Existence, as `litria_files_read` judges it (P4c live pass
+                    // 4): a disclosed focus with no file on disk, no buffer
+                    // holding it, and no node the owner knows (a piece or wire)
+                    // is `notFound` — never a resolved node, revealing nothing a
+                    // read would not. The owner probe (facts, no edges) is the
+                    // one call that also starts the walk's first level below.
+                    let on_disk = matches!(read_disk(root, &key), DiskRead::Text { .. });
+                    if !on_disk {
+                        let index = editor.buffer_index()?;
+                        let buffered = index
+                            .entries
+                            .iter()
+                            .any(|entry| matches!(identity(root, &entry.path), Identity::Key(k) if k == key));
+                        buffer_index = Some(index);
+                        if !buffered {
+                            let probe = editor.graph(&GraphRequest {
+                                paths: vec![key.clone()],
+                                direction,
+                                max_edges_per_node: 0,
+                            })?;
+                            if !probe.nodes.iter().any(|node| node.path == key) {
+                                return Ok(empty(FocusOutcome::NotFound));
+                            }
+                        }
                     }
                     vec![key]
                 }
@@ -143,14 +181,6 @@ fn run(
         }
     };
 
-    let depth = request.depth.unwrap_or(DEFAULT_DEPTH).clamp(MIN_DEPTH, MAX_DEPTH);
-    let max_nodes = request.max_nodes.unwrap_or(DEFAULT_MAX_NODES).min(MAX_NODES) as usize;
-    let direction = match request.direction {
-        GraphDirection::Imports => BridgeDirection::Imports,
-        GraphDirection::ImportedBy => BridgeDirection::ImportedBy,
-        GraphDirection::Both => BridgeDirection::Both,
-    };
-
     // 2. Breadth-first over the bridge, one level per call. Every frontier
     // path, edge endpoint and folder is resolved with the full policy
     // (`identity`, not just `classify`), so a path reached through a junction
@@ -166,6 +196,7 @@ fn run(
     let mut reasons: BTreeSet<IndexReason> = BTreeSet::new();
     let mut truncation: BTreeSet<TruncationReason> = BTreeSet::new();
     let mut discovery_in_flight = false;
+    let mut awaiting_canvas_pieces = false;
 
     for seed in &seeds {
         if accepted.len() >= max_nodes {
@@ -185,6 +216,7 @@ fn run(
             max_edges_per_node: MAX_EDGES_PER_NODE,
         })?;
         discovery_in_flight |= reply.discovery_in_flight;
+        awaiting_canvas_pieces |= reply.awaiting_canvas_pieces;
         // The owner trimmed incident edges or nodes to its own bounds or the
         // reply ceiling: the neighbourhood is incomplete at this level.
         if reply.omitted > 0 {
@@ -278,6 +310,7 @@ fn run(
             max_edges_per_node: 0,
         })?;
         discovery_in_flight |= reply.discovery_in_flight;
+        awaiting_canvas_pieces |= reply.awaiting_canvas_pieces;
         for node in reply.nodes {
             if graphable_key(root, &node.path).is_some() {
                 facts.entry(node.path.clone()).or_insert(node);
@@ -286,7 +319,10 @@ fn run(
     }
 
     // 3. Freshness, per file node, against the effective revision.
-    let index = editor.buffer_index()?;
+    let index = match buffer_index {
+        Some(index) => index,
+        None => editor.buffer_index()?,
+    };
     let index_omitted = index.omitted > 0;
     let mut buffered: BTreeMap<String, String> = BTreeMap::new();
     for entry in &index.entries {
@@ -382,6 +418,11 @@ fn run(
     // 5. The summary and its reasons.
     if discovery_in_flight {
         reasons.insert(IndexReason::DiscoveryInFlight);
+    }
+    // Distinct from a running discovery: armed on an empty canvas, waiting for
+    // pieces (P4c live pass 1). Reported honestly as its own reason.
+    if awaiting_canvas_pieces {
+        reasons.insert(IndexReason::AwaitingCanvasPieces);
     }
     if any_not_parsed {
         reasons.insert(IndexReason::NotParsed);

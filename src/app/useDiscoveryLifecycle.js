@@ -236,16 +236,36 @@ export function useDiscoveryLifecycle({
     });
   }, [enabled, projectRoot, loadToken, syntaxDomain, syntaxAdapter, connectionDomain, piecesById, persistedSides]);
 
-  // Whether discovery is reading or armed but not yet started (brief §("Bridge
-  // inputs"), P4c). Read-only; the owner bridge polls it when it answers
-  // `workspace.graph`.
+  // Armed for the current load but the initial run has not happened yet.
+  const armedForCurrentLoad = () =>
+    loadToken != null && armedTokenRef.current === loadToken && ranForTokenRef.current !== loadToken;
+  // The canvas has pieces that would drive discovery. Discovery is
+  // canvas-driven (owner decision): with no pieces, the armed run never reads
+  // (decideDiscoveryStep skips on an empty `piecesById`), so it is NOT in
+  // flight — it is waiting for pieces (P4c live pass 1).
+  const canvasHasPieces = () => {
+    const pieces = latestArgsRef.current?.piecesById;
+    return !!pieces && pieces.size > 0;
+  };
+
+  // Whether discovery is reading or ABOUT to read (brief §("Bridge inputs"),
+  // P4c). "About to read" means armed for this load with pieces on the canvas,
+  // so the next render runs it — not the empty-canvas armed state, which never
+  // reads until pieces arrive. Read-only; the owner bridge polls it when it
+  // answers `workspace.graph`.
   const isDiscoveryInFlight = () =>
     initialRunInFlightRef.current
     || refreshInFlightRef.current
     || refreshArmedRef.current
-    || (loadToken != null && armedTokenRef.current === loadToken && ranForTokenRef.current !== loadToken);
+    || (armedForCurrentLoad() && canvasHasPieces());
 
-  return { isDiscoveryInFlight };
+  // Whether discovery is armed for this load but waiting for pieces on an empty
+  // canvas (P4c live pass 1). Distinct from in-flight: the graph reports this
+  // honestly with its own reason instead of a discovery run that is not reading.
+  const isDiscoveryAwaitingCanvasPieces = () =>
+    !initialRunInFlightRef.current && armedForCurrentLoad() && !canvasHasPieces();
+
+  return { isDiscoveryInFlight, isDiscoveryAwaitingCanvasPieces };
 }
 
 // ---------------------------------------------------------------------------

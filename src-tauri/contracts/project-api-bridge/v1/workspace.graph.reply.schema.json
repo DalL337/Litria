@@ -192,8 +192,13 @@
       "description": "JavaScript → Rust.",
       "type": "object",
       "properties": {
+        "awaitingCanvasPieces": {
+          "description": "Distinct from `discovery_in_flight`: discovery is armed for this load but\nthe canvas has no pieces to drive it, so it is waiting, not reading (P4c\nlive pass 1). Defaulted so older owners that never set it stay valid.",
+          "type": "boolean",
+          "default": false
+        },
         "discoveryInFlight": {
-          "description": "An initial discovery run or a refresh is reading files or armed.",
+          "description": "An initial discovery run or a refresh is reading files or about to read.",
           "type": "boolean"
         },
         "edges": {

@@ -12,11 +12,13 @@ import { answerGraph, graphSnapshot } from '../../src/app/projectApiBridge.js';
 // an edge where b imports c is { sourceFilePath: 'c', targetFilePath: 'b' }.
 function sampleSnapshot(overrides = {}) {
   return graphSnapshot({
+    // Pieces carry no `groupId` field; membership lives on the group's
+    // `pieceIds`, the way production stores it (P4c live pass 2).
     piecesById: new Map([
-      [1, { filename: 'src/a.ts', groupId: 10 }],
-      [2, { filename: 'src/b.ts', groupId: 10 }]
+      [1, { id: 1, filename: 'src/a.ts' }],
+      [2, { id: 2, filename: 'src/b.ts' }]
     ]),
-    groups: [{ id: 10, folderPath: 'src' }],
+    groups: [{ id: 10, folderPath: 'src', pieceIds: [1, 2] }],
     edgeProvenance: [
       {
         edgeId: 'c→b',
@@ -88,8 +90,8 @@ test('node facts carry the folder, on-canvas flag, parsed revision and discovera
 
 test('a legacy group without a folderPath is named by an opaque group id', () => {
   const snapshot = graphSnapshot({
-    piecesById: new Map([[1, { filename: 'src/a.ts', groupId: 99 }]]),
-    groups: [{ id: 99 }],
+    piecesById: new Map([[1, { id: 1, filename: 'src/a.ts' }]]),
+    groups: [{ id: 99, pieceIds: [1] }],
     edgeProvenance: [],
     pendingEdges: [],
     parsedRevision: () => null,
@@ -137,6 +139,13 @@ test('the discovery-in-flight signal rides along', () => {
   const snapshot = sampleSnapshot({ discoveryInFlight: true });
   const reply = answerGraph({ paths: ['src/a.ts'], direction: 'both', maxEdgesPerNode: 50 }, snapshot);
   assert.equal(reply.result.discoveryInFlight, true);
+});
+
+test('the awaiting-canvas-pieces signal rides along, distinct from in-flight (P4c live pass 1)', () => {
+  const snapshot = sampleSnapshot({ discoveryInFlight: false, awaitingCanvasPieces: true });
+  const reply = answerGraph({ paths: ['src/a.ts'], direction: 'both', maxEdgesPerNode: 50 }, snapshot);
+  assert.equal(reply.result.awaitingCanvasPieces, true);
+  assert.equal(reply.result.discoveryInFlight, false);
 });
 
 test('sourceDerived edges carry the aggregate status, including orphaned', () => {
