@@ -170,9 +170,54 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
     syntaxDomain.commands.notifyFileChanged(filePath, text);
   }
 
-  function onFileClosed(filePath) {
-    syntaxDomain.commands.unregisterFile(filePath);
+  /**
+   * A tab closed. The index follows disk, not open tabs (implementation
+   * policy Rule 7 "State Follows Disk"): a file still on disk stays indexed
+   * from its DISK text, so its outgoing edges are not marked broken until
+   * discovery runs again. Only a file that cannot be read (missing from disk,
+   * read error) is unregistered — today's behavior.
+   *
+   * The model registry is cleared synchronously, so the moment the tab is
+   * gone the file reads as closed (getAuthoritativeText falls to disk). The
+   * re-index is async because the disk read is; the call site ignores the
+   * returned promise, and every path is caught so there is no unhandled
+   * rejection. Tests await the promise.
+   *
+   * A reopen that lands while the disk read is in flight wins: onFileOpened
+   * re-populates the registry, and the stale disk text must not overwrite the
+   * reopened model's freshly-registered text.
+   *
+   * @param {string} filePath
+   * @returns {Promise<void>}
+   */
+  async function onFileClosed(filePath) {
     modelRegistry.delete(filePath);
+
+    if (!readProjectFile) {
+      syntaxDomain.commands.unregisterFile(filePath);
+      return;
+    }
+
+    let diskText = null;
+    try {
+      diskText = await readProjectFile(projectRoot, absToRel(filePath));
+    } catch (_) {
+      diskText = null;
+    }
+
+    // Reopen-during-read wins: the file is open again, so its live model text
+    // is authoritative — do not clobber it with the stale disk read.
+    if (modelRegistry.has(filePath)) return;
+
+    if (diskText == null) {
+      // Missing from disk or unreadable: keep today's behavior.
+      syntaxDomain.commands.unregisterFile(filePath);
+      return;
+    }
+
+    // Still on disk: re-index from disk text, discarding any unsaved edits
+    // that the close dropped.
+    syntaxDomain.commands.registerFile(filePath, diskText);
   }
 
   // ---- Canvas connection handlers -------------------------------------------

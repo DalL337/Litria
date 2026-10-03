@@ -1,0 +1,153 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { createSyntaxDomain } from '../../src/app/syntaxDomain.js';
+import { createSyntaxAdapter } from '../../src/lsp/syntaxAdapter.js';
+
+// ---------------------------------------------------------------------------
+// The syntax index follows DISK, not open tabs (implementation policy Rule 7
+// "State Follows Disk"). Closing an editor tab for a file still on disk must
+// not drop it from the index or mark its outgoing edges broken: discovery has
+// not changed anything, the file is right there on disk. Only a file that
+// cannot be read is unregistered.
+// ---------------------------------------------------------------------------
+
+function setupAdapter(diskFiles, { readProjectFile } = {}) {
+  const domain = createSyntaxDomain();
+  const disk = new Map(Object.entries(diskFiles));
+  const writes = [];
+  const adapter = createSyntaxAdapter({
+    syntaxDomain: domain,
+    projectRoot: '/proj',
+    readProjectFile: readProjectFile ?? (async (_root, rel) => disk.get(rel) ?? null),
+    writeProjectFile: async (_root, rel, text) => {
+      writes.push(rel);
+      disk.set(rel, text);
+      return true;
+    },
+  });
+  for (const [rel, text] of disk) {
+    domain.commands.registerFile(`/proj/${rel}`, text);
+  }
+  return { domain, adapter, disk, writes };
+}
+
+/** Minimal Monaco model stand-in: only getValue is read by the close path. */
+function fakeModel(text) {
+  return { getValue: () => text };
+}
+
+// Build a resolved edge utils.js (exporter) → app.js (importer).
+async function withResolvedEdge(setup) {
+  const { domain, adapter } = setup;
+  const connectResult = await adapter.handleConnect({
+    connectionId: 'conn-1',
+    sourceFilePath: '/proj/src/utils.js',
+    targetFilePath: '/proj/src/app.js',
+  });
+  assert.equal(connectResult.success, true);
+  const helperId = domain.selectors
+    .getDefinitionsForFile('/proj/src/utils.js')
+    .find((d) => d.name === 'helper').symbolId;
+  await adapter.handleResolveMultipleSymbols({
+    edgeId: connectResult.edgeId,
+    symbolIds: [helperId],
+  });
+  return connectResult.edgeId;
+}
+
+test('closing the tab of a file still on disk keeps it indexed and its edge not broken', async () => {
+  const setup = setupAdapter({
+    'src/utils.js': 'export function helper() {}\n',
+    'src/app.js': "import { helper } from './utils';\nhelper();\n",
+  });
+  const { domain, adapter } = setup;
+  const edgeId = await withResolvedEdge(setup);
+
+  // Exporter tab is open, then the user closes it. The file is still on disk.
+  adapter.onFileOpened('/proj/src/utils.js', 'export function helper() {}\n');
+  await adapter.onFileClosed('/proj/src/utils.js');
+
+  // The index still holds the file's definitions...
+  assert.ok(
+    domain.selectors.getDefinitionsForFile('/proj/src/utils.js').some((d) => d.name === 'helper'),
+    'definitions survive the close (reproduction: today they are dropped)'
+  );
+  // ...and its outgoing edge is not marked broken.
+  assert.notEqual(
+    domain.selectors.getSyntaxEdge(edgeId).status,
+    'broken',
+    'the edge is not broken by the close (reproduction: today it is)'
+  );
+});
+
+test('a close discards unsaved edits — the index holds disk text, not the buffer', async () => {
+  const setup = setupAdapter({
+    'src/utils.js': 'export function helper() {}\n',
+  });
+  const { domain, adapter } = setup;
+
+  // Open with a dirty buffer that adds an unsaved export the disk lacks.
+  const dirty = 'export function helper() {}\nexport function unsaved() {}\n';
+  adapter.onFileOpened('/proj/src/utils.js', dirty, fakeModel(dirty));
+  domain.commands.notifyFileChanged('/proj/src/utils.js', dirty);
+  assert.ok(
+    domain.selectors.getDefinitionsForFile('/proj/src/utils.js').some((d) => d.name === 'unsaved'),
+    'the dirty buffer symbol is indexed while open'
+  );
+
+  await adapter.onFileClosed('/proj/src/utils.js');
+
+  const names = domain.selectors.getDefinitionsForFile('/proj/src/utils.js').map((d) => d.name);
+  assert.ok(names.includes('helper'), 'disk symbol survives');
+  assert.ok(!names.includes('unsaved'), 'discarded unsaved edit does not survive in the index');
+});
+
+test('a file missing from disk is unregistered on close', async () => {
+  // Registered in the domain but absent from the disk map.
+  const setup = setupAdapter({});
+  const { domain, adapter } = setup;
+  domain.commands.registerFile('/proj/src/ghost.js', 'export function gone() {}\n');
+  assert.ok(domain.selectors.getDefinitionsForFile('/proj/src/ghost.js').length > 0);
+
+  await adapter.onFileClosed('/proj/src/ghost.js');
+
+  assert.equal(
+    domain.selectors.getDefinitionsForFile('/proj/src/ghost.js').length,
+    0,
+    'a file gone from disk is unregistered (today\'s behavior)'
+  );
+});
+
+test('a reopen during the disk read wins: stale disk text does not overwrite the model', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  // The disk holds the OLD text; the read is held open on the gate.
+  const disk = new Map([['src/utils.js', 'export function old() {}\n']]);
+  const setup = setupAdapter(
+    { 'src/utils.js': 'export function old() {}\n' },
+    {
+      readProjectFile: async (_root, rel) => {
+        await gate;
+        return disk.get(rel) ?? null;
+      },
+    },
+  );
+  const { domain, adapter } = setup;
+
+  // Close starts the (gated) disk read.
+  const closing = adapter.onFileClosed('/proj/src/utils.js');
+
+  // Before the read resolves, the user reopens the file with NEW text.
+  const fresh = 'export function fresh() {}\n';
+  adapter.onFileOpened('/proj/src/utils.js', fresh, fakeModel(fresh));
+  domain.commands.notifyFileChanged('/proj/src/utils.js', fresh);
+
+  // Now let the stale disk read complete.
+  release();
+  await closing;
+
+  const names = domain.selectors.getDefinitionsForFile('/proj/src/utils.js').map((d) => d.name);
+  assert.ok(names.includes('fresh'), 'the reopened model text wins');
+  assert.ok(!names.includes('old'), 'the stale disk text did not overwrite the reopened model');
+});
