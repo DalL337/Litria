@@ -79,6 +79,70 @@ test('reopening the same project is a new load too', async () => {
   await act(async () => root.unmount());
 });
 
+test('a tab closed just before a project switch does not re-index the old project into the new one', async () => {
+  // A close re-indexes the file from disk once its read returns (tab-close
+  // build plan). Switching projects closes tabs as the index resets, so the
+  // read lands after the reset (first review F1, 2026-10-03).
+  let seen = null;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const readProjectFile = async () => { await gate; return 'export function old() {}\n'; };
+  const writeProjectFile = async () => true;
+  function Harness(props) {
+    seen = useSyntaxDomainLifecycle({ ...props, readProjectFile, writeProjectFile });
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  const render = (props) => act(async () => root.render(createElement(Harness, props)));
+  await render({ projectRoot: '/a', loadToken: {} });
+  let closing;
+  await act(async () => {
+    seen.syntaxAdapter.onFileOpened('/a/src/utils.js', 'export function old() {}\n');
+    closing = seen.syntaxAdapter.onFileClosed('/a/src/utils.js');
+  });
+  await render({ projectRoot: '/b', loadToken: {} });
+  release();
+  await act(async () => { await closing; });
+  assert.deepEqual(seen.syntaxDomain.selectors.getRegisteredFilesUnder('/a'), [], 'A\'s file stays out of B\'s index');
+  await act(async () => root.unmount());
+});
+
+test('a late close read from a replaced adapter loses after A → B → A reopens the file with identical text', async () => {
+  // Second review (2026-10-03): the adapter is recreated when the project
+  // root changes, so a fence kept inside one adapter cannot see a reopen
+  // through its replacement. The reopened text is identical on purpose.
+  const path = '/a/src/utils.js';
+  const current = 'export function current() {}\n';
+  for (const late of ['export function stale() {}\n', null]) {
+    let seen = null;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let reads = 0;
+    const readProjectFile = async () => (++reads === 1 ? gate : current);
+    const writeProjectFile = async () => true;
+    function Harness(props) {
+      seen = useSyntaxDomainLifecycle({ ...props, readProjectFile, writeProjectFile });
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    const render = (props) => act(async () => root.render(createElement(Harness, props)));
+    await render({ projectRoot: '/a', loadToken: {} });
+    let closing;
+    await act(async () => {
+      seen.syntaxAdapter.onFileOpened(path, current);
+      closing = seen.syntaxAdapter.onFileClosed(path);
+    });
+    await render({ projectRoot: '/b', loadToken: {} });
+    await render({ projectRoot: '/a', loadToken: {} });
+    await act(async () => { seen.syntaxAdapter.onFileOpened(path, current, { getValue: () => current }); });
+    release(late);
+    await act(async () => { await closing; });
+    const names = seen.syntaxDomain.selectors.getDefinitionsForFile(path).map((d) => d.name);
+    assert.deepEqual(names, ['current'], `late read ${late === null ? 'failed' : 'returned stale text'}`);
+    await act(async () => root.unmount());
+  }
+});
+
 test('re-rendering the same load keeps the index', async () => {
   let seen = null;
   function Harness(props) {

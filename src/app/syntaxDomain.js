@@ -165,8 +165,29 @@ export function createSyntaxDomain() {
   /** @type {Map<string, object>} connectionId → ImportBinding (backward compat) */
   const bindingMap = new Map();
 
-  /** @type {Map<string, string>} filePath → raw text */
+  /** @type {Map<string, string>} filePath → raw text. Change it only through _putText / _dropText. */
   const fileTextCache = new Map();
+
+  /**
+   * filePath → revision of its entry in fileTextCache. Every put and drop
+   * takes a new number from a counter that never resets, so a caller can tell
+   * whether the entry it saw is still current even when the text came back
+   * identical (tab-close build plan, second review, 2026-10-03).
+   *
+   * @type {Map<string, number>}
+   */
+  const fileRevision = new Map();
+  let revisionCounter = 0;
+
+  function _putText(filePath, text) {
+    fileTextCache.set(filePath, text);
+    fileRevision.set(filePath, ++revisionCounter);
+  }
+
+  function _dropText(filePath) {
+    fileTextCache.delete(filePath);
+    fileRevision.delete(filePath);
+  }
 
   /** @type {Map<string, string>} filePath → 'ok' | 'unknown' | 'parsing' */
   const fileStatus = new Map();
@@ -974,7 +995,7 @@ export function createSyntaxDomain() {
      * @param {string} text     - Current file content.
      */
     registerFile(filePath, text) {
-      fileTextCache.set(filePath, text);
+      _putText(filePath, text);
       _refreshFile(filePath);
       // Reconcile edge statuses too — registration is how discovery and the
       // incremental refresh push text into the domain, and without this the
@@ -1001,12 +1022,26 @@ export function createSyntaxDomain() {
     },
 
     /**
+     * Give a file's entry a new revision without changing its text, and
+     * return it; null when the index holds no text for the file. A tab close
+     * stamps the entry before its disk read, so the newest close always holds
+     * the newest revision (tab-close build plan, third review, 2026-10-03).
+     *
+     * @returns {number|null}
+     */
+    stampFileRevision(filePath) {
+      if (!fileTextCache.has(filePath)) return null;
+      fileRevision.set(filePath, ++revisionCounter);
+      return revisionCounter;
+    },
+
+    /**
      * Unregister a file and mark dependent edges broken.
      *
      * @param {string} filePath
      */
     unregisterFile(filePath) {
-      fileTextCache.delete(filePath);
+      _dropText(filePath);
       definitionIndex.delete(filePath);
       symbolIndex.delete(filePath);
       portIndex.delete(filePath);
@@ -1038,7 +1073,7 @@ export function createSyntaxDomain() {
       const connectionsChanged = [...connectionToEdge.keys()];
       const edgesChanged = [...syntaxEdges.keys()];
       const portsChanged = [...new Set([...fileStatus.keys(), ...fileTextCache.keys(), ...portIndex.keys()])];
-      for (const map of [definitionIndex, symbolIndex, portIndex, syntaxEdges, connectionToEdge, bindingMap, fileTextCache, fileStatus]) {
+      for (const map of [definitionIndex, symbolIndex, portIndex, syntaxEdges, connectionToEdge, bindingMap, fileTextCache, fileRevision, fileStatus]) {
         map.clear();
       }
       _notify({ portsChanged, connectionsChanged, edgesChanged, fileChanged: null });
@@ -1063,7 +1098,7 @@ export function createSyntaxDomain() {
      * @param {{ connectionsRemoved?: boolean }} [options]
      */
     forgetFile(filePath, { connectionsRemoved = false } = {}) {
-      fileTextCache.delete(filePath);
+      _dropText(filePath);
       definitionIndex.delete(filePath);
       symbolIndex.delete(filePath);
       portIndex.delete(filePath);
@@ -1108,7 +1143,7 @@ export function createSyntaxDomain() {
      * @returns {{ connectionsChanged: string[] }}
      */
     notifyFileChanged(filePath, text) {
-      fileTextCache.set(filePath, text);
+      _putText(filePath, text);
       _refreshFile(filePath);
       const { changedEdges, changedConns } = _reconcileEdges(filePath);
       _notify({ portsChanged: [filePath], connectionsChanged: changedConns, edgesChanged: changedEdges, fileChanged: filePath });
@@ -1650,14 +1685,14 @@ export function createSyntaxDomain() {
       // Move file-level state to new path
       const text = fileTextCache.get(oldPath);
       const status = fileStatus.get(oldPath);
-      fileTextCache.delete(oldPath);
+      _dropText(oldPath);
       definitionIndex.delete(oldPath);
       symbolIndex.delete(oldPath);
       portIndex.delete(oldPath);
       fileStatus.delete(oldPath);
 
       if (text != null) {
-        fileTextCache.set(newPath, text);
+        _putText(newPath, text);
         fileStatus.set(newPath, status ?? 'unknown');
         _refreshFile(newPath);
       }
@@ -1794,6 +1829,18 @@ export function createSyntaxDomain() {
 
     getFileStatus(filePath) {
       return fileStatus.get(filePath);
+    },
+
+    /**
+     * The revision of a file's index entry, or null when the index holds no
+     * text for it. Every register, write, rename and removal takes a new one,
+     * and numbers never repeat, not even across reset. The adapter compares it
+     * before applying a tab close's late disk read (tab-close build plan,
+     * 2026-10-03; it replaced a text comparison the second review showed was
+     * blind to identical-text changes).
+     */
+    getFileRevision(filePath) {
+      return fileRevision.get(filePath) ?? null;
     },
 
     getImportBinding(connectionId) {
