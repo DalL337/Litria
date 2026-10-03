@@ -6,6 +6,10 @@ agent reviews the result once, and nothing merges without the owner.
 Revised 2026-10-03: the first review reproduced three races the asynchronous
 close introduced (F1–F3, below). They were fixed by hand on the same branch,
 tasks 4 and 5 were added, and the whole branch goes to a second review.
+Revised again 2026-10-03: the second review showed that the text comparison
+used for F1–F3 missed changes whose text came back identical. A revision
+kept by the domain replaced it (task 6), and the branch goes to a third
+review.
 
 Origin: found in P4b and recorded as the first P4c item in the
 [Project API build plan](project-api-build-plan.md) ("Closing a tab drops its
@@ -29,6 +33,7 @@ Rule 7 "State Follows Disk").
 - [x] Record evidence under Evidence below; check:architecture, test:domains, build, and cargo test all pass.
 - [x] A close's late disk read changes nothing once the file's index entry has changed: a project reset or reload, a rename, a delete, a write, or a newer open or close of the same file (first review F1–F3).
 - [x] A close never adds a file the index does not hold, and the project-switch case is tested through the real lifecycle hook.
+- [x] The late read is fenced by a revision of the file's index entry kept by the domain, so changes whose text comes back identical, and changes made through a replacement adapter, also win (second review).
 
 ## Requirements
 
@@ -43,7 +48,9 @@ Rule 7 "State Follows Disk").
   the file's index entry while the read is in flight wins over it, whether the
   read succeeded or failed: a project reset or reload (F1), a newer close of
   the same file (F2), a rename or delete (F3), or a write. A close never adds a
-  file the index does not hold.
+  file the index does not hold. *(Second review:)* this includes changes whose
+  text comes back identical, and changes made through a replacement adapter
+  after a project switch.
 - The call site (`src/editor/monacoWorkspace.js`) calls `onFileClosed`
   synchronously and ignores the result. An asynchronous re-index must not
   produce unhandled rejections. Returning a promise for tests to await is fine.
@@ -146,6 +153,46 @@ the expected result in all four of its cases.
 - `npm run check:architecture` → all seven guards passed (Domain contract: 16 domains).
 - `npm run test:domains` → tests 1438, pass 1438, fail 0.
 - `npm run build` → `✓ built in 36.70s`.
+- `cargo test --manifest-path src-tauri/Cargo.toml` → 525 passed; 0 failed. Rust is unchanged.
+
+> **Erratum (2026-10-03, second review):** comparing the indexed text before
+> and after the read cannot see an entry that changed and came back
+> identical, and the per-path ticket lived in one adapter, which a project
+> switch replaces. The revision fence below replaces both.
+
+### Revision fence (2026-10-03, second review)
+
+**Review finding, reproduced before fixing** against commit `640d4bd`: a
+reset followed by identical re-registration, a same-text write, or a delete
+followed by identical recreation let the late read overwrite the entry with
+stale disk text, or unregister it when the read failed (all six
+combinations). Through the real lifecycle hook, A → B → A with the file
+reopened in identical text did the same, because the old adapter's ticket
+could not see the replacement adapter's reopen.
+
+**Fix.** The domain stamps every change to a file's entry with a revision
+from a counter that never resets: `_putText` and `_dropText` are now the only
+writers of the text cache (register, write, rename, unregister, forget), and
+reset clears the revisions with the rest of the index. The read-only selector
+`getFileRevision` replaces `getFileText`. `onFileClosed` records the revision
+when the tab closes and applies its read only if the revision is unchanged.
+The adapter's tickets are gone; the adapter is 15 lines shorter.
+
+**Tests.** Four added to `syntaxAdapterClose.test.mjs` (reset and identical
+re-registration, same-text write, delete and identical recreation, rename
+away and back; each with a stale late read and a failed one) and one to
+`syntaxDomainProjectSwitch.test.mjs` through the real hook (A → B → A,
+identical reopen, both late outcomes).
+
+**Failing-first.** Against commit `640d4bd` the five new tests fail and the
+sixteen existing tests in both files pass (`node --test`: pass 16, fail 5).
+With the fix: pass 21, fail 0. The reviewer's reproduction now keeps the
+current entry in all six combinations.
+
+**Checks (all pass, 2026-10-03).**
+- `npm run check:architecture` → all seven guards passed.
+- `npm run test:domains` → tests 1443, pass 1443, fail 0.
+- `npm run build` → `✓ built in 40.59s`.
 - `cargo test --manifest-path src-tauri/Cargo.toml` → 525 passed; 0 failed. Rust is unchanged.
 
 ## Blockers

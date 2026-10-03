@@ -250,6 +250,42 @@ test('a write that re-indexes the file during the read wins', async () => {
   assert.deepEqual(names(domain), ['written']);
 });
 
+// Second review (2026-10-03): comparing the indexed text was blind to an entry
+// that changed and came back identical. Each change below leaves the index
+// holding the text the close saw; the late read must still lose, whether it
+// returns stale disk text or fails.
+const CURRENT = 'export function current() {}\n';
+const STALE = 'export function stale() {}\n';
+const IDENTICAL_CHANGES = {
+  'a reset and identical re-registration': (domain) => {
+    domain.commands.reset();
+    domain.commands.registerFile(UTILS, CURRENT);
+  },
+  'a same-text write': (domain) => domain.commands.notifyFileChanged(UTILS, CURRENT),
+  'a delete and identical recreation': (domain) => {
+    domain.commands.forgetFile(UTILS);
+    domain.commands.registerFile(UTILS, CURRENT);
+  },
+  'a rename away and back': (domain) => {
+    domain.commands.renameFile(UTILS, '/proj/src/moved.js');
+    domain.commands.renameFile('/proj/src/moved.js', UTILS);
+  },
+};
+
+for (const [change, apply] of Object.entries(IDENTICAL_CHANGES)) {
+  test(`a late close read loses after ${change}, stale text or failure (second review)`, async () => {
+    for (const late of [STALE, null]) {
+      const reads = gatedReads();
+      const { domain, adapter } = setupAdapter({ 'src/utils.js': CURRENT }, { readProjectFile: reads.readProjectFile });
+      const closing = adapter.onFileClosed(UTILS);
+      apply(domain);
+      reads.release(0, late);
+      await closing;
+      assert.deepEqual(names(domain), ['current'], `late read ${late === null ? 'failed' : 'returned stale text'}`);
+    }
+  });
+}
+
 test('a same-root reload that re-indexes the file during the read keeps the newer text', async () => {
   const { domain, adapter, reads } = setupRace();
   const closing = adapter.onFileClosed(UTILS);
