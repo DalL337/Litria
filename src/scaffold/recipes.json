@@ -1,9 +1,9 @@
 {
-  "$comment": "ADR-028 \u00a71 \u2014 the scaffold recipe registry. The ONLY place a create-CLI version, template identifier, manager verb, or support claim for a generated project lives. Read by src/scaffold/recipeRegistry.js (frontend) and src-tauri/src/scaffold_recipes.rs (include_str!). The wizard's compatibility matrix and preview, and the Rust runner's argv, are all projections of this file. Bumping a pin: verify the version is \u226524h old (`npm view <pkg> time --json`, ADR-021 \u00a72), refresh `templateManifests` below from the published package, re-run scripts/scaffold-recipe-evidence.mjs for the affected recipes, and update `coverage`. Managers: One entry per package manager the wizard offers. `create`/`exec`/`install` are the argv verbs the plan derivation uses (both sides); `forwardSeparator` is npm's `--` for create-* flags; `scriptsOff` names how dependency lifecycle scripts are prevented (env+flag: npm_config_ignore_scripts + --ignore-scripts; native: the manager's default; none); `auditAtCreate` whether `npm audit` runs (ADR-021 \u00a74); `minMajor` the floor the runner enforces from `<pm> --version` before executing anything (ADR-028 \u00a75).",
+  "$comment": "ADR-028 §1 — the scaffold recipe registry. The ONLY place a create-CLI version, template identifier, manager verb, or support claim for a generated project lives. Read by src/scaffold/recipeRegistry.js (frontend) and src-tauri/src/scaffold_recipes.rs (include_str!). The wizard's compatibility matrix and preview, and the Rust runner's argv, are all projections of this file. Bumping a pin: verify the version is ≥24h old (`npm view <pkg> time --json`, ADR-021 §2), refresh `templateManifests` below from the published package, re-run scripts/scaffold-recipe-evidence.mjs for the affected recipes, and update `coverage`. Managers: One entry per package manager the wizard offers. `create`/`exec`/`install` are the argv verbs the plan derivation uses (both sides); `forwardSeparator` is npm's `--` for create-* flags; `scriptsOff` names how dependency lifecycle scripts are prevented (env+flag: npm_config_ignore_scripts + --ignore-scripts; native: the manager's default; none); `auditAtCreate` whether `npm audit` runs (ADR-021 §4); `minMajor` the floor the runner enforces from `<pm> --version` before executing anything (ADR-028 §5).",
   "schemaVersion": 1,
   "recordedAt": "2026-09-17",
   "limits": {
-    "$comment": "ADR-028 \u00a78 \u2014 subprocess limits per step kind, read by both sides and carried in the plan (validate_plan refuses a payload that differs). idleSeconds is reset by every output line; deadlineSeconds runs from the spawn and is never extended. primary = the create CLI (its own install included); command = add-on/backend installs and execs; env = the Python environment step.",
+    "$comment": "ADR-028 §8 — subprocess limits per step kind, read by both sides and carried in the plan (validate_plan refuses a payload that differs). idleSeconds is reset by every output line; deadlineSeconds runs from the spawn and is never extended. primary = the create CLI (its own install included); command = add-on/backend installs and execs; env = the Python environment step.",
     "primary": {
       "idleSeconds": 300,
       "deadlineSeconds": 1800
@@ -35,22 +35,23 @@
       "invoke": "electron-app",
       "version": "7.11.2",
       "publishedAt": "2026-05-20",
-      "kind": "initializer"
+      "kind": "initializer",
+      "$comment": "HELD at 7.11.2 on 2026-10-03 (release 1.1.0 pin survey): 8.0.1 (published 2026-09-29, engines node >=22.13.0) is a new major of Electron Forge's initializer; the owner ruled that 1.1.0 takes only patch and minor pin refreshes. Revalidation trigger: a dedicated dependency pass that re-runs every electron primary and add-on recipe against 8.x."
     },
     "@angular/cli": {
       "version": "21.2.24",
       "publishedAt": "2026-09-10",
       "kind": "exec",
-      "$comment": "ADR-028 \u00a73: Angular on the Web wrapper runs the Angular CLI directly (exec route). 21.2.x is pinned, not 22.x: every @angular/cli 22.x requires Node ^22.22.3 || ^24.15.0 || >=26, and Litria's bundled runtime is 24.14.0 (src-tauri/src/lsp/packs/versions.rs NODE_VERSION); 21.2.x accepts >=24.0.0. Bumping the bundled Node past 24.15 unlocks 22.x (release policy: node-hashes.json)."
+      "$comment": "ADR-028 §3: Angular on the Web wrapper runs the Angular CLI directly (exec route). 21.2.x is pinned, not 22.x: every @angular/cli 22.x requires Node ^22.22.3 || ^24.15.0 || >=26, and Litria's bundled runtime is 24.14.0 (src-tauri/src/lsp/packs/versions.rs NODE_VERSION); 21.2.x accepts >=24.0.0. Bumping the bundled Node past 24.15 unlocks 22.x (release policy: node-hashes.json)."
     },
     "shadcn": {
-      "version": "4.21.0",
-      "publishedAt": "2026-09-04",
+      "version": "4.21.1",
+      "publishedAt": "2026-10-01",
       "kind": "addon-cli"
     },
     "shadcn-svelte": {
-      "version": "1.6.1",
-      "publishedAt": "2026-09-04",
+      "version": "1.7.0",
+      "publishedAt": "2026-09-16",
       "kind": "addon-cli"
     },
     "shadcn-vue": {
@@ -97,13 +98,13 @@
       "scriptsOff": "native",
       "auditAtCreate": false,
       "minMajor": 9,
-      "$comment": "pnpm `add` is the dependency verb (`pnpm install <pkg>` is an alias but `add` is what the docs and the trace should say). pnpm 9+ ships scripts-off for dependencies by default (`onlyBuiltDependencies`) and honours `minimumReleaseAge` (ADR-021 \u00a72) \u2014 the runner writes that into pnpm-workspace.yaml. `postCreate` writes pnpm-workspace.yaml (strictDepBuilds off, minimumReleaseAge) before anything installs.",
+      "$comment": "pnpm `add` is the dependency verb (`pnpm install <pkg>` is an alias but `add` is what the docs and the trace should say). pnpm 9+ ships scripts-off for dependencies by default (`onlyBuiltDependencies`) and honours `minimumReleaseAge` (ADR-021 §2) — the runner writes that into pnpm-workspace.yaml. `postCreate` writes pnpm-workspace.yaml (strictDepBuilds off, minimumReleaseAge) before anything installs.",
       "postCreate": [
         {
           "op": "write",
           "path": "pnpm-workspace.yaml",
           "mode": "create",
-          "content": "# Litria (ADR-021 / ADR-028 \u00a75)\n# Dependency build scripts stay off (pnpm's default); pnpm 12's strict mode\n# would otherwise fail an `add` that ignores builds. Run `pnpm approve-builds`\n# to allow specific packages.\nstrictDepBuilds: false\n# Wait 24h after a version is published before installing it.\nminimumReleaseAge: 1440\n",
+          "content": "# Litria (ADR-021 / ADR-028 §5)\n# Dependency build scripts stay off (pnpm's default); pnpm 12's strict mode\n# would otherwise fail an `add` that ignores builds. Run `pnpm approve-builds`\n# to allow specific packages.\nstrictDepBuilds: false\n# Wait 24h after a version is published before installing it.\nminimumReleaseAge: 1440\n",
           "$comment": "Observed 2026-09-16 with pnpm 12.4.2: ERR_PNPM_IGNORED_BUILDS on `pnpm add` in an Angular project (lmdb, esbuild, @parcel/watcher). Written before any install so create-CLI installs see it too; replaces the runner's old post-scaffold minimumReleaseAge writer."
         }
       ]
@@ -124,20 +125,20 @@
       "scriptsOff": "none",
       "auditAtCreate": false,
       "minMajor": 2,
-      "$comment": "Yarn Berry (2+) only: `yarn add` is the dependency verb (`yarn install <pkg>` is an error), `yarn dlx` runs the create/addon CLIs. Yarn Classic (1.x) has no dlx and no scripts-off story; the runner refuses it visibly (F4, R3). Lifecycle scripts run as Yarn's default; nothing audits at create (the posture note says so). `postCreate` steps run right after the create CLI, before any add-on. `env` is applied to every yarn command the runner spawns (the create CLI's own install included). `npmMinimalAgeGate: 1d` (and the env for the create step) applies the 24h gate to Yarn installs; an install then resolves to the newest version older than a day (observed: rolldown ~1.2.6 \u2192 1.2.8 while 1.2.9 was 14h old).",
+      "$comment": "Yarn Berry (2+) only: `yarn add` is the dependency verb (`yarn install <pkg>` is an error), `yarn dlx` runs the create/addon CLIs. Yarn Classic (1.x) has no dlx and no scripts-off story; the runner refuses it visibly (F4, R3). Lifecycle scripts run as Yarn's default; nothing audits at create (the posture note says so). `postCreate` steps run right after the create CLI, before any add-on. `env` is applied to every yarn command the runner spawns (the create CLI's own install included). `npmMinimalAgeGate: 1d` (and the env for the create step) applies the 24h gate to Yarn installs; an install then resolves to the newest version older than a day (observed: rolldown ~1.2.6 → 1.2.8 while 1.2.9 was 14h old).",
       "postCreate": [
         {
           "op": "write",
           "path": "yarn.lock",
           "mode": "keep",
           "content": "",
-          "$comment": "Yarn Berry walks up from the new folder looking for a project; a package.json in any ancestor (a user's home directory is common) makes it refuse the scaffold as 'not part of the project declared in \u2026'. An empty yarn.lock marks the new folder as its own project (Yarn's documented remedy); `yarn install` rewrites it. Mode `keep`: a create CLI that already wrote one (ng new) wins."
+          "$comment": "Yarn Berry walks up from the new folder looking for a project; a package.json in any ancestor (a user's home directory is common) makes it refuse the scaffold as 'not part of the project declared in …'. An empty yarn.lock marks the new folder as its own project (Yarn's documented remedy); `yarn install` rewrites it. Mode `keep`: a create CLI that already wrote one (ng new) wins."
         },
         {
           "op": "write",
           "path": ".yarnrc.yml",
           "mode": "keep",
-          "content": "# Litria (ADR-028 \u00a75): node_modules linker \u2014 native build scripts and most\n# Vite/Angular tooling assume it; Plug'n'Play is opt-in.\nnodeLinker: node-modules\n# ADR-021 \u00a72: wait 24h after a version is published before installing it\n# (Yarn's own quarantine, the counterpart of pnpm's minimumReleaseAge).\nnpmMinimalAgeGate: 1d\n",
+          "content": "# Litria (ADR-028 §5): node_modules linker — native build scripts and most\n# Vite/Angular tooling assume it; Plug'n'Play is opt-in.\nnodeLinker: node-modules\n# ADR-021 §2: wait 24h after a version is published before installing it\n# (Yarn's own quarantine, the counterpart of pnpm's minimumReleaseAge).\nnpmMinimalAgeGate: 1d\n",
           "$comment": "Observed 2026-09-16 with Yarn 4.18.0: under the default PnP linker `ng new`'s install fails in lmdb's build script (Cannot find module 'pnpapi'). The env below applies the same linker to the create step itself, which runs before this file exists."
         }
       ],
@@ -409,7 +410,7 @@
                 "op": "install",
                 "dev": false,
                 "packages": [
-                  "vue@3.5.42"
+                  "vue@3.5.43"
                 ]
               },
               {
@@ -462,7 +463,7 @@
                 "op": "install",
                 "dev": false,
                 "packages": [
-                  "vue@3.5.42"
+                  "vue@3.5.43"
                 ]
               },
               {
@@ -511,7 +512,7 @@
                 "op": "install",
                 "dev": false,
                 "packages": [
-                  "svelte@5.57.0"
+                  "svelte@5.57.1"
                 ]
               },
               {
@@ -570,7 +571,7 @@
                 "content": "declare module \"*.svelte\" {\n  import type { Component } from \"svelte\";\n  const component: Component;\n  export default component;\n}\n"
               }
             ],
-            "$comment": "Forge's TypeScript template is a CommonJS package; @sveltejs/vite-plugin-svelte is ESM-only, so the renderer config must be `.mts` (Forge pointed at it) and the Svelte config `.mjs` \u2014 observed: 'This package is ESM only but it was tried to load by require' (2026-09-16)."
+            "$comment": "Forge's TypeScript template is a CommonJS package; @sveltejs/vite-plugin-svelte is ESM-only, so the renderer config must be `.mts` (Forge pointed at it) and the Svelte config `.mjs` — observed: 'This package is ESM only but it was tried to load by require' (2026-09-16)."
           },
           {
             "when": {
@@ -583,7 +584,7 @@
                 "op": "install",
                 "dev": false,
                 "packages": [
-                  "svelte@5.57.0"
+                  "svelte@5.57.1"
                 ]
               },
               {
@@ -751,7 +752,7 @@
           }
         ]
       },
-      "$comment": "Forge's vite / vite-typescript templates are bundler-only (F5): `frameworkRecipes` wires the chosen framework into the renderer \u2014 pinned plugin + framework packages (majors compatible with the template's Vite 5, F2), the renderer Vite config, an App component, the renderer entry, a #root mount point, and TS jsx settings. Runs before add-ons so Tailwind/Router patch the wired entry. `entries` name the renderer AFTER wiring (react/solid rename it to .tsx/.jsx), which is what add-ons patch."
+      "$comment": "Forge's vite / vite-typescript templates are bundler-only (F5): `frameworkRecipes` wires the chosen framework into the renderer — pinned plugin + framework packages (majors compatible with the template's Vite 5, F2), the renderer Vite config, an App component, the renderer entry, a #root mount point, and TS jsx settings. Runs before add-ons so Tailwind/Router patch the wired entry. `entries` name the renderer AFTER wiring (react/solid rename it to .tsx/.jsx), which is what add-ons patch."
     },
     "web": {
       "kind": "npm",
@@ -803,7 +804,7 @@
           "js": "solid"
         }
       },
-      "$comment": "web + angular is an `exec` route (ADR-028 \u00a73): create-vite ships no Angular template and silently falls back to vanilla-ts in non-TTY mode (F1), so Angular runs the Angular CLI itself, pinned \u2014 the same thing create-vite's own Angular entry and create-tauri-app's angular template do. `routes` overrides the wrapper route per framework; `template` on an exec route is nominal (no template manifest applies).",
+      "$comment": "web + angular is an `exec` route (ADR-028 §3): create-vite ships no Angular template and silently falls back to vanilla-ts in non-TTY mode (F1), so Angular runs the Angular CLI itself, pinned — the same thing create-vite's own Angular entry and create-tauri-app's angular template do. `routes` overrides the wrapper route per framework; `template` on an exec route is nominal (no template manifest applies).",
       "entries": {
         "react": {
           "ts": "src/main.tsx",
@@ -1581,7 +1582,7 @@
           ]
         }
       ],
-      "$comment": "shadcn-svelte's --preset takes a base62 preset CODE, not a style name: `bIkeymG` is the Vega preset (style vega, base colour neutral, Lucide, Inter, default radius/menu) produced by the package's own encodePreset() and round-tripped with decodePreset() on 2026-09-16 (shadcn-svelte@1.6.1). Re-encode if the pin changes."
+      "$comment": "shadcn-svelte's --preset takes a base62 preset CODE, not a style name: `bIkeymG` is the Vega preset (style vega, base colour neutral, Lucide, Inter, default radius/menu) produced by the package's own encodePreset() and round-tripped with decodePreset() on 2026-09-16 (shadcn-svelte@1.6.1); re-verified 2026-10-03 with shadcn-svelte@1.7.0, whose decodePreset() returns the same Vega settings and re-encodes them to the same code. Re-encode if the pin changes."
     },
     "router": {
       "requires": [],
@@ -1873,7 +1874,7 @@
               "op": "install",
               "dev": false,
               "packages": [
-                "fastify@5.12.4"
+                "fastify@5.12.5"
               ]
             },
             {
@@ -1904,7 +1905,7 @@
               "op": "install",
               "dev": false,
               "packages": [
-                "fastify@5.12.4"
+                "fastify@5.12.5"
               ]
             },
             {
@@ -1928,7 +1929,7 @@
     }
   },
   "templateManifests": {
-    "$comment": "Template identifiers each pinned initializer actually ships, taken from the published package (tarball `template-*` directories for create-vite; the pinned README for create-tauri-app; the @electron-forge/template-* packages for Forge). test/domains/scaffoldRecipes.test.mjs refuses any route whose template is not listed here \u2014 the check that would have caught web + angular (F1).",
+    "$comment": "Template identifiers each pinned initializer actually ships, taken from the published package (tarball `template-*` directories for create-vite; the pinned README for create-tauri-app; the @electron-forge/template-* packages for Forge). test/domains/scaffoldRecipes.test.mjs refuses any route whose template is not listed here — the check that would have caught web + angular (F1).",
     "create-vite": [
       "lit",
       "lit-ts",
@@ -1972,7 +1973,7 @@
     ]
   },
   "coverage": {
-    "$comment": "ADR-028 \u00a710 / brief \u00a76. One entry per (wrapper, framework, language, manager, platform) that has been exercised. Statuses: verified | covered-by-equivalence | unverified | failing. A combination with no entry is `unverified` and is not selectable; the runner refuses it too. Evidence: scripts/scaffold-recipe-evidence.mjs output, recorded per dependency-change policy Rule 6. Offline routes (blank, python) are covered by the Rust test suite and the owner's live passes and carry no per-manager entries.",
+    "$comment": "ADR-028 §10 / brief §6. One entry per (wrapper, framework, language, manager, platform) that has been exercised. Statuses: verified | covered-by-equivalence | unverified | failing. A combination with no entry is `unverified` and is not selectable; the runner refuses it too. Evidence: scripts/scaffold-recipe-evidence.mjs output, recorded per dependency-change policy Rule 6. Offline routes (blank, python) are covered by the Rust test suite and the owner's live passes and carry no per-manager entries.",
     "entries": [
       {
         "wrapper": "electron",
@@ -1982,7 +1983,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2012,7 +2013,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2035,7 +2036,7 @@
               "@electron-forge/plugin-fuses": "^7.11.2",
               "@electron-forge/plugin-vite": "^7.11.2",
               "@electron/fuses": "^1.8.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "vite": "^5.4.21"
             }
           },
@@ -2050,7 +2051,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2080,7 +2081,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2106,7 +2107,7 @@
               "@types/electron-squirrel-startup": "^1.0.2",
               "@typescript-eslint/eslint-plugin": "^5.62.0",
               "@typescript-eslint/parser": "^5.62.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "eslint": "^8.57.1",
               "eslint-plugin-import": "^2.32.0",
               "typescript": "~4.5.4",
@@ -2124,7 +2125,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2154,7 +2155,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2177,7 +2178,7 @@
               "@electron-forge/plugin-fuses": "^7.11.2",
               "@electron-forge/plugin-vite": "^7.11.2",
               "@electron/fuses": "^1.8.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "vite": "^5.4.21"
             }
           },
@@ -2192,7 +2193,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2222,7 +2223,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2248,7 +2249,7 @@
               "@types/electron-squirrel-startup": "^1.0.2",
               "@typescript-eslint/eslint-plugin": "^5.62.0",
               "@typescript-eslint/parser": "^5.62.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "eslint": "^8.57.1",
               "eslint-plugin-import": "^2.32.0",
               "typescript": "~4.5.4",
@@ -2266,7 +2267,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2296,7 +2297,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2319,7 +2320,7 @@
               "@electron-forge/plugin-fuses": "^7.11.2",
               "@electron-forge/plugin-vite": "^7.11.2",
               "@electron/fuses": "^1.8.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "vite": "^5.4.21"
             }
           },
@@ -2334,7 +2335,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2364,7 +2365,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2390,7 +2391,7 @@
               "@types/electron-squirrel-startup": "^1.0.2",
               "@typescript-eslint/eslint-plugin": "^5.62.0",
               "@typescript-eslint/parser": "^5.62.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "eslint": "^8.57.1",
               "eslint-plugin-import": "^2.32.0",
               "typescript": "~4.5.4",
@@ -2408,7 +2409,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2438,7 +2439,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2461,7 +2462,7 @@
               "@electron-forge/plugin-fuses": "^7.11.2",
               "@electron-forge/plugin-vite": "^7.11.2",
               "@electron/fuses": "^1.8.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "vite": "^5.4.21"
             }
           },
@@ -2476,7 +2477,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2"
           },
@@ -2506,7 +2507,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "generated": {
             "scripts": [
@@ -2532,7 +2533,7 @@
               "@types/electron-squirrel-startup": "^1.0.2",
               "@typescript-eslint/eslint-plugin": "^5.62.0",
               "@typescript-eslint/parser": "^5.62.0",
-              "electron": "44.4.1",
+              "electron": "44.5.1",
               "eslint": "^8.57.1",
               "eslint-plugin-import": "^2.32.0",
               "typescript": "~4.5.4",
@@ -2550,7 +2551,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -2622,7 +2623,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -2684,7 +2685,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -2749,7 +2750,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -2811,7 +2812,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -2874,7 +2875,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -2941,7 +2942,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -3008,7 +3009,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -3069,7 +3070,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2"
           },
@@ -3132,7 +3133,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "@angular/cli": "21.2.24"
           },
@@ -3203,7 +3204,7 @@
         "platform": "windows",
         "status": "covered-by-equivalence",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "representative": "addon run web/angular/ts pnpm windows [tailwind +express]",
           "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
           "pins": {
@@ -3234,13 +3235,50 @@
       },
       {
         "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "yarn",
+        "platform": "windows",
+        "status": "covered-by-equivalence",
+        "evidence": {
+          "date": "2026-10-03",
+          "representative": "addon run web/angular/ts yarn windows [tailwind]",
+          "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
+          "pins": {
+            "@angular/cli": "21.2.24"
+          },
+          "recipe": {
+            "package": "@angular/cli",
+            "version": "21.2.24",
+            "template": "ng-new",
+            "argv": [
+              "yarn",
+              "dlx",
+              "@angular/cli@21.2.24",
+              "new",
+              "fx-web-angular-ts",
+              "--defaults",
+              "--skip-git",
+              "--package-manager",
+              "yarn"
+            ]
+          },
+          "versions": {
+            "node": "v24.14.0",
+            "yarn": "4.18.0"
+          },
+          "source": "scripts/scaffold-recipe-evidence-apply.mjs"
+        }
+      },
+      {
+        "wrapper": "web",
         "framework": "react",
         "language": "js",
         "manager": "npm",
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3299,7 +3337,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3360,7 +3398,7 @@
         "platform": "windows",
         "status": "covered-by-equivalence",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "representative": "addon run web/react/ts pnpm windows [tailwind+shadcn+router +express]",
           "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
           "pins": {
@@ -3394,7 +3432,7 @@
         "platform": "windows",
         "status": "covered-by-equivalence",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "representative": "addon run web/react/ts yarn windows [tailwind]",
           "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
           "pins": {
@@ -3428,7 +3466,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3482,7 +3520,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3538,7 +3576,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3591,7 +3629,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3649,7 +3687,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3703,7 +3741,7 @@
         "platform": "windows",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1"
           },
@@ -3756,7 +3794,7 @@
     ]
   },
   "packages": {
-    "$comment": "Exact pins for every package an add-on, backend or Electron framework recipe installs (F2, F5). Recorded 2026-09-16, refreshed 2026-09-17 (ADR-028 S8) with publish dates from `npm view <pkg> time`; each is \u226524h old (ADR-021 \u00a72 discipline applied to generated-project deps). Peer ranges verified: @vitejs/plugin-react 4.7.0 (vite ^4.2||^5||^6||^7), @sveltejs/vite-plugin-svelte 3.1.2 (vite ^5, svelte ^4||^5.0.0-next), @vitejs/plugin-vue 5.2.4 (vite ^5||^6), vite-plugin-solid 2.11.14 (vite ^3..^9) \u2014 all inside Forge 7.11.2's `vite ^5.0.12` template.",
+    "$comment": "Exact pins for every package an add-on, backend or Electron framework recipe installs (F2, F5). Recorded 2026-09-16, refreshed 2026-09-17 (ADR-028 S8) with publish dates from `npm view <pkg> time`; each is ≥24h old (ADR-021 §2 discipline applied to generated-project deps). Peer ranges verified: @vitejs/plugin-react 4.7.0 (vite ^4.2||^5||^6||^7), @sveltejs/vite-plugin-svelte 3.1.2 (vite ^5, svelte ^4||^5.0.0-next), @vitejs/plugin-vue 5.2.4 (vite ^5||^6), vite-plugin-solid 2.11.14 (vite ^3..^9) — all inside Forge 7.11.2's `vite ^5.0.12` template.",
     "tailwindcss": {
       "version": "4.3.3",
       "publishedAt": "2026-09-08"
@@ -3791,8 +3829,8 @@
       "publishedAt": "2025-12-01"
     },
     "fastify": {
-      "version": "5.12.4",
-      "publishedAt": "2026-09-11"
+      "version": "5.12.5",
+      "publishedAt": "2026-09-16"
     },
     "react": {
       "version": "19.3.0",
@@ -3812,23 +3850,26 @@
     },
     "@vitejs/plugin-react": {
       "version": "4.7.0",
-      "publishedAt": "2025-07-07"
+      "publishedAt": "2025-07-07",
+      "$comment": "HELD at 4.7.0 (re-checked 2026-10-03, release 1.1.0): 6.x peers on vite ^8.0.0 (plus rolldown and oxc peers), while the Forge template resolves vite 5 and create-tauri-app vite 6, so 6.x fails those installs. Revalidation trigger: the Electron and Tauri templates reaching vite 8."
     },
     "svelte": {
-      "version": "5.57.0",
-      "publishedAt": "2026-08-28"
+      "version": "5.57.1",
+      "publishedAt": "2026-09-18"
     },
     "@sveltejs/vite-plugin-svelte": {
       "version": "3.1.2",
-      "publishedAt": "2024-09-24"
+      "publishedAt": "2024-09-24",
+      "$comment": "HELD at 3.1.2 (re-checked 2026-10-03, release 1.1.0): 7.x peers on vite ^8.0.0, which the Forge (vite 5) and create-tauri-app (vite 6) templates do not resolve. Revalidation trigger: the Electron and Tauri templates reaching vite 8."
     },
     "vue": {
-      "version": "3.5.42",
-      "publishedAt": "2026-09-11"
+      "version": "3.5.43",
+      "publishedAt": "2026-09-17"
     },
     "@vitejs/plugin-vue": {
       "version": "5.2.4",
-      "publishedAt": "2025-04-27"
+      "publishedAt": "2025-04-27",
+      "$comment": "HELD at 5.2.4 on 2026-10-03 (release 1.1.0 pin survey): 6.0.9 peers on vite ^5 through ^8, so it would install, but it is a new major and the owner ruled that 1.1.0 takes only patch and minor pin refreshes. Revalidation trigger: a dedicated dependency pass that re-runs every vue recipe against 6.x."
     },
     "solid-js": {
       "version": "1.9.15",
@@ -3840,7 +3881,7 @@
     }
   },
   "addonCoverage": {
-    "$comment": "ADR-028 \u00a710 for add-ons, backends and Electron framework wiring: one entry per exercised (wrapper, framework, language, manager, platform, addons[], backend). An add-on or backend is offered for a primary combination only when a verified entry for that combination lists it (the run exercised its recipe steps end to end: install \u2192 write/patch \u2192 build). Produced by scripts/scaffold-recipe-evidence.mjs --addons/--backend and applied by scaffold-recipe-evidence-apply.mjs.",
+    "$comment": "ADR-028 §10 for add-ons, backends and Electron framework wiring: one entry per exercised (wrapper, framework, language, manager, platform, addons[], backend). An add-on or backend is offered for a primary combination only when a verified entry for that combination lists it (the run exercised its recipe steps end to end: install → write/patch → build). Produced by scripts/scaffold-recipe-evidence.mjs --addons/--backend and applied by scaffold-recipe-evidence-apply.mjs.",
     "entries": [
       {
         "wrapper": "electron",
@@ -3856,7 +3897,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
             "react": "19.3.0",
@@ -3896,7 +3937,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -3915,7 +3956,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
             "react": "19.3.0",
@@ -3958,7 +3999,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -3976,7 +4017,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
             "solid-js": "1.9.15",
@@ -4015,7 +4056,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -4033,7 +4074,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
             "solid-js": "1.9.15",
@@ -4073,7 +4114,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -4091,17 +4132,17 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
-            "svelte": "5.57.0",
+            "svelte": "5.57.1",
             "@sveltejs/vite-plugin-svelte": "3.1.2",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28"
           },
           "steps": [
-            "framework:svelte: npm install svelte@5.57.0",
+            "framework:svelte: npm install svelte@5.57.1",
             "framework:svelte: npm install -D @sveltejs/vite-plugin-svelte@3.1.2",
             "framework:svelte: write vite.renderer.config.mjs (replace)",
             "framework:svelte: write src/App.svelte",
@@ -4124,7 +4165,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -4142,17 +4183,17 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
-            "svelte": "5.57.0",
+            "svelte": "5.57.1",
             "@sveltejs/vite-plugin-svelte": "3.1.2",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28"
           },
           "steps": [
-            "framework:svelte: npm install svelte@5.57.0",
+            "framework:svelte: npm install svelte@5.57.1",
             "framework:svelte: npm install -D @sveltejs/vite-plugin-svelte@3.1.2",
             "framework:svelte: remove vite.renderer.config.ts",
             "framework:svelte: write vite.renderer.config.mts",
@@ -4179,7 +4220,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -4198,10 +4239,10 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
-            "vue": "3.5.42",
+            "vue": "3.5.43",
             "@vitejs/plugin-vue": "5.2.4",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
@@ -4209,7 +4250,7 @@
             "vue-router": "4.6.4"
           },
           "steps": [
-            "framework:vue: npm install vue@3.5.42",
+            "framework:vue: npm install vue@3.5.43",
             "framework:vue: npm install -D @vitejs/plugin-vue@5.2.4",
             "framework:vue: write vite.renderer.config.mjs (replace)",
             "framework:vue: write src/App.vue",
@@ -4236,7 +4277,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -4255,10 +4296,10 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-electron-app": "7.11.2",
-            "vue": "3.5.42",
+            "vue": "3.5.43",
             "@vitejs/plugin-vue": "5.2.4",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
@@ -4266,7 +4307,7 @@
             "vue-router": "4.6.4"
           },
           "steps": [
-            "framework:vue: npm install vue@3.5.42",
+            "framework:vue: npm install vue@3.5.43",
             "framework:vue: npm install -D @vitejs/plugin-vue@5.2.4",
             "framework:vue: write vite.renderer.config.ts (replace)",
             "framework:vue: write src/App.vue",
@@ -4294,7 +4335,7 @@
             "renderer build (vite)"
           ],
           "notExercised": [
-            "package: electron-forge package needs the Electron binary (consented scripts) \u2014 runnable stage not exercised"
+            "package: electron-forge package needs the Electron binary (consented scripts) — runnable stage not exercised"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -4311,7 +4352,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
@@ -4351,13 +4392,13 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn": "4.21.0",
+            "shadcn": "4.21.1",
             "react-router-dom": "7.18.4"
           },
           "steps": [
@@ -4368,7 +4409,7 @@
             "addon:shadcn: merge into jsconfig.json",
             "addon:shadcn: prepend to vite.config.js",
             "addon:shadcn: patch vite.config.js",
-            "addon:shadcn: npm exec --yes -- shadcn@4.21.0 init -y -d",
+            "addon:shadcn: npm exec --yes -- shadcn@4.21.1 init -y -d",
             "addon:router: npm install react-router-dom@7.18.4",
             "addon:router: prepend to src/main.jsx",
             "addon:router: patch src/main.jsx"
@@ -4401,13 +4442,13 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn": "4.21.0",
+            "shadcn": "4.21.1",
             "react-router-dom": "7.18.4"
           },
           "steps": [
@@ -4419,7 +4460,7 @@
             "addon:shadcn: merge into tsconfig.app.json",
             "addon:shadcn: prepend to vite.config.ts",
             "addon:shadcn: patch vite.config.ts",
-            "addon:shadcn: npm exec --yes -- shadcn@4.21.0 init -y -d",
+            "addon:shadcn: npm exec --yes -- shadcn@4.21.1 init -y -d",
             "addon:router: npm install react-router-dom@7.18.4",
             "addon:router: prepend to src/main.tsx",
             "addon:router: patch src/main.tsx"
@@ -4451,7 +4492,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
@@ -4495,7 +4536,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
@@ -4539,13 +4580,13 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn-svelte": "1.6.1"
+            "shadcn-svelte": "1.7.0"
           },
           "steps": [
             "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
@@ -4554,7 +4595,7 @@
             "addon:tailwind: write src/routes/+layout.svelte",
             "addon:shadcn: merge into jsconfig.json",
             "addon:shadcn: merge into tsconfig.json",
-            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.6.1 init --preset bIkeymG --css src/app.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall"
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.7.0 init --preset bIkeymG --css src/app.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall"
           ],
           "versions": {
             "node": "v24.14.0",
@@ -4583,13 +4624,13 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn-svelte": "1.6.1"
+            "shadcn-svelte": "1.7.0"
           },
           "steps": [
             "addon:tailwind: npm install -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
@@ -4598,7 +4639,7 @@
             "addon:tailwind: write src/routes/+layout.svelte",
             "addon:shadcn: merge into jsconfig.json",
             "addon:shadcn: merge into tsconfig.json",
-            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.6.1 init --preset bIkeymG --css src/app.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall"
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.7.0 init --preset bIkeymG --css src/app.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall"
           ],
           "versions": {
             "node": "v24.14.0",
@@ -4628,7 +4669,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
@@ -4679,7 +4720,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-tauri-app": "4.6.2",
             "tailwindcss": "4.3.3",
@@ -4727,13 +4768,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "@angular/cli": "21.2.24",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.ts",
             "backend:fastify: merge into package.json"
           ],
@@ -4764,7 +4805,7 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "@angular/cli": "21.2.24",
             "tailwindcss": "4.3.3",
@@ -4809,7 +4850,7 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "@angular/cli": "21.2.24",
             "tailwindcss": "4.3.3",
@@ -4856,9 +4897,9 @@
           "tailwind"
         ],
         "backend": null,
-        "status": "failing",
+        "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "@angular/cli": "21.2.24",
             "tailwindcss": "4.3.3",
@@ -4879,14 +4920,15 @@
           "checks": [
             "create",
             "files",
-            "manager steps"
+            "manager steps",
+            "steps",
+            "build"
           ],
           "notExercised": [
             "install (scripts off): add-on steps install (runner flow)"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
-        },
-        "reason": "step failed: addon:tailwind: yarn add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28 Cause (yarn-c.log): `ng new --package-manager yarn` ran corepack's default Yarn Classic for its inner install, leaving node-releases 2.0.56 locked; Yarn 4's one-day gate then quarantined it on the first add (YN0016). Same class as 2026-09-16."
+        }
       },
       {
         "wrapper": "web",
@@ -4898,13 +4940,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.js",
             "backend:fastify: merge into package.json"
           ],
@@ -4937,13 +4979,13 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn": "4.21.0",
+            "shadcn": "4.21.1",
             "react-router-dom": "7.18.4",
             "express": "5.2.1"
           },
@@ -4955,7 +4997,7 @@
             "addon:shadcn: merge into jsconfig.json",
             "addon:shadcn: prepend to vite.config.js",
             "addon:shadcn: patch vite.config.js",
-            "addon:shadcn: npm exec --yes -- shadcn@4.21.0 init -y -d",
+            "addon:shadcn: npm exec --yes -- shadcn@4.21.1 init -y -d",
             "addon:router: npm install react-router-dom@7.18.4",
             "addon:router: prepend to src/main.jsx",
             "addon:router: patch src/main.jsx",
@@ -4988,13 +5030,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.ts",
             "backend:fastify: merge into package.json"
           ],
@@ -5027,13 +5069,13 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn": "4.21.0",
+            "shadcn": "4.21.1",
             "react-router-dom": "7.18.4",
             "express": "5.2.1",
             "@types/express": "5.0.6"
@@ -5047,7 +5089,7 @@
             "addon:shadcn: merge into tsconfig.app.json",
             "addon:shadcn: prepend to vite.config.ts",
             "addon:shadcn: patch vite.config.ts",
-            "addon:shadcn: npm exec --yes -- shadcn@4.21.0 init -y -d",
+            "addon:shadcn: npm exec --yes -- shadcn@4.21.1 init -y -d",
             "addon:router: npm install react-router-dom@7.18.4",
             "addon:router: prepend to src/main.tsx",
             "addon:router: patch src/main.tsx",
@@ -5085,13 +5127,13 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn": "4.21.0",
+            "shadcn": "4.21.1",
             "react-router-dom": "7.18.4",
             "express": "5.2.1",
             "@types/express": "5.0.6"
@@ -5106,7 +5148,7 @@
             "addon:shadcn: merge into tsconfig.app.json",
             "addon:shadcn: prepend to vite.config.ts",
             "addon:shadcn: patch vite.config.ts",
-            "addon:shadcn: pnpm dlx shadcn@4.21.0 init -y -d",
+            "addon:shadcn: pnpm dlx shadcn@4.21.1 init -y -d",
             "addon:router: pnpm add react-router-dom@7.18.4",
             "addon:router: prepend to src/main.tsx",
             "addon:router: patch src/main.tsx",
@@ -5147,13 +5189,13 @@
         "backend": "express",
         "status": "failing",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn": "4.21.0",
+            "shadcn": "4.21.1",
             "react-router-dom": "7.18.4",
             "express": "5.2.1",
             "@types/express": "5.0.6"
@@ -5169,7 +5211,7 @@
             "addon:shadcn: merge into tsconfig.app.json",
             "addon:shadcn: prepend to vite.config.ts",
             "addon:shadcn: patch vite.config.ts",
-            "addon:shadcn: yarn dlx shadcn@4.21.0 init -y -d",
+            "addon:shadcn: yarn dlx shadcn@4.21.1 init -y -d",
             "addon:router: yarn add react-router-dom@7.18.4",
             "addon:router: prepend to src/main.tsx",
             "addon:router: patch src/main.tsx",
@@ -5192,7 +5234,7 @@
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         },
-        "reason": "step failed: addon:router: yarn add react-router-dom@7.18.4 Cause (yarn-b.log): Yarn 4.18's one-day release gate (npmMinimalAgeGate) quarantined lucide-react 1.47.0, which shadcn's inner `yarn add` had locked; the next add fails (YN0016). Same class as 2026-09-16."
+        "reason": "step failed: addon:router: yarn add react-router-dom@7.18.4 Cause (evidence log, 2026-10-03): Yarn 4.18's one-day release gate (npmMinimalAgeGate) quarantined lucide-react 1.51.0, published 17 hours earlier, which shadcn's inner `yarn add` had locked; the next add fails (YN0016). Same class as 2026-09-16 and 2026-09-17."
       },
       {
         "wrapper": "web",
@@ -5206,7 +5248,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
@@ -5248,13 +5290,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.js",
             "backend:fastify: merge into package.json"
           ],
@@ -5286,7 +5328,7 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
@@ -5332,13 +5374,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.ts",
             "backend:fastify: merge into package.json"
           ],
@@ -5370,7 +5412,7 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
@@ -5418,13 +5460,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.js",
             "backend:fastify: merge into package.json"
           ],
@@ -5456,13 +5498,13 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn-svelte": "1.6.1",
+            "shadcn-svelte": "1.7.0",
             "express": "5.2.1"
           },
           "steps": [
@@ -5474,7 +5516,7 @@
             "addon:shadcn: prepend to vite.config.js",
             "addon:shadcn: patch vite.config.js",
             "addon:shadcn: merge into tsconfig.json",
-            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.6.1 init --preset bIkeymG --css src/tailwind.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall",
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.7.0 init --preset bIkeymG --css src/tailwind.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall",
             "backend:express: npm install express@5.2.1",
             "backend:express: write server/index.js",
             "backend:express: merge into package.json"
@@ -5504,13 +5546,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.ts",
             "backend:fastify: merge into package.json"
           ],
@@ -5542,13 +5584,13 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
             "@tailwindcss/postcss": "4.3.3",
             "postcss": "8.5.28",
-            "shadcn-svelte": "1.6.1",
+            "shadcn-svelte": "1.7.0",
             "express": "5.2.1",
             "@types/express": "5.0.6"
           },
@@ -5561,7 +5603,7 @@
             "addon:shadcn: prepend to vite.config.ts",
             "addon:shadcn: patch vite.config.ts",
             "addon:shadcn: merge into tsconfig.json",
-            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.6.1 init --preset bIkeymG --css src/tailwind.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall",
+            "addon:shadcn: npm exec --yes -- shadcn-svelte@1.7.0 init --preset bIkeymG --css src/tailwind.css --base-color neutral --components-alias $lib/components --ui-alias $lib/components/ui --hooks-alias $lib/hooks --lib-alias $lib --utils-alias $lib/utils --reinstall",
             "backend:express: npm install express@5.2.1",
             "backend:express: npm install -D @types/express@5.0.6",
             "backend:express: write server/index.ts",
@@ -5592,13 +5634,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.js",
             "backend:fastify: merge into package.json"
           ],
@@ -5631,7 +5673,7 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
@@ -5683,13 +5725,13 @@
         "backend": "fastify",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
-            "fastify": "5.12.4"
+            "fastify": "5.12.5"
           },
           "steps": [
-            "backend:fastify: npm install fastify@5.12.4",
+            "backend:fastify: npm install fastify@5.12.5",
             "backend:fastify: write server/index.ts",
             "backend:fastify: merge into package.json"
           ],
@@ -5722,7 +5764,7 @@
         "backend": "express",
         "status": "verified",
         "evidence": {
-          "date": "2026-09-17",
+          "date": "2026-10-03",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
