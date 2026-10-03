@@ -1,6 +1,8 @@
 # P4c graph query: build plan
 
-Status: Proposed, 2026-10-03, as the arc for one unattended build-and-review run
+Status: Delivered, 2026-10-03, on branch `feat/p4c-graph-query` after three
+unattended runs, two reviews, a live pass and one hand fix (see Verification).
+Proposed 2026-10-03 as the arc for one unattended build-and-review run
 ([unattended arc policy](../../../Agents/docs/unattended-arc-policy.md)). One
 agent builds the whole checklist, a second agent reviews the result once, and
 nothing merges without the owner.
@@ -316,6 +318,13 @@ P5 diagnostics, P6 MCP conformance, the W track, track T, and the live pass on
 a JS/TS scratch project (the owner runs it after the review).
 
 ## Evidence
+
+> **Note on commit hashes (2026-10-03):** the hashes in this section name
+> commits on the runs' local branches. The pull request replayed them onto
+> `main`: build passes 1–3 (`5850c44`, `884fc49`, `e6e0285`) became `d0621c0`;
+> `22ceb8a` became `56da89e`; `707c205` became `bbf34ac`; `9b67c29` became
+> `6c388f1`; `0bc108e` became `9ff66db`; and the hand fix `ce20135` became
+> `95a7c0f`. The code is identical.
 
 ### Build pass 1 (2026-10-03) — the parsed-revision foundation (tasks 1–2)
 
@@ -670,7 +679,7 @@ not. A new `FocusOutcome::NotFound` variant was added to the contract.
 - `awaiting_canvas_pieces` is `#[serde(default)]` on the bridge `GraphResult`, so
   an owner that never sets it stays valid; the schema artifact was regenerated
   and verified drift-free.
-- The key separator is built with `String.fromCharCode(0)` rather than a ` `
+- The key separator is built with `String.fromCharCode(0)` rather than a `\0`
   string escape: both keep the U+0000 record separator and keep the file text;
   the named constant also documents intent at its single definition.
 
@@ -690,6 +699,36 @@ not. A new `FocusOutcome::NotFound` variant was added to the contract.
 - `cargo build --manifest-path src-tauri/Cargo.toml` — zero warnings. Contract
   artifacts/fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and verified
   drift-free.
+
+## Verification (2026-10-03)
+
+Done outside the runs, by the agent that wrote the arc, because the builder
+twice recorded its fixes as passing tests without running them failing first.
+
+- **First review, Rust findings (3, 4, 5, 6, 8):** the first reviewer's own
+  harness, which runs the unchanged production reader, policy and handler
+  over a fixture with a real junction into `.git`, failed every case on
+  `e6e0285` and passed every case when rebuilt against `707c205`: the aliased
+  file is dropped and never walked, no `.git` folder is disclosed, every edge
+  endpoint is a returned node, `maxNodes: 1` stops the walk, and the encoded
+  response is 243 783 bytes against the 393 216 ceiling.
+- **First review, JavaScript findings:** the seven tests added for tasks 9–17
+  fail against `e6e0285`'s source and pass against `707c205`'s.
+- **Live pass findings:** the six JavaScript tests added for tasks 18–19 fail
+  against `707c205`'s source and pass against `0bc108e`'s; `git diff --numstat`
+  reads `src/app/projectApiBridge.js` as text.
+- **Live re-pass on `0bc108e`:** findings 1, 2 and 3 were fixed in the app;
+  finding 4 was not. The owner bridge invents a fallback node for every
+  frontier path (task 17's off-canvas fix), and the focus existence probe
+  counted it as proof the file exists, while the scripted test owner answered
+  only known paths. Hand fix `ce20135`: only a placed or parsed file counts.
+  Its test gives the scripted owner the production fallback; it failed before
+  the fix (`Resolved` against `NotFound`) and passes after, and a file placed
+  on the canvas but not yet on disk still resolves.
+- **Live re-check after the hand fix:** a missing focus answers `notFound` with
+  no nodes, real files resolve `current`, a denied focus answers `denied`.
+- **Checks on the final tree:** all seven guards, `test:domains` 1487/1487,
+  `npm run build`, `cargo test` 557 passed, `cargo build` zero warnings.
 
 ## Blockers
 
