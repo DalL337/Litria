@@ -1,6 +1,6 @@
 # Litria — Capabilities & Features
 
-> **Version**: 1.0.9 | **Date**: 2026-09-19 | **Status**: Public Beta (MIT)
+> **Version**: 1.1.0 | **Date**: 2026-10-03 | **Status**: Public Beta (MIT)
 
 ## How to read this document
 
@@ -23,10 +23,18 @@ describing code that didn't exist; pointers over restatement is the fix.)
 
 **Capability:** an infinite Konva canvas that renders code files as physical
 glass-tile pieces with stable spatial identity — position, scale, and
-viewport survive across sessions.
+viewport survive across sessions — over a per-workspace structural grid that
+placement resolves against.
 
 **Features**
 - Infinite pan/zoom canvas (0.25×–1.5×; wheel zooms at pointer, trackpad pans)
+- **Structural grid** (v1.1.0): a three-level lattice (100 · 20 · 10 by
+  default) saved with the workspace. Flex placement docks against neighbors
+  and otherwise lands on the finest grid point; Strict lands on major
+  intersections only and never docks flush. A drop never overlaps a node,
+  smart guides show edge and center alignment while dragging, a settle slide
+  carries the node onto its point (reduce-motion aware), and the move is one
+  undo. Existing layouts stay where they were saved until a node is moved
 - Glass-tile nodes with material-dispatched rendering (glass blur + rim
   refraction, or matte), left-edge organizational color cascade, selection
   and frosted-while-editing states
@@ -34,10 +42,12 @@ viewport survive across sessions.
   `Ctrl+Shift+0`), minimap with stable relative panning
 - Quick-Action HUD (registry-driven, draggable): New Node / New Group, pan
   wedges with hold-to-glide, zoom dial with Fit and true-1:1, curated
-  shortcut help; `H` hides it, state persists
+  shortcut help, and a Grid widget (the same settings as Preferences ▸
+  Grid); every section folds to its title row; `H` hides it, state persists
 - Viewport, positions, and layout persist per project (SQLite)
 
-*Built on:* ADR-014 (glass material), ADR-018 (HUD), `docs/ui-governance.md`.
+*Built on:* ADR-014 (glass material), ADR-018 (HUD), ADR-030 (structural
+grid), `docs/ui-governance.md`.
 
 ---
 
@@ -61,7 +71,8 @@ self-heal on project open.
   preview box with an inline name input — nothing exists until the name
   commits, at which point the folder is created (parented by where the box
   sits: inside an open group nests, open canvas goes to root)
-- Empty groups are first-class: seed-positioned, draggable (moves commit
+- Empty groups are first-class: seed-positioned (new empty folders lay out
+  apart, each subtree a column under its parent), draggable (moves commit
   and survive reopen), countable, deletable
 - Group deletion is a confirmed disk operation (folder and contents)
 - Merge via the group menu (explicit, target-picked); nest/un-nest via
@@ -89,7 +100,10 @@ changes (reserved names, locked files, cross-device moves with rollback).
 - Drag a node between groups → the file moves on disk
 - Rename nodes/groups → files and folders rename, with reserved-name
   refusals surfaced before anything changes
-- Batch delete with tab closure, connection cleanup, and LSP unregistration
+- Batch delete with tab closure, connection cleanup, and syntax-index and
+  LSP unregistration; moves re-index the moved files
+- Links are acted on as links: deleting, moving, or removing a symbolic link
+  or junction never touches its target, dangling links included
 - Cross-device (EXDEV) moves fall back to copy+delete with rollback
 - Undoable filesystem operations (journaled deletes)
 
@@ -107,12 +121,16 @@ the open Monaco model or to disk.
 
 **Features**
 - **Import discovery**: on open, existing imports become wires on the
-  canvas automatically (re-derived each load; imports stay authoritative)
+  canvas automatically (re-derived each load; imports stay authoritative;
+  discovery records wires and never writes)
 - Draw a wire between two files → symbol picker (grouped, multi-select,
-  single symbol pre-selected) → real import statements written
+  single symbol pre-selected) → real import statements written, only
+  between files of the same language family
 - Wire deletion and symbol add via a floating per-wire action menu
-- Rename-safe: import edits locate their targets at apply time (stale
-  line guesses fail closed instead of corrupting files)
+- Rename-safe: renaming a file open in the editor rewrites only the path in
+  each importer's `from`, keeping names, line breaks, quotes, and extension;
+  import edits locate their targets at apply time (stale line guesses fail
+  closed instead of corrupting files)
 - Off-canvas import badges: pieces show counts for imports whose files
   aren't on canvas yet; placing from the badge wires them immediately
 - Wires to collapsed groups re-anchor to the pill; drops on a pill resolve
@@ -173,10 +191,10 @@ are adopted when present.
   typescript-language-server 6.0.0, TypeScript 6.0.3
 - **Managed server directory** (ADR-005): rust-analyzer and clangd install
   from a registry of pinned downloads with per-event consent pills, checksum
-  verification, and install / uninstall / re-verify from the Preferences
-  panel; Go is supported via toolchain hint (offer the command, the terminal
-  is the consent). A server already on `PATH` always wins over a managed or
-  bundled one
+  verification, install progress with Cancel (a cancel installs nothing), and
+  install / uninstall / re-verify from the Preferences panel; Go is supported
+  via toolchain hint (offer the command, the terminal is the consent). A
+  server already on `PATH` always wins over a managed or bundled one
 - Python local intelligence providers supplement the LSP (hover,
   completions, definitions) for instant single-file responsiveness
 - Custom Python hover card: diagnostic stacking, pin (`P`), severity labels
@@ -279,14 +297,19 @@ TOML for preferences — every kind of state has one physical home, and
 
 **Features**
 - Instant project open/resume: pieces, groups (with seed geometry),
-  connections (with persisted anchor sides), viewport, tabs, hidden paths
+  connections (with persisted anchor sides), viewport, tabs, hidden paths,
+  the workspace grid
 - Open-any-folder bootstrapping: returning project → marker rebuild →
   fresh bootstrap, no ceremony
-- Recents with pinning; project switcher in the title bar
+- Recents with pinning; project switcher in the title bar. An open checks
+  the path before closing the current project; an open that fails later
+  lands on the launcher with the error
 - Preferences in `preferences/*.litria.toml` (global + per-project layers);
   repo `litria.toml` stays sparse project truth (never preferences)
-- Schema v3; migrations run idempotently on open, each version step in one
-  transaction, and a file left half-migrated by an older build heals itself
+- Schema v4 (v1.1.0 added the workspace grid record); migrations run
+  idempotently on open, each version step in one transaction, and a file
+  left half-migrated by an older build heals itself. A read-only workspace
+  from before the grid opens without migrating
 - Open-time health: integrity check on every open, zero-byte files refused,
   corruption reported with the recovery step (rebuild from `litria.toml`)
 - Read-only workspaces open for viewing with a canvas pill; failed layout
@@ -311,14 +334,16 @@ guard makes hard-coding a settings key a build failure.
 - Preferences panel on the Launcher (global) and in-app via File menu
   (global + per-project overrides with reset-to-global); v1.0.3: settings
   grouped into rooms (Appearance / Project creation / Behavior / Themes /
-  Language servers) declared in the registry, a rail that tracks the room
-  in view, scope pills, and "Find a setting" search (`/`) with highlighted
-  matches
+  Language servers; v1.1.0 adds Grid) declared in the registry, a rail that
+  tracks the room in view, scope pills, and "Find a setting" search (`/`)
+  with highlighted matches
 - Live-inherit vs seed-at-creation propagation, stated in the UI
 - Current registry: theme, energy (Live/Calm, project-overridable), wire
   drop behavior (project-overridable), default project location, default
   base theme, splash screen, build-trace pause, build-log auto-send,
-  terminal drawer close
+  terminal drawer close, eleven grid settings (shared with the HUD's Grid
+  widget), and paths withheld from AI agents (read by the Project API, which
+  release builds don't expose yet)
 - Settings drawer refit: Theme / Accent / Material pills with a
   material-declared parameter area
 - Managed-server inventory (install/uninstall/re-verify) surfaces in the
@@ -396,6 +421,11 @@ scripts stay off, with explicit consent to run them.
   combination carries execution evidence for the user's platform and
   package manager; anything without it is shown disabled with the reason.
   See "Excluded combinations" below.
+- The wizard checks the machine before Create (v1.1.0): a package manager
+  the run would refuse (missing, or Yarn Classic) shows disabled with the
+  run's own reason, before any network call; a Tauri project on a machine
+  without Rust can still be created, and the review page says what running
+  it needs
 - Add-on coverage per framework (each an executed recipe, not a checkbox):
   React and Vue — Tailwind, shadcn, router; Svelte — Tailwind, shadcn
   (standalone Svelte has no first-party router; SvelteKit is not offered);
@@ -448,7 +478,8 @@ are detected on the next launch.
 - Friendly crash screen ("files already saved are safe") with Reload /
   View Logs / Report
 - Local-only records at `~/.litria/logs/crashes/`; relaunch banner with
-  content-free breadcrumbs
+  content-free breadcrumbs; the Logs drawer (Actions ▸ Logs) opens the
+  build-log or crash-record folder for the tab in view
 - Assisted reporting: prefilled GitHub issue (URL repoints to the public
   repo at flip time)
 - Per-version sourcemap archives extracted at build for symbolicating
@@ -486,13 +517,13 @@ The capability layer itself is held together by enforced architecture:
 
 | Metric | Current |
 |--------|---------|
-| Domain modules | 15 (registry: `docs/Orchestration.md` §2) |
+| Domain modules | 16 contract-checked (registry: `docs/Orchestration.md` §2) |
 | Architecture guards | **7** — imports, app shell, protected zones, domain contract, settings keys, editor engine, db chokepoint |
-| JS tests | **1049** across 85 suites (`test/domains/`) |
-| Rust tests | **257** |
-| ADRs | **25** |
-| Tauri commands | ~81 registered (registry of record: `src-tauri/src/lib.rs`) |
-| Workspace DB schema | v3 (2 migrations) |
+| JS tests | **1487** across 137 suites (`test/domains/`) |
+| Rust tests | **557** (plus 11 ignored) |
+| ADRs | **33** (ADR-031 lives in `docs/plans/agent-integration/`) |
+| Tauri commands | 84 in release builds, 89 in debug builds (registry of record: `src-tauri/src/lib.rs`) |
+| Workspace DB schema | v4 (3 migrations) |
 | Theme tokens | 47 (v3) |
 | Bundled runtimes | Node 24.14.0, pyright 1.1.414, ts-ls 6.0.0, ts 6.0.3 |
 
