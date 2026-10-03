@@ -360,6 +360,25 @@ function projectPath(value) {
 }
 
 /**
+ * A SyntaxDomain key (absolute, `${root}/…`), a piece filename (absolute or
+ * relative) or a folder, as the project-relative path pieces and requests use
+ * (first review 1, P4c task 9). An absolute path under `root` is made relative;
+ * an already-relative path is kept; an absolute path OUTSIDE `root` is not a
+ * project node and is dropped (`null`).
+ */
+function relativize(value, root) {
+  if (typeof value !== 'string' || !value) return '';
+  const abs = value.replace(/\\/g, '/');
+  const normRoot = typeof root === 'string' ? root.replace(/\\/g, '/').replace(/\/+$/, '') : '';
+  if (normRoot && (abs === normRoot || abs.startsWith(`${normRoot}/`))) {
+    return abs.slice(normRoot.length).replace(/^\/+|\/+$/g, '');
+  }
+  const isAbsolute = /^([a-zA-Z]:\/|\/)/.test(abs);
+  if (isAbsolute) return null; // absolute but outside the project root
+  return abs.replace(/^\/+|\/+$/g, '');
+}
+
+/**
  * The selection port's answer from owner state: selected piece ids mapped to
  * their files' project-relative paths, the selected group's folder (folder
  * groups only), and the active document (`getActiveSessionDocument`). Ids
@@ -433,7 +452,9 @@ export function answerSelection(request, snapshot, ceiling = MAX_REPLY_BYTES) {
  * @param {(path:string)=>({source,revision}|null)} owners.parsedRevision  SyntaxDomain selector
  * @param {(path:string)=>boolean} owners.discoverable  `isDiscoverableFilename`
  * @param {boolean} owners.discoveryInFlight an initial run or refresh is reading
- * @returns {{nodes: Map<string,object>, edges: Array, discoveryInFlight: boolean}}
+ * @param {Array} [owners.connections]  ConnectionDomain's canvas connections (manual wires)
+ * @param {string} [owners.projectRoot] the absolute project root, to relativise keys
+ * @returns {{nodes: Map<string,object>, edges: Array, discoveryInFlight: boolean, discoverable: Function}}
  */
 export function graphSnapshot({
   piecesById,
@@ -442,19 +463,31 @@ export function graphSnapshot({
   pendingEdges,
   parsedRevision,
   discoverable,
-  discoveryInFlight
+  discoveryInFlight,
+  connections,
+  projectRoot
 }) {
+  const root = typeof projectRoot === 'string' ? projectRoot.replace(/\\/g, '/').replace(/\/+$/, '') : '';
+  const rel = (value) => relativize(value, root);
+  // SyntaxDomain keys files by absolute path (`${root}/${rel}`); reconstruct it
+  // for the parsed-revision selector, keyed the way the domain stored it.
+  const absOf = (relPath) => (root ? `${root}/${relPath}` : relPath);
+
   const groupById = new Map((groups ?? []).map((group) => [group.id, group]));
-  // Files a piece places on the canvas, with their folder-group facts.
+  // Files a piece places on the canvas, with their folder-group facts, and the
+  // piece-id → relative-path map manual wires are resolved through.
   const onCanvasPaths = new Map();
-  for (const piece of piecesById?.values?.() ?? []) {
-    const path = projectPath(piece?.filename);
+  const pieceIdToRel = new Map();
+  for (const [pieceId, piece] of piecesById?.entries?.() ?? []) {
+    const path = rel(piece?.filename);
     if (!path) continue;
     const group = piece.groupId == null ? null : groupById.get(piece.groupId);
-    const folder = projectPath(group?.folderPath) || null;
+    const folder = (group ? rel(group.folderPath) : null) || null;
     // A legacy group without a folderPath is named by an opaque id.
     const groupId = group && !folder ? String(group.id) : null;
     onCanvasPaths.set(path, { onCanvas: true, folder, groupId });
+    // Keyed by the map's piece id (connections reference `sourceId`/`targetId`).
+    pieceIdToRel.set(piece?.id ?? pieceId, path);
   }
 
   const parsedOf = typeof parsedRevision === 'function' ? parsedRevision : () => null;
@@ -463,7 +496,7 @@ export function graphSnapshot({
   const noteNode = (path) => {
     if (!path || nodes.has(path)) return;
     const placed = onCanvasPaths.get(path) ?? { onCanvas: false, folder: null, groupId: null };
-    const parsed = parsedOf(path);
+    const parsed = parsedOf(absOf(path));
     nodes.set(path, {
       path,
       onCanvas: placed.onCanvas,
@@ -479,37 +512,51 @@ export function graphSnapshot({
   const edges = [];
   const seen = new Set();
   const addEdge = (exporter, importer, symbols, provenance, status, onCanvas) => {
-    const importerPath = projectPath(importer);
-    const exporterPath = projectPath(exporter);
+    const importerPath = rel(importer);
+    const exporterPath = rel(exporter);
     if (!importerPath || !exporterPath) return;
     const key = `${importerPath} ${exporterPath} ${provenance}`;
     if (seen.has(key)) return;
     seen.add(key);
     noteNode(importerPath);
     noteNode(exporterPath);
+    const full = symbols ?? [];
     edges.push({
       importer: importerPath,
       exporter: exporterPath,
-      symbols: (symbols ?? []).slice(0, MAX_SYMBOLS_PER_EDGE).map((s) => ({ name: s.name, kind: s.kind })),
+      symbols: full.slice(0, MAX_SYMBOLS_PER_EDGE).map((s) => ({ name: s.name, kind: s.kind })),
+      symbolsTruncated: full.length > MAX_SYMBOLS_PER_EDGE,
       provenance,
       status: status ?? null,
       onCanvas: onCanvas === true
     });
   };
 
+  const coveredConnections = new Set();
   for (const edge of edgeProvenance ?? []) {
     const onCanvas = Array.isArray(edge.connectionIds) && edge.connectionIds.length > 0;
+    for (const connectionId of edge.connectionIds ?? []) coveredConnections.add(connectionId);
     addEdge(edge.sourceFilePath, edge.targetFilePath, edge.symbols, 'sourceDerived', edge.status ?? null, onCanvas);
   }
   for (const edge of pendingEdges ?? []) {
     addEdge(edge.sourceFilePath, edge.targetFilePath, edge.symbols, 'sourceDerived', edge.status ?? null, false);
+  }
+  // Manual wires: a canvas connection with no backing sourceDerived edge
+  // (first review 2, P4c task 10). Discovery draws exporter piece to importer
+  // piece, so `sourceId` is the exporter and `targetId` the importer.
+  for (const connection of connections ?? []) {
+    if (!connection || coveredConnections.has(connection.id)) continue;
+    const exporterRel = pieceIdToRel.get(connection.sourceId);
+    const importerRel = pieceIdToRel.get(connection.targetId);
+    if (!exporterRel || !importerRel) continue;
+    addEdge(exporterRel, importerRel, [], 'manual', null, true);
   }
 
   // Every on-canvas file is a node even with no edges, so a frontier path that
   // names a placed-but-unwired piece still carries its folder and canvas facts.
   for (const path of onCanvasPaths.keys()) noteNode(path);
 
-  return { nodes, edges, discoveryInFlight: discoveryInFlight === true, noteNode };
+  return { nodes, edges, discoveryInFlight: discoveryInFlight === true, noteNode, discoverable: discoverableOf };
 }
 
 /**
@@ -536,7 +583,8 @@ export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
     ? Math.min(request.maxEdgesPerNode, MAX_EDGES_PER_NODE)
     : MAX_EDGES_PER_NODE;
 
-  const { nodes, edges, discoveryInFlight } = snapshot ?? { nodes: new Map(), edges: [], discoveryInFlight: false };
+  const { nodes, edges, discoveryInFlight, discoverable } = snapshot ?? { nodes: new Map(), edges: [], discoveryInFlight: false };
+  const discoverableOf = typeof discoverable === 'function' ? discoverable : () => false;
   const frontier = [...new Set(paths)];
   // Edge keeps when it is incident to `path` in `direction` (importer→exporter).
   const incident = (edge, path) => {
@@ -563,8 +611,11 @@ export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
 
   for (const path of frontier) {
     if (!isCarriablePath(path)) { omitted += 1; continue; }
+    // A frontier path with no piece, wire or pending edge is still a node with
+    // its facts from the file name — notably `discoverable` (first review 11,
+    // P4c task 17), so an off-canvas focus is not misreported as undiscoverable.
     const node = nodes.get(path) ?? {
-      path, onCanvas: false, folder: null, groupId: null, parsed: null, discoverable: false
+      path, onCanvas: false, folder: null, groupId: null, parsed: null, discoverable: discoverableOf(path) === true
     };
     const nodeFact = {
       path: node.path,
@@ -590,6 +641,7 @@ export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
         provenance: edge.provenance,
         onCanvas: edge.onCanvas === true
       };
+      if (edge.symbolsTruncated) out.symbolsTruncated = true;
       if (edge.provenance === 'sourceDerived' && edge.status) out.status = edge.status;
       if (!fits(out)) { omitted += 1; continue; }
       emittedEdge.add(key);

@@ -151,10 +151,15 @@ fn run(
         GraphDirection::Both => BridgeDirection::Both,
     };
 
-    // 2. Breadth-first over the bridge, one level per call. Only allowed paths
-    // are ever requested, so a denied or unindexed file is never enumerated
-    // and the walk cannot pass through it.
-    let mut visited: BTreeSet<String> = seeds.iter().cloned().collect();
+    // 2. Breadth-first over the bridge, one level per call. Every frontier
+    // path, edge endpoint and folder is resolved with the full policy
+    // (`identity`, not just `classify`), so a path reached through a junction
+    // or link into a denied directory never becomes a node and is never walked
+    // (first review 3 and 8, P4c task 11). The walk is bounded BY the node
+    // budget: an edge is kept only when both its endpoints can become returned
+    // nodes within `maxNodes`, so the neighbourhood stays closed and no edge
+    // reaches past the returned nodes (first review 4 and 5, P4c tasks 12, 13).
+    let mut accepted: BTreeSet<String> = BTreeSet::new();
     let mut facts: BTreeMap<String, BridgeNode> = BTreeMap::new();
     let mut seen_edges: BTreeSet<(String, String, bool)> = BTreeSet::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
@@ -162,7 +167,15 @@ fn run(
     let mut truncation: BTreeSet<TruncationReason> = BTreeSet::new();
     let mut discovery_in_flight = false;
 
-    let mut frontier: Vec<String> = seeds.clone();
+    for seed in &seeds {
+        if accepted.len() >= max_nodes {
+            truncation.insert(TruncationReason::MaxNodes);
+            break;
+        }
+        accepted.insert(seed.clone());
+    }
+
+    let mut frontier: Vec<String> = accepted.iter().cloned().collect();
     let mut level = 0u32;
     while level < depth && !frontier.is_empty() {
         frontier.truncate(MAX_GRAPH_FRONTIER as usize);
@@ -179,25 +192,44 @@ fn run(
         }
 
         for node in reply.nodes {
-            if classify(&node.path) == Class::Allowed {
+            if graphable_key(root, &node.path).is_some() {
                 facts.entry(node.path.clone()).or_insert(node);
             }
         }
 
         let mut next: Vec<String> = Vec::new();
         for edge in reply.edges {
-            // A denied or unindexed endpoint removes the edge.
-            if classify(&edge.importer) != Class::Allowed || classify(&edge.exporter) != Class::Allowed {
+            // A denied or unindexed endpoint (resolved with identity) removes
+            // the edge, and the walk never continues through it.
+            if graphable_key(root, &edge.importer).is_none() || graphable_key(root, &edge.exporter).is_none() {
                 continue;
             }
             let manual = matches!(edge.provenance, BridgeProvenance::Manual);
-            if !seen_edges.insert((edge.importer.clone(), edge.exporter.clone(), manual)) {
+            let key = (edge.importer.clone(), edge.exporter.clone(), manual);
+            if seen_edges.contains(&key) {
+                continue;
+            }
+            // Closed neighbourhood within the node budget: both endpoints must
+            // become returned nodes. If the budget cannot hold the endpoints,
+            // the edge is dropped (not left dangling) and the walk is flagged.
+            let new_endpoints: Vec<String> = [&edge.importer, &edge.exporter]
+                .into_iter()
+                .filter(|path| !accepted.contains(*path))
+                .cloned()
+                .collect();
+            if accepted.len() + new_endpoints.len() > max_nodes {
+                truncation.insert(TruncationReason::MaxNodes);
                 continue;
             }
             if edges.len() >= MAX_EDGES as usize {
                 truncation.insert(TruncationReason::Edges);
                 continue;
             }
+            for endpoint in new_endpoints {
+                accepted.insert(endpoint.clone());
+                next.push(endpoint);
+            }
+            seen_edges.insert(key);
             let mut symbols: Vec<GraphSymbol> = edge
                 .symbols
                 .into_iter()
@@ -210,17 +242,17 @@ fn run(
                 symbols.truncate(MAX_SYMBOLS_PER_EDGE as usize);
                 truncation.insert(TruncationReason::Symbols);
             }
+            // The owner cut this edge's symbols at the ceiling (first review 7,
+            // task 15): it cannot carry more, so it reports the cut here.
+            if edge.symbols_truncated {
+                truncation.insert(TruncationReason::Symbols);
+            }
             let provenance = match edge.provenance {
                 BridgeProvenance::SourceDerived => EdgeProvenance::SourceDerived {
                     status: edge.status.unwrap_or_default(),
                 },
                 BridgeProvenance::Manual => EdgeProvenance::Manual,
             };
-            for endpoint in [&edge.importer, &edge.exporter] {
-                if !visited.contains(endpoint) {
-                    next.push(endpoint.clone());
-                }
-            }
             edges.push(GraphEdge {
                 importer: edge.importer,
                 exporter: edge.exporter,
@@ -230,13 +262,27 @@ fn run(
             });
         }
 
-        frontier.clear();
-        for path in next {
-            if visited.insert(path.clone()) {
-                frontier.push(path);
+        frontier = next;
+        level += 1;
+    }
+
+    // Close the neighbourhood: boundary endpoints accepted at the last level
+    // were never a frontier, so fetch their node facts in one more call (policy
+    // re-checked). Any accepted path the owner has no facts for is still a node,
+    // with facts synthesised, so every edge endpoint is a returned node.
+    let missing: Vec<String> = accepted.iter().filter(|path| !facts.contains_key(*path)).cloned().collect();
+    for chunk in missing.chunks(MAX_GRAPH_FRONTIER as usize) {
+        let reply = editor.graph(&GraphRequest {
+            paths: chunk.to_vec(),
+            direction,
+            max_edges_per_node: 0,
+        })?;
+        discovery_in_flight |= reply.discovery_in_flight;
+        for node in reply.nodes {
+            if graphable_key(root, &node.path).is_some() {
+                facts.entry(node.path.clone()).or_insert(node);
             }
         }
-        level += 1;
     }
 
     // 3. Freshness, per file node, against the effective revision.
@@ -258,8 +304,18 @@ fn run(
     let mut any_not_parsed = false;
     let mut any_not_discoverable = false;
 
-    // In path order (the facts map is already sorted by path).
-    for (path, node) in &facts {
+    // In path order (the accepted set is already sorted by path). Every
+    // accepted path is a returned node, so the neighbourhood is closed.
+    let default_node = || BridgeNode {
+        path: String::new(),
+        on_canvas: false,
+        folder: None,
+        group_id: None,
+        parsed: None,
+        discoverable: false,
+    };
+    for path in &accepted {
+        let node = facts.get(path).cloned().unwrap_or_else(default_node);
         let effective_key = match identity(root, path) {
             Identity::Key(key) => key,
             _ => path.clone(),
@@ -279,11 +335,11 @@ fn run(
         if seeds.contains(path) && node.discoverable {
             seed_discoverable = true;
         }
-        if file_nodes.len() >= max_nodes {
-            truncation.insert(TruncationReason::MaxNodes);
-            continue;
-        }
-        if let Some(folder) = &node.folder {
+        // A folder is a node only when the policy allows it, resolved the same
+        // way (first review 8, task 11): a denied folder (`.git`) is never a
+        // folder node, and the file node does not disclose it either.
+        let folder = node.folder.as_ref().filter(|folder| folder_allowed(root, folder)).cloned();
+        if let Some(folder) = &folder {
             folders.insert(folder.clone());
         } else if let Some(group_id) = &node.group_id {
             group_ids.insert(group_id.clone());
@@ -291,7 +347,7 @@ fn run(
         file_nodes.push(GraphNode::File {
             path: path.clone(),
             on_canvas: node.on_canvas,
-            folder: node.folder.clone(),
+            folder,
             group_id: node.group_id.clone(),
             freshness,
             discoverable: node.discoverable,
@@ -374,6 +430,16 @@ fn graphable_key(root: &Path, path: &str) -> Option<String> {
     }
 }
 
+/// Whether a folder may be disclosed as a node: a valid, allowed path that does
+/// not resolve (through a link or by name) to a denied directory such as `.git`
+/// (first review 8, P4c task 11).
+fn folder_allowed(root: &Path, folder: &str) -> bool {
+    if !is_valid_api_path(folder) || classify(folder) != Class::Allowed {
+        return false;
+    }
+    !matches!(identity(root, folder), Identity::Denied | Identity::InvalidPath)
+}
+
 /// Per-node freshness: compare the parsed revision the owner recorded with the
 /// file's effective revision when the query runs.
 fn freshness(
@@ -420,26 +486,30 @@ fn encoded_len(result: &GraphQueryResult) -> usize {
 /// then folder nodes, then file nodes. Counts are already bounded, so this is a
 /// backstop; when it fires it says so with `ResponseSize`.
 fn fit(result: &mut GraphQueryResult, ceiling: usize) {
-    let mut shed = false;
+    if encoded_len(result) <= ceiling {
+        return;
+    }
+    // Account for the truncation fields THEMSELVES before measuring the fit: the
+    // `ResponseSize` reason and the flipped `truncated` flag add bytes, and a
+    // response shed to the ceiling without them went back over it (first review
+    // 6, P4c task 14). Add them, then keep shedding until it truly fits.
+    if !result.truncated_by.contains(&TruncationReason::ResponseSize) {
+        result.truncated_by.push(TruncationReason::ResponseSize);
+        result.truncated_by.sort();
+    }
+    result.truncated = true;
     while encoded_len(result) > ceiling {
         if result.edges.pop().is_some() {
-            shed = true;
             continue;
         }
         if let Some(index) = result.nodes.iter().rposition(|node| matches!(node, GraphNode::Folder { .. })) {
             result.nodes.remove(index);
-            shed = true;
             continue;
         }
         if result.nodes.pop().is_some() {
-            shed = true;
             continue;
         }
         break; // nothing left to shed; the dispatcher ceiling is the backstop
-    }
-    if shed && !result.truncated_by.contains(&TruncationReason::ResponseSize) {
-        result.truncated_by.push(TruncationReason::ResponseSize);
-        result.truncated_by.sort();
     }
 }
 

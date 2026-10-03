@@ -94,6 +94,12 @@ export function useProjectApiBridge({
             groups: workspace.groups,
             edgeProvenance: syntax?.getAllEdgeProvenance?.() ?? [],
             pendingEdges: owners.getPendingEdges?.() ?? [],
+            // Canvas connections, so a wire with no syntax edge surfaces as a
+            // `manual` edge through the production snapshot (P4c task 10).
+            connections: owners.connectionDomain?.selectors?.getAllConnections?.() ?? [],
+            // The absolute project root, so SyntaxDomain's absolute keys meet the
+            // project-relative paths pieces and requests use (P4c task 9).
+            projectRoot: owners.projectRoot ?? '',
             parsedRevision: (path) => syntax?.getParsedRevision?.(path) ?? null,
             discoverable: isDiscoverableFilename,
             discoveryInFlight: owners.isDiscoveryInFlight?.() === true

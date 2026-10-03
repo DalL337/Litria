@@ -119,6 +119,11 @@
             "$ref": "#/$defs/GraphSymbol"
           },
           "maxItems": 50
+        },
+        "symbolsTruncated": {
+          "description": "The owner cut this edge's symbols at the ceiling; the tool flags it (the\nowner cannot carry more than the ceiling per edge). P4c task 15.",
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false,

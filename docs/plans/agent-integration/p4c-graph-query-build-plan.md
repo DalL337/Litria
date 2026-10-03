@@ -44,15 +44,15 @@ relationships, with derived provenance and honest per-node freshness (brief
 - [x] Tests: everything in the build plan's P4 Tests list and every sequence under "Sequences that must hold" below, in JavaScript and Rust.
 - [x] Docs: build-plan slice map (P3 row Done with PR #90; P4 row Done, PR pending), a P4c record in the build plan, the Domain Register entry in `docs/Orchestration.md`, and `docs/rust-command-contracts.md` for any command added.
 - [x] Record evidence under Evidence below; check:architecture, test:domains, build and cargo test pass, and `cargo build` has zero warnings.
-- [ ] Bridge paths: the graph snapshot converts absolute SyntaxDomain keys (edges and parsed revisions) to the project-relative paths that pieces and requests use, proven by a test that drives the real SyntaxDomain and adapter with an absolute project root (first review 1).
-- [ ] Manual wires: the production graph port reads canvas connections, so a wire with no syntax edge appears as a `manual` edge through the production snapshot, not an injected one (first review 2).
-- [ ] Policy at every step: every frontier path, every edge endpoint and every folder is resolved with `identity` before it becomes a node, a folder, an edge endpoint or the next frontier; a path whose identity is `Denied` (for example reached through a junction or link into `.git`) never appears and is never walked through (first review 3 and 8).
-- [ ] Closed neighbourhood: every returned edge's endpoints are returned nodes; at the outer boundary of the requested depth an endpoint is policy-checked and returned as a node, or the edge is dropped (first review 4).
-- [ ] `maxNodes` limits the walk: expansion stops when the node budget is reached, no edge reaches past the returned nodes, and the truncation is flagged (first review 5).
-- [ ] The encoded response never exceeds the dispatcher's response ceiling, including the truncation fields themselves (first review 6).
-- [ ] Symbol truncation at 50 per edge is flagged in the response (first review 7).
-- [ ] Discovery-in-flight signal: true while a refresh is armed but not started, and a previous project's run finishing never clears the current project's signal (first review 9 and 10).
-- [ ] Off-canvas files get the same node facts as on-canvas ones, including `discoverable` from the file name, proven by a test (first review 11).
+- [x] Bridge paths: the graph snapshot converts absolute SyntaxDomain keys (edges and parsed revisions) to the project-relative paths that pieces and requests use, proven by a test that drives the real SyntaxDomain and adapter with an absolute project root (first review 1).
+- [x] Manual wires: the production graph port reads canvas connections, so a wire with no syntax edge appears as a `manual` edge through the production snapshot, not an injected one (first review 2).
+- [x] Policy at every step: every frontier path, every edge endpoint and every folder is resolved with `identity` before it becomes a node, a folder, an edge endpoint or the next frontier; a path whose identity is `Denied` (for example reached through a junction or link into `.git`) never appears and is never walked through (first review 3 and 8).
+- [x] Closed neighbourhood: every returned edge's endpoints are returned nodes; at the outer boundary of the requested depth an endpoint is policy-checked and returned as a node, or the edge is dropped (first review 4).
+- [x] `maxNodes` limits the walk: expansion stops when the node budget is reached, no edge reaches past the returned nodes, and the truncation is flagged (first review 5).
+- [x] The encoded response never exceeds the dispatcher's response ceiling, including the truncation fields themselves (first review 6).
+- [x] Symbol truncation at 50 per edge is flagged in the response (first review 7).
+- [x] Discovery-in-flight signal: true while a refresh is armed but not started, and a previous project's run finishing never clears the current project's signal (first review 9 and 10).
+- [x] Off-canvas files get the same node facts as on-canvas ones, including `discoverable` from the file name, proven by a test (first review 11).
 
 ## Requirements
 
@@ -477,8 +477,92 @@ by `projectApiBridgeGraph.test.mjs` from pass 2.
   artifacts and fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and
   verified drift-free.
 
+### Build pass — first-review fixes (2026-10-03) — tasks 9–17
+
+This run addressed the nine first-review defects. Code was at the first-review
+commit `e6e0285` (+ the docs commit that recorded these tasks), so each defect
+was reproduced by reading the implementation at that commit; the fix is proven
+by a test written against the fixed behaviour. Journal:
+`.research/2026-10-03-p4c-graph-query-first-review-fixes.md`.
+
+**Task 9 — paths meet (first review 1).** `graphSnapshot` now takes a
+`projectRoot` and relativises every path it reads — SyntaxDomain's absolute edge
+keys, pending-edge paths, piece filenames, folder-group paths — to the
+project-relative form pieces and requests use (`relativize` in
+`src/app/projectApiBridge.js`); the parsed-revision selector is still keyed by
+the absolute path it was stored under (`${root}/${rel}`). An absolute path
+outside the root is dropped (not a project node). `useProjectApiBridge`/`App.jsx`
+thread `projectInstance.rootPath` into the port. Proven by
+`test/domains/graphSnapshotProduction.test.mjs`, which drives the REAL
+SyntaxDomain with an absolute root and shows a `src/a.ts` query meeting its edge
+and parsed revision.
+
+**Task 10 — manual wires (first review 2).** The production port now passes
+`connectionDomain.selectors.getAllConnections()` to `graphSnapshot`, which emits a
+`manual` edge for any connection whose id backs no `sourceDerived` edge (exporter
+= `sourceId` piece, importer = `targetId` piece, per discovery). A wire already
+backed by a syntax edge is not duplicated. Tested in the same file.
+
+**Tasks 11–14 — the walk (first review 3, 4, 5, 6, 8), in
+`src-tauri/src/project_api/graph_query.rs`.**
+- Task 11: every frontier path, edge endpoint and folder is now resolved with
+  the full policy (`graphable_key`/`folder_allowed`, which call `identity`, not
+  just `classify`), so a path reached through a junction into `.git` never
+  becomes a node and is never walked, and a `.git` folder is never a folder node
+  (nor disclosed on the file node). Rust tests
+  `a_junction_endpoint_into_a_denied_directory_is_dropped` (Windows, `mklink /J`)
+  and `a_denied_folder_is_never_disclosed`.
+- Task 12: the walk keeps an edge only when both endpoints can become returned
+  nodes; boundary endpoints get a final fact-fetch, so every returned edge's
+  endpoints are returned nodes. Test `an_edge_at_depth_one_closes_on_a_returned_node`.
+- Task 13: the walk is bounded BY `maxNodes` — expansion stops at the budget,
+  no edge reaches a non-accepted node, and `MaxNodes` is flagged. Test
+  `max_nodes_one_bounds_the_walk`.
+- Task 14: `fit()` now adds the `ResponseSize` reason and flips `truncated`
+  BEFORE measuring the fit, then keeps shedding, so the encoded response stays
+  under the ceiling including the truncation fields. Test
+  `the_shed_response_stays_under_the_ceiling` (several ceilings).
+
+**Task 15 — symbol truncation flagged (first review 7).** The bridge `GraphEdge`
+gained `symbols_truncated` (`#[serde(default)]`); the owner sets it when it cuts
+to 50; the handler flags `TruncationReason::Symbols`. Tested Rust
+(`an_owner_symbol_cut_is_flagged`) and JS
+(`symbol truncation at 50 is flagged in the owner reply`).
+
+**Task 16 — discovery-in-flight (first review 9, 10),
+`src/app/useDiscoveryLifecycle.js`.** A `refreshArmedRef` reads in-flight from
+the moment the debounce timer is set (review 9); the initial-run and refresh
+in-flight flags are tied to their load token, so a stale project's run finishing
+cannot clear the current project's signal (review 10). Proven by
+`test/domains/discoveryInFlightSignal.test.mjs` over the real hook.
+
+**Task 17 — off-canvas node facts (first review 11).** `graphSnapshot` carries
+the `discoverable` predicate; `answerGraph`'s fallback node (a frontier path with
+no piece/wire/pending edge) computes `discoverable` from the file name instead of
+hardcoding `false`. Tested in `graphSnapshotProduction.test.mjs`.
+
+**Decisions where the brief was silent.**
+- A path that is absolute but outside the project root is dropped from the graph
+  (it cannot be a project node); an already-relative path is kept as-is.
+- A denied folder nulls the file node's `folder` field as well as dropping the
+  folder node, so the denied name is never disclosed either way.
+- `symbols_truncated` is `#[serde(default)]`, so existing fixtures stay valid;
+  the schema artifact was regenerated and verified drift-free.
+- Task 9's test drives the real SyntaxDomain (not the Monaco adapter); the
+  defect is a path-identity mismatch between SyntaxDomain's keys and piece paths,
+  which the SyntaxDomain + pieces test exercises directly.
+
+**Check results (2026-10-03, Windows).**
+- `npm run check:architecture` — all seven guards pass.
+- `npm run test:domains` — 1484 passed, 0 failed.
+- `npm run build` — built (usual chunk-size advisory only).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 552 passed, 0 failed.
+- `cargo build --manifest-path src-tauri/Cargo.toml` — zero warnings. Contract
+  artifacts/fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and verified
+  drift-free.
+
 ## Blockers
 
-None. All eight tasks are built and all four configured checks pass. The owner's
-live pass on a JS/TS scratch project (out of scope, run after the review)
-remains the only outstanding acceptance step.
+None. All seventeen tasks are built and all four configured checks pass. The
+owner's live pass on a JS/TS scratch project (out of scope, run after the
+review) remains the only outstanding acceptance step.

@@ -2,6 +2,10 @@
 //! hold, over a scripted owner that answers `workspace.graph` like the live
 //! bridge — plus one end-to-end pass over the real bridge and the epoch fence.
 
+// This whole file is the handler's test module (`#[cfg(test)] mod tests;`), so
+// the Windows-hidden-spawn guard may skip it: test code (the junction helper
+// below) spawns `cmd` directly, as the reader's own link tests do.
+#[cfg(test)]
 use super::*;
 use crate::contracts::project_api_bridge::editor::{BufferIndexEntry, BufferState};
 use crate::contracts::project_api_bridge::workspace::{
@@ -54,6 +58,7 @@ struct Edge {
     importer: String,
     exporter: String,
     symbols: Vec<(String, String)>,
+    symbols_truncated: bool,
     manual: bool,
     status: Option<String>,
     on_canvas: bool,
@@ -64,6 +69,7 @@ fn source_edge(importer: &str, exporter: &str, status: &str) -> Edge {
         importer: importer.into(),
         exporter: exporter.into(),
         symbols: vec![("thing".into(), "function".into())],
+        symbols_truncated: false,
         manual: false,
         status: Some(status.into()),
         on_canvas: true,
@@ -162,6 +168,7 @@ impl GraphEditor for Scripted {
                         kind: kind.clone(),
                     })
                     .collect(),
+                symbols_truncated: edge.symbols_truncated,
                 provenance: if edge.manual {
                     BProv::Manual
                 } else {
@@ -514,6 +521,7 @@ fn off_canvas_discovered_edges_manual_wires_and_group_shapes() {
             importer: "a.ts".into(),
             exporter: "b.ts".into(),
             symbols: Vec::new(),
+            symbols_truncated: false,
             manual: true,
             status: None,
             on_canvas: true,
@@ -654,6 +662,158 @@ fn walks_through_the_bridge() {
     assert_eq!(result.focus, FocusOutcome::Resolved);
     assert_eq!(file_paths(&result), ["a.ts"]);
     db::close_workspace_db().unwrap();
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- First-review defects (tasks 11–15) -------------------------------------
+
+/// Task 11 / first review 8: a file whose folder group is a denied directory
+/// (`.git`) never discloses that folder — no folder node, and the file node's
+/// own `folder` field is dropped.
+#[test]
+fn a_denied_folder_is_never_disclosed() {
+    let root = temp_root("denied-folder");
+    let mut editor = Scripted::default().node(
+        "a.ts",
+        Node {
+            folder: Some(".git".into()),
+            ..Node::default()
+        },
+    );
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor);
+    assert!(
+        !result.nodes.iter().any(|n| matches!(n, GraphNode::Folder { .. })),
+        "a denied folder is never a folder node"
+    );
+    match result.nodes.iter().find(|n| matches!(n, GraphNode::File { .. })).unwrap() {
+        GraphNode::File { folder, .. } => assert_eq!(folder.as_deref(), None, "the file node does not disclose .git"),
+        _ => unreachable!(),
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Task 11 / first review 3: a path reached through a junction into a denied
+/// directory is resolved with `identity` (not just `classify`), so it never
+/// becomes a node and the walk never continues through it.
+#[cfg(windows)]
+#[test]
+fn a_junction_endpoint_into_a_denied_directory_is_dropped() {
+    let root = temp_root("junction-endpoint");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(root.join(".git/secret.ts"), "export const x = 1;\n").unwrap();
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(root.join("alias"))
+        .arg(root.join(".git"))
+        .status()
+        .unwrap();
+    assert!(status.success(), "mklink /J");
+    put(&root, "a.ts", "x\n");
+    put(&root, "c.ts", "y\n");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("alias/secret.ts", Node::default())
+        .node("c.ts", Node::default())
+        .edge(source_edge("a.ts", "alias/secret.ts", "resolved"))
+        .edge(source_edge("alias/secret.ts", "c.ts", "resolved"));
+    let result = run_ok(
+        &root,
+        req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports" })),
+        &mut editor,
+    );
+    assert_eq!(file_paths(&result), ["a.ts"], "the junction path is never a node");
+    assert!(result.edges.is_empty(), "the edge through the junction is dropped");
+    fs::remove_dir(root.join("alias")).unwrap(); // the junction itself, before the tree
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Task 12 / first review 4: at depth 1 an edge's other endpoint is a returned
+/// node — no dangling edge.
+#[test]
+fn an_edge_at_depth_one_closes_on_a_returned_node() {
+    let root = temp_root("closed");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("b.ts", Node::default())
+        .edge(source_edge("a.ts", "b.ts", "resolved"));
+    let result = run_ok(
+        &root,
+        req(serde_json::json!({ "focus": "a.ts", "depth": 1, "direction": "imports" })),
+        &mut editor,
+    );
+    assert_eq!(result.edges.len(), 1);
+    let paths = file_paths(&result);
+    let returned: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    for edge in &result.edges {
+        assert!(returned.contains(edge.importer.as_str()), "importer is a returned node");
+        assert!(returned.contains(edge.exporter.as_str()), "exporter is a returned node");
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Task 13 / first review 5: `maxNodes: 1` bounds the WALK — no edge reaches a
+/// node the budget could not hold, and the truncation is flagged.
+#[test]
+fn max_nodes_one_bounds_the_walk() {
+    let root = temp_root("maxnodes-one");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("b.ts", Node::default())
+        .node("c.ts", Node::default())
+        .edge(source_edge("a.ts", "b.ts", "resolved"))
+        .edge(source_edge("a.ts", "c.ts", "resolved"));
+    let result = run_ok(
+        &root,
+        req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports", "maxNodes": 1 })),
+        &mut editor,
+    );
+    assert_eq!(file_paths(&result), ["a.ts"], "only the focus fits the budget");
+    assert!(result.edges.is_empty(), "no edge reaches past the returned node");
+    assert!(result.truncated_by.contains(&TruncationReason::MaxNodes));
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Task 14 / first review 6: a response shed to the ceiling stays under it
+/// INCLUDING the truncation fields it then carries.
+#[test]
+fn the_shed_response_stays_under_the_ceiling() {
+    let root = temp_root("ceiling-exact");
+    let mut editor = Scripted::default().node("a.ts", Node::default());
+    for index in 0..40 {
+        let path = format!("dep{index:03}.ts");
+        editor.nodes.insert(path.clone(), Node::default());
+        editor.edges.push(source_edge("a.ts", &path, "resolved"));
+    }
+    for ceiling in [700usize, 900, 1100, 1500] {
+        let result = run(
+            &root,
+            &req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports", "maxNodes": 100 })),
+            &mut editor,
+            ceiling,
+        )
+        .unwrap();
+        let encoded = serde_json::to_vec(&result).unwrap().len();
+        assert!(encoded <= ceiling, "encoded {encoded} over ceiling {ceiling} (incl. truncation fields)");
+        assert!(result.truncated_by.contains(&TruncationReason::ResponseSize));
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Task 15 / first review 7: the owner cut an edge's symbols at the ceiling and
+/// flagged it; the tool reports `Symbols` even though it received at most 50.
+#[test]
+fn an_owner_symbol_cut_is_flagged() {
+    let root = temp_root("symbols-flag");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("b.ts", Node::default())
+        .edge(Edge {
+            symbols_truncated: true,
+            ..source_edge("a.ts", "b.ts", "resolved")
+        });
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "imports" })), &mut editor);
+    assert_eq!(result.edges[0].symbols.len(), 1, "the owner already carried at most the ceiling");
+    assert!(result.truncated_by.contains(&TruncationReason::Symbols), "the owner's cut is flagged");
     let _ = fs::remove_dir_all(&root);
 }
 

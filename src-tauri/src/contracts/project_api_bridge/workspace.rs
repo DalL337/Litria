@@ -183,7 +183,7 @@ pub(crate) struct GraphResult {
     pub omitted: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GraphNode {
@@ -205,7 +205,7 @@ pub(crate) struct GraphNode {
     pub discoverable: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ParsedRevision {
@@ -232,6 +232,10 @@ pub(crate) struct GraphEdge {
     pub exporter: String,
     #[cfg_attr(test, schemars(length(max = MAX_SYMBOLS_PER_EDGE)))]
     pub symbols: Vec<GraphSymbol>,
+    /// The owner cut this edge's symbols at the ceiling; the tool flags it (the
+    /// owner cannot carry more than the ceiling per edge). P4c task 15.
+    #[serde(default)]
+    pub symbols_truncated: bool,
     pub provenance: EdgeProvenance,
     /// The SyntaxDomain aggregate status for a `sourceDerived` edge (including
     /// the domain-only `orphaned`); absent for a `manual` wire.

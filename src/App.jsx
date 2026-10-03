@@ -779,7 +779,13 @@ function App() {
   // The Project API bridge reads the graph owners through this ref (it is
   // created above, before these owners exist), so `workspace.graph` sees the
   // latest SyntaxDomain, pending edges and discovery state at request time.
-  graphOwnersRef.current = { syntaxDomain, getPendingEdges, isDiscoveryInFlight };
+  graphOwnersRef.current = {
+    syntaxDomain,
+    getPendingEdges,
+    isDiscoveryInFlight,
+    connectionDomain,
+    projectRoot: projectInstance?.rootPath ?? ''
+  };
 
   const fsManager = useFilesystemWriteManager({
     managerRef: fsManagerRef,

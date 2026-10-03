@@ -103,10 +103,18 @@ export function useDiscoveryLifecycle({
   // `partial` with a "discovery run pending" reason while it is true. A ref,
   // not state: the bridge polls it when it answers; no re-render is needed.
   const initialRunInFlightRef = useRef(false);
+  // The load token the in-flight initial run belongs to. A stale project's run
+  // finishing must not clear the CURRENT project's signal (first review 10,
+  // P4c task 16): the `.finally` clears only when the finishing run is current.
+  const initialRunTokenRef = useRef(null);
   const armedPiecesRef = useRef(null);
   const latestArgsRef = useRef(null);
   const refreshTimerRef = useRef(null);
   const refreshInFlightRef = useRef(false);
+  // A refresh is scheduled (timer armed) but has not started reading yet
+  // (first review 9, P4c task 16): the signal must already read in-flight.
+  const refreshArmedRef = useRef(false);
+  const refreshTokenRef = useRef(null);
   const prevDirtyRef = useRef(null);
   const prevScaffoldTokenRef = useRef(scaffoldRefreshToken);
   // The project load discovery may act for. A run is tied to the load it
@@ -132,19 +140,27 @@ export function useDiscoveryLifecycle({
 
   const scheduleRefresh = () => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    // Armed from the moment the timer is set: a refresh is "in flight" while it
+    // waits, so the graph reports `partial` for it (first review 9, P4c task 16).
+    refreshArmedRef.current = true;
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null;
+      refreshArmedRef.current = false;
       if (refreshInFlightRef.current) return;
       const args = latestArgsRef.current;
       if (!args?.projectRoot) return;
+      const runToken = currentLoadRef.current;
       refreshInFlightRef.current = true;
-      _runDiscovery({ ...args, isCurrent: stillCurrent(currentLoadRef.current) })
+      refreshTokenRef.current = runToken;
+      _runDiscovery({ ...args, isCurrent: stillCurrent(runToken) })
         .catch((err) => {
           // eslint-disable-next-line no-console
           console.warn('[discovery] Error during incremental refresh:', err);
         })
         .finally(() => {
-          refreshInFlightRef.current = false;
+          // Clear only if this finishing run is still the current one, so a
+          // stale project's refresh cannot clear the live signal (task 16).
+          if (refreshTokenRef.current === runToken) refreshInFlightRef.current = false;
         });
     }, DISCOVERY_REFRESH_DEBOUNCE_MS);
   };
@@ -177,6 +193,7 @@ export function useDiscoveryLifecycle({
   // Cancel a pending refresh on unmount / project switch.
   useEffect(() => () => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshArmedRef.current = false;
   }, [loadToken]);
 
   useEffect(() => {
@@ -199,6 +216,7 @@ export function useDiscoveryLifecycle({
 
     ranForTokenRef.current = loadToken;
     initialRunInFlightRef.current = true;
+    initialRunTokenRef.current = loadToken;
     _runDiscovery({
       projectRoot,
       syntaxDomain,
@@ -212,7 +230,9 @@ export function useDiscoveryLifecycle({
       // eslint-disable-next-line no-console
       console.warn('[discovery] Error during import discovery:', err);
     }).finally(() => {
-      initialRunInFlightRef.current = false;
+      // Clear only if this finishing run is still the current one, so a stale
+      // project's run cannot clear the live signal (first review 10, task 16).
+      if (initialRunTokenRef.current === loadToken) initialRunInFlightRef.current = false;
     });
   }, [enabled, projectRoot, loadToken, syntaxDomain, syntaxAdapter, connectionDomain, piecesById, persistedSides]);
 
@@ -222,6 +242,7 @@ export function useDiscoveryLifecycle({
   const isDiscoveryInFlight = () =>
     initialRunInFlightRef.current
     || refreshInFlightRef.current
+    || refreshArmedRef.current
     || (loadToken != null && armedTokenRef.current === loadToken && ranForTokenRef.current !== loadToken);
 
   return { isDiscoveryInFlight };
