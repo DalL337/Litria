@@ -141,6 +141,10 @@ fn run(
                     // is `notFound` — never a resolved node, revealing nothing a
                     // read would not. The owner probe (facts, no edges) is the
                     // one call that also starts the walk's first level below.
+                    // The owner answers every requested path, inventing a
+                    // fallback node for a file it does not know (off the
+                    // canvas, nothing parsed), so only a placed or parsed file
+                    // counts as known (live re-pass on 0bc108e).
                     let on_disk = matches!(read_disk(root, &key), DiskRead::Text { .. });
                     if !on_disk {
                         let index = editor.buffer_index()?;
@@ -155,7 +159,11 @@ fn run(
                                 direction,
                                 max_edges_per_node: 0,
                             })?;
-                            if !probe.nodes.iter().any(|node| node.path == key) {
+                            let known = probe
+                                .nodes
+                                .iter()
+                                .any(|node| node.path == key && (node.on_canvas || node.parsed.is_some()));
+                            if !known {
                                 return Ok(empty(FocusOutcome::NotFound));
                             }
                         }

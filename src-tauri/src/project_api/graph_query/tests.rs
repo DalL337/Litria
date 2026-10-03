@@ -87,6 +87,10 @@ struct Scripted {
     awaiting_canvas_pieces: bool,
     graph_error: Option<crate::contracts::error::ErrorCode>,
     graph_calls: usize,
+    /// Answer every requested path, as the production owner does: a path it
+    /// does not know gets a fallback node (off the canvas, nothing parsed) so an
+    /// off-canvas focus still reports `discoverable` (first review 11).
+    fallback_nodes: bool,
 }
 
 impl Scripted {
@@ -137,17 +141,29 @@ impl GraphEditor for Scripted {
             .paths
             .iter()
             .filter_map(|path| {
-                self.nodes.get(path).map(|node| BNode {
-                    path: path.clone(),
-                    on_canvas: node.on_canvas,
-                    folder: node.folder.clone(),
-                    group_id: node.group_id.clone(),
-                    parsed: node.parsed.as_ref().map(|(source, revision)| ParsedRevision {
-                        source: *source,
-                        revision: revision.clone(),
-                    }),
-                    discoverable: node.discoverable,
-                })
+                self.nodes
+                    .get(path)
+                    .map(|node| BNode {
+                        path: path.clone(),
+                        on_canvas: node.on_canvas,
+                        folder: node.folder.clone(),
+                        group_id: node.group_id.clone(),
+                        parsed: node.parsed.as_ref().map(|(source, revision)| ParsedRevision {
+                            source: *source,
+                            revision: revision.clone(),
+                        }),
+                        discoverable: node.discoverable,
+                    })
+                    .or_else(|| {
+                        self.fallback_nodes.then(|| BNode {
+                            path: path.clone(),
+                            on_canvas: false,
+                            folder: None,
+                            group_id: None,
+                            parsed: None,
+                            discoverable: true,
+                        })
+                    })
             })
             .collect();
         let edges = self
@@ -833,6 +849,32 @@ fn a_missing_focus_answers_not_found() {
     let result = run_ok(&root, req(serde_json::json!({ "focus": "nope.ts" })), &mut editor);
     assert_eq!(result.focus, FocusOutcome::NotFound);
     assert!(result.nodes.is_empty() && result.edges.is_empty(), "a missing focus returns no nodes");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Live pass 4, re-run on `0bc108e`: the production owner answers every
+/// frontier path, inventing a fallback node (off the canvas, nothing parsed)
+/// for a file it does not know. That fallback is not evidence the file exists,
+/// so a missing focus is still `notFound`.
+#[test]
+fn a_missing_focus_is_not_found_when_the_owner_answers_every_path() {
+    let root = temp_root("missing-focus-fallback");
+    let mut editor = Scripted { fallback_nodes: true, ..Scripted::default() };
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "nope.ts" })), &mut editor);
+    assert_eq!(result.focus, FocusOutcome::NotFound);
+    assert!(result.nodes.is_empty() && result.edges.is_empty(), "a missing focus returns no nodes");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The same owner still vouches for a file that is placed on the canvas but
+/// not on disk yet: a piece is a file the owner really knows.
+#[test]
+fn a_focus_on_the_canvas_but_not_on_disk_resolves() {
+    let root = temp_root("canvas-focus");
+    let mut editor = Scripted { fallback_nodes: true, ..Scripted::default() }.node("draft.ts", Node::default());
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "draft.ts" })), &mut editor);
+    assert_eq!(result.focus, FocusOutcome::Resolved);
+    assert_eq!(file_paths(&result), ["draft.ts"]);
     let _ = fs::remove_dir_all(&root);
 }
 
