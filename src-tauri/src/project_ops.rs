@@ -15,6 +15,36 @@ pub(crate) fn read_project_file(root_path: &str, relative_path: &str) -> Command
         .map_err(|error| CommandError::from_io("project_file.read", &error, "Unable to read project file"))
 }
 
+/// A file's text and the disk revision Rust mints for the exact bytes it read.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileWithRevision {
+    pub text: String,
+    pub revision: String,
+}
+
+/// Read a project file together with its disk revision (Project API brief
+/// §4.5: Rust mints every disk revision). The revision is `disk_revision` over
+/// the exact bytes read, so text registered through this path can be compared
+/// for freshness against a later read of the same bytes. Semantics match
+/// `read_project_file`: strict UTF-8, no BOM stripping. The separate return
+/// type leaves `read_project_file`'s callers untouched (the syntax registration
+/// paths use this variant — P4c, 2026-10-03).
+pub(crate) fn read_project_file_with_revision(
+    root_path: &str,
+    relative_path: &str,
+) -> CommandResult<FileWithRevision> {
+    let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
+    let target =
+        path_guard::resolve_existing_relative_path(&root, relative_path).map_err(CommandError::from_text)?;
+    let bytes = fs::read(&target)
+        .map_err(|error| CommandError::from_io("project_file.read", &error, "Unable to read project file"))?;
+    let revision = crate::project_api::reader::disk_revision(&bytes);
+    let text = String::from_utf8(bytes)
+        .map_err(|_| CommandError::from_text("Unable to read project file: not valid UTF-8"))?;
+    Ok(FileWithRevision { text, revision })
+}
+
 pub(crate) fn write_project_file(root_path: &str, relative_path: &str, contents: &str) -> CommandResult<()> {
     write_ops::with_write_lock(|| {
         let root = path_guard::ensure_project_root(root_path).map_err(CommandError::from_text)?;

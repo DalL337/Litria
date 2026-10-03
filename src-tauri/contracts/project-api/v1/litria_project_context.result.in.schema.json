@@ -251,6 +251,49 @@
         "maxConcurrentSearches"
       ]
     },
+    "GraphQueryLimits": {
+      "type": "object",
+      "properties": {
+        "defaultDepth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "defaultMaxNodes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxDepth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxEdges": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxNodes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxSymbolsPerEdge": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "defaultDepth",
+        "maxDepth",
+        "defaultMaxNodes",
+        "maxNodes",
+        "maxEdges",
+        "maxSymbolsPerEdge"
+      ]
+    },
     "LanguageCapabilities": {
       "description": "One kind of file: a language and the exact extensions its flags hold for.",
       "type": "object",
@@ -432,6 +475,9 @@
         "filesSearch": {
           "$ref": "#/$defs/FilesSearchLimits"
         },
+        "graph": {
+          "$ref": "#/$defs/GraphQueryLimits"
+        },
         "maxInFlight": {
           "description": "Operations one connection may have in flight at once.",
           "type": "integer",
@@ -460,7 +506,8 @@
         "maxInFlight",
         "filesRead",
         "filesSearch",
-        "projectContext"
+        "projectContext",
+        "graph"
       ]
     }
   }

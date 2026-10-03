@@ -66,6 +66,7 @@ export function useFilesystemWriteManager({
   writeProjectFile,
   deleteProjectPath,
   readProjectFile,
+  readProjectFileWithRevision,
   pieceDomain,
   groupDomain,
   connectionDomain,
@@ -108,8 +109,11 @@ export function useFilesystemWriteManager({
     normalizePath,
     getBasename,
     readProjectFile: (rootPath, path) => readProjectFile(rootPath, path),
+    readProjectFileWithRevision: readProjectFileWithRevision
+      ? (rootPath, path) => readProjectFileWithRevision(rootPath, path)
+      : null,
   }), [
-    moveProjectPath, writeProjectFile, deleteProjectPath, readProjectFile,
+    moveProjectPath, writeProjectFile, deleteProjectPath, readProjectFile, readProjectFileWithRevision,
     pieceDomain, groupDomain, connectionDomain, syntaxDomain,
     piecesById, piecesByFilename, pieces, groups, groupByPieceId,
     updateTabFilename, closeTab, bumpScaffoldRefresh,

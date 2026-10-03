@@ -6,6 +6,7 @@ import {
   moveProjectPath,
   openFileDialog,
   readProjectFile,
+  readProjectFileWithRevision,
   writeProjectFile
 } from './storage.js';
 
@@ -21,6 +22,7 @@ export function createProjectDomain({
 } = {}) {
   const io = {
     readFile: adapters.readFile ?? readProjectFile,
+    readFileWithRevision: adapters.readFileWithRevision ?? readProjectFileWithRevision,
     openFileDialog: adapters.openFileDialog ?? openFileDialog,
     writeFile: adapters.writeFile ?? writeProjectFile,
     movePath: adapters.movePath ?? moveProjectPath,
@@ -37,6 +39,9 @@ export function createProjectDomain({
       },
       readFile(rootPath, relativePath) {
         return io.readFile(rootPath, relativePath);
+      },
+      readFileWithRevision(rootPath, relativePath) {
+        return io.readFileWithRevision(rootPath, relativePath);
       },
       openFileDialog() {
         return io.openFileDialog();

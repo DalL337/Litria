@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GraphRequest",
+  "description": "Rust → JavaScript.",
+  "type": "object",
+  "properties": {
+    "direction": {
+      "$ref": "#/$defs/GraphDirection"
+    },
+    "maxEdgesPerNode": {
+      "description": "At most this many incident edges per frontier node.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "paths": {
+      "description": "The frontier: project-relative paths, forward slashes, already allowed.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "paths",
+    "direction",
+    "maxEdgesPerNode"
+  ],
+  "$defs": {
+    "GraphDirection": {
+      "description": "The walk direction, importer to exporter.",
+      "oneOf": [
+        {
+          "description": "Edges where the requested path is the importer: what it imports.",
+          "type": "string",
+          "const": "imports"
+        },
+        {
+          "description": "Edges where the requested path is the exporter: what imports it.",
+          "type": "string",
+          "const": "importedBy"
+        },
+        {
+          "description": "Either side.",
+          "type": "string",
+          "const": "both"
+        }
+      ]
+    }
+  }
+}

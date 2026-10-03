@@ -26,6 +26,14 @@
       "request": "litria_files_search.request.schema.json",
       "resultIn": "litria_files_search.result.in.schema.json",
       "resultOut": "litria_files_search.result.out.schema.json"
+    },
+    {
+      "capability": "project.graph.read",
+      "description": "Return a bounded neighbourhood of import relationships around a focus (a project-relative path, or the current canvas selection), out to a depth of 1 or 2, in a direction (imports, importedBy or both). File nodes carry their folder group and whether they are on the canvas; folder nodes stand for the folder groups the file nodes belong to. Edges run from importer to exporter, with the imported symbols, a provenance (sourceDerived with the syntax status, or manual) and whether the wire is drawn. Denied and unindexed paths are never nodes and edges touching them are dropped. Each node carries its freshness (current, stale or unknown); the summary is current only when every node is, otherwise partial or unavailable with reasons. A walk that hits maxNodes, the edge ceiling or the symbol ceiling says so in truncatedBy.",
+      "name": "litria_graph_query",
+      "request": "litria_graph_query.request.schema.json",
+      "resultIn": "litria_graph_query.result.in.schema.json",
+      "resultOut": "litria_graph_query.result.out.schema.json"
     }
   ],
   "status": "draft"

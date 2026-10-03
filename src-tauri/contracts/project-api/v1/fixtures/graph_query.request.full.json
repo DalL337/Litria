@@ -1,0 +1,6 @@
+{
+  "focus": "src/auth.ts",
+  "depth": 2,
+  "direction": "imports",
+  "maxNodes": 100
+}

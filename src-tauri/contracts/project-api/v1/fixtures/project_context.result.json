@@ -100,6 +100,14 @@
       "previewLength": 200,
       "timeBudgetMs": 2000
     },
+    "graph": {
+      "defaultDepth": 1,
+      "defaultMaxNodes": 50,
+      "maxDepth": 2,
+      "maxEdges": 500,
+      "maxNodes": 100,
+      "maxSymbolsPerEdge": 50
+    },
     "maxInFlight": 4,
     "maxRequestBytes": 65536,
     "maxResponseBytes": 393216,
@@ -110,6 +118,7 @@
   "operations": [
     "litria_files_read",
     "litria_files_search",
+    "litria_graph_query",
     "litria_project_context"
   ],
   "policy": {

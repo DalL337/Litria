@@ -1,0 +1,671 @@
+//! `litria_graph_query` handler tests (P4c task 6): the sequences that must
+//! hold, over a scripted owner that answers `workspace.graph` like the live
+//! bridge — plus one end-to-end pass over the real bridge and the epoch fence.
+
+use super::*;
+use crate::contracts::project_api_bridge::editor::{BufferIndexEntry, BufferState};
+use crate::contracts::project_api_bridge::workspace::{
+    EdgeProvenance as BProv, GraphEdge as BEdge, GraphNode as BNode, GraphResult, GraphSymbol as BSym, ParsedRevision,
+    ParsedSource as BSource,
+};
+use crate::project_api::reader::{self};
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn temp_root(tag: &str) -> PathBuf {
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("litria-api-graph-{tag}-{}-{stamp}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::canonicalize(dir).unwrap()
+}
+
+fn put(root: &Path, path: &str, text: &str) {
+    let full = root.join(path);
+    fs::create_dir_all(full.parent().unwrap()).unwrap();
+    fs::write(full, text).unwrap();
+}
+
+// --- A scripted owner, adjacency-driven like the real bridge ----------------
+
+#[derive(Clone)]
+struct Node {
+    on_canvas: bool,
+    folder: Option<String>,
+    group_id: Option<String>,
+    parsed: Option<(BSource, String)>,
+    discoverable: bool,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            on_canvas: true,
+            folder: None,
+            group_id: None,
+            parsed: None,
+            discoverable: true,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Edge {
+    importer: String,
+    exporter: String,
+    symbols: Vec<(String, String)>,
+    manual: bool,
+    status: Option<String>,
+    on_canvas: bool,
+}
+
+fn source_edge(importer: &str, exporter: &str, status: &str) -> Edge {
+    Edge {
+        importer: importer.into(),
+        exporter: exporter.into(),
+        symbols: vec![("thing".into(), "function".into())],
+        manual: false,
+        status: Some(status.into()),
+        on_canvas: true,
+    }
+}
+
+#[derive(Default)]
+struct Scripted {
+    nodes: BTreeMap<String, Node>,
+    edges: Vec<Edge>,
+    selected: Vec<String>,
+    buffers: Vec<(String, String)>,
+    index_omitted: u32,
+    discovery_in_flight: bool,
+    graph_error: Option<crate::contracts::error::ErrorCode>,
+    graph_calls: usize,
+}
+
+impl Scripted {
+    fn node(mut self, path: &str, node: Node) -> Self {
+        self.nodes.insert(path.into(), node);
+        self
+    }
+    fn edge(mut self, edge: Edge) -> Self {
+        self.edges.push(edge);
+        self
+    }
+}
+
+impl GraphEditor for Scripted {
+    fn selection(&mut self) -> Result<SelectionResult, ContractError> {
+        Ok(SelectionResult {
+            selected: self.selected.clone(),
+            omitted: 0,
+            folder: None,
+            active_document: None,
+        })
+    }
+
+    fn buffer_index(&mut self) -> Result<BufferIndexResult, ContractError> {
+        Ok(BufferIndexResult {
+            entries: self
+                .buffers
+                .iter()
+                .map(|(path, revision)| BufferIndexEntry {
+                    path: path.clone(),
+                    state: BufferState::Open,
+                    dirty: true,
+                    revision: revision.clone(),
+                    byte_length: 1,
+                })
+                .collect(),
+            omitted: self.index_omitted,
+        })
+    }
+
+    fn graph(&mut self, request: &GraphRequest) -> Result<GraphResult, ContractError> {
+        self.graph_calls += 1;
+        if let Some(code) = self.graph_error {
+            return Err(ContractError::new(code, "scripted"));
+        }
+        let frontier: BTreeSet<&String> = request.paths.iter().collect();
+        let nodes = request
+            .paths
+            .iter()
+            .filter_map(|path| {
+                self.nodes.get(path).map(|node| BNode {
+                    path: path.clone(),
+                    on_canvas: node.on_canvas,
+                    folder: node.folder.clone(),
+                    group_id: node.group_id.clone(),
+                    parsed: node.parsed.as_ref().map(|(source, revision)| ParsedRevision {
+                        source: *source,
+                        revision: revision.clone(),
+                    }),
+                    discoverable: node.discoverable,
+                })
+            })
+            .collect();
+        let edges = self
+            .edges
+            .iter()
+            .filter(|edge| match request.direction {
+                BridgeDirection::Imports => frontier.contains(&edge.importer),
+                BridgeDirection::ImportedBy => frontier.contains(&edge.exporter),
+                BridgeDirection::Both => frontier.contains(&edge.importer) || frontier.contains(&edge.exporter),
+            })
+            .map(|edge| BEdge {
+                importer: edge.importer.clone(),
+                exporter: edge.exporter.clone(),
+                symbols: edge
+                    .symbols
+                    .iter()
+                    .map(|(name, kind)| BSym {
+                        name: name.clone(),
+                        kind: kind.clone(),
+                    })
+                    .collect(),
+                provenance: if edge.manual {
+                    BProv::Manual
+                } else {
+                    BProv::SourceDerived
+                },
+                status: if edge.manual { None } else { edge.status.clone() },
+                on_canvas: edge.on_canvas,
+            })
+            .collect();
+        Ok(GraphResult {
+            nodes,
+            edges,
+            discovery_in_flight: self.discovery_in_flight,
+            omitted: 0,
+        })
+    }
+}
+
+fn req(value: serde_json::Value) -> GraphQueryRequest {
+    serde_json::from_value(value).unwrap()
+}
+
+fn run_ok(root: &Path, request: GraphQueryRequest, editor: &mut Scripted) -> GraphQueryResult {
+    run(root, &request, editor, MAX_RESPONSE_BYTES).unwrap()
+}
+
+fn file_paths(result: &GraphQueryResult) -> Vec<String> {
+    result
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            GraphNode::File { path, .. } => Some(path.clone()),
+            GraphNode::Folder { .. } => None,
+        })
+        .collect()
+}
+
+fn freshness_of(result: &GraphQueryResult, path: &str) -> Freshness {
+    result
+        .nodes
+        .iter()
+        .find_map(|node| match node {
+            GraphNode::File { path: p, freshness, .. } if p == path => Some(*freshness),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no file node {path}"))
+}
+
+// --- Direction --------------------------------------------------------------
+
+#[test]
+fn imports_returns_what_a_file_imports_not_what_imports_it() {
+    let root = temp_root("direction");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("b.ts", Node::default())
+        .edge(source_edge("a.ts", "b.ts", "resolved"));
+    let imports = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "imports" })), &mut editor);
+    assert_eq!(imports.edges.len(), 1);
+    assert_eq!((imports.edges[0].importer.as_str(), imports.edges[0].exporter.as_str()), ("a.ts", "b.ts"));
+    let imported_by = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "importedBy" })), &mut editor);
+    assert!(imported_by.edges.is_empty(), "nothing imports a.ts");
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Policy -----------------------------------------------------------------
+
+#[test]
+fn a_denied_endpoint_removes_the_edge_and_the_node() {
+    let root = temp_root("denied-endpoint");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node(".env", Node::default())
+        .edge(source_edge("a.ts", ".env", "resolved"));
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "imports" })), &mut editor);
+    assert!(result.edges.is_empty(), "the edge to a denied file is dropped");
+    assert_eq!(file_paths(&result), ["a.ts"], ".env is never a node");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_denied_file_between_two_allowed_is_never_traversed_at_depth_two() {
+    let root = temp_root("denied-through");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node(".env", Node::default())
+        .node("c.ts", Node::default())
+        .edge(source_edge("a.ts", ".env", "resolved"))
+        .edge(source_edge(".env", "c.ts", "resolved"));
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports" })), &mut editor);
+    assert_eq!(file_paths(&result), ["a.ts"], "the walk does not pass through .env");
+    assert!(!file_paths(&result).iter().any(|p| p == "c.ts"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_unindexed_endpoint_is_not_enumerated() {
+    let root = temp_root("unindexed");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("node_modules/pkg/index.js", Node::default())
+        .edge(source_edge("a.ts", "node_modules/pkg/index.js", "resolved"));
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "imports" })), &mut editor);
+    assert!(result.edges.is_empty());
+    assert_eq!(file_paths(&result), ["a.ts"]);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_denied_focus_reveals_nothing() {
+    let root = temp_root("denied-focus");
+    let mut editor = Scripted::default();
+    let result = run_ok(&root, req(serde_json::json!({ "focus": ".env" })), &mut editor);
+    assert_eq!(result.focus, FocusOutcome::Denied);
+    assert!(result.nodes.is_empty() && result.edges.is_empty());
+    assert_eq!(editor.graph_calls, 0, "no walk runs for a withheld focus");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_invalid_focus_and_an_empty_selection_are_reported() {
+    let root = temp_root("focus-outcomes");
+    let mut editor = Scripted::default();
+    assert_eq!(
+        run_ok(&root, req(serde_json::json!({ "focus": "../escape" })), &mut editor).focus,
+        FocusOutcome::InvalidPath
+    );
+    assert_eq!(run_ok(&root, req(serde_json::json!({})), &mut editor).focus, FocusOutcome::NoSelection);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_focus_defaults_to_the_disclosed_selection() {
+    let root = temp_root("selection");
+    let mut editor = Scripted {
+        selected: vec![".env".into(), "a.ts".into()],
+        ..Scripted::default()
+    }
+    .node("a.ts", Node::default())
+    .node("b.ts", Node::default())
+    .edge(source_edge("a.ts", "b.ts", "resolved"));
+    let result = run_ok(&root, req(serde_json::json!({ "direction": "imports" })), &mut editor);
+    assert_eq!(result.focus, FocusOutcome::Resolved);
+    assert_eq!(result.edges.len(), 1, "the withheld .env is dropped, a.ts drives the walk");
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Freshness --------------------------------------------------------------
+
+#[test]
+fn disk_text_changed_after_parsing_with_no_buffer_is_stale() {
+    let root = temp_root("fresh-disk");
+    put(&root, "a.ts", "one\n");
+    let revision = match reader::read_disk(&root, "a.ts") {
+        DiskRead::Text { revision, .. } => revision,
+        other => panic!("{other:?}"),
+    };
+    let current = Node {
+        parsed: Some((BSource::Disk, revision.clone())),
+        ..Node::default()
+    };
+    let mut editor = Scripted::default().node("a.ts", current.clone());
+    assert_eq!(
+        freshness_of(&run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor), "a.ts"),
+        Freshness::Current
+    );
+    // The disk changes; the parsed revision no longer matches.
+    put(&root, "a.ts", "two\n");
+    assert_eq!(
+        freshness_of(&run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor), "a.ts"),
+        Freshness::Stale
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_buffer_edited_after_parsing_is_stale_until_re_registered() {
+    let root = temp_root("fresh-buffer");
+    put(&root, "a.ts", "disk\n");
+    // Parsed from the editor at b1-old; the buffer now holds b1-new.
+    let mut editor = Scripted {
+        buffers: vec![("a.ts".into(), "b1-new".into())],
+        ..Scripted::default()
+    }
+    .node(
+        "a.ts",
+        Node {
+            parsed: Some((BSource::Editor, "b1-old".into())),
+            ..Node::default()
+        },
+    );
+    assert_eq!(
+        freshness_of(&run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor), "a.ts"),
+        Freshness::Stale
+    );
+    // Re-registered at the buffer's revision: current again.
+    editor.nodes.get_mut("a.ts").unwrap().parsed = Some((BSource::Editor, "b1-new".into()));
+    assert_eq!(
+        freshness_of(&run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor), "a.ts"),
+        Freshness::Current
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn no_recorded_revision_or_an_omitted_index_is_unknown() {
+    let root = temp_root("fresh-unknown");
+    put(&root, "a.ts", "x\n");
+    put(&root, "b.ts", "y\n");
+    let mut editor = Scripted {
+        index_omitted: 1,
+        ..Scripted::default()
+    }
+    .node("a.ts", Node::default()) // no parsed revision
+    .node(
+        "b.ts",
+        Node {
+            parsed: Some((BSource::Disk, "d1-whatever".into())),
+            ..Node::default()
+        },
+    )
+    .edge(source_edge("a.ts", "b.ts", "resolved"));
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports" })), &mut editor);
+    assert_eq!(freshness_of(&result, "a.ts"), Freshness::Unknown, "no parsed revision");
+    assert_eq!(freshness_of(&result, "b.ts"), Freshness::Unknown, "the index omitted a document");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_file_re_registered_from_the_editor_is_current_again() {
+    let root = temp_root("fresh-reopen");
+    put(&root, "a.ts", "disk\n");
+    let mut editor = Scripted {
+        buffers: vec![("a.ts".into(), "b1-live".into())],
+        ..Scripted::default()
+    }
+    .node(
+        "a.ts",
+        Node {
+            parsed: Some((BSource::Editor, "b1-live".into())),
+            ..Node::default()
+        },
+    );
+    assert_eq!(
+        freshness_of(&run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor), "a.ts"),
+        Freshness::Current
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Summary and index state ------------------------------------------------
+
+#[test]
+fn the_summary_is_current_only_when_every_node_is() {
+    let root = temp_root("summary");
+    put(&root, "a.ts", "x\n");
+    put(&root, "b.ts", "y\n");
+    let rev = |p: &str| match reader::read_disk(&root, p) {
+        DiskRead::Text { revision, .. } => revision,
+        other => panic!("{other:?}"),
+    };
+    let fresh = |p: &str| Node {
+        parsed: Some((BSource::Disk, rev(p))),
+        ..Node::default()
+    };
+    let mut editor = Scripted::default()
+        .node("a.ts", fresh("a.ts"))
+        .node("b.ts", fresh("b.ts"))
+        .edge(source_edge("a.ts", "b.ts", "resolved"));
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports" })), &mut editor);
+    assert_eq!(result.summary, IndexState::Current);
+    assert!(result.reasons.is_empty());
+    // Make b stale; the summary drops to partial with a reason.
+    put(&root, "b.ts", "changed\n");
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports" })), &mut editor);
+    assert_eq!(result.summary, IndexState::Partial);
+    assert!(result.reasons.contains(&IndexReason::StaleNodes));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn discovery_in_flight_makes_the_summary_partial() {
+    let root = temp_root("partial");
+    put(&root, "a.ts", "x\n");
+    let rev = match reader::read_disk(&root, "a.ts") {
+        DiskRead::Text { revision, .. } => revision,
+        other => panic!("{other:?}"),
+    };
+    let mut editor = Scripted {
+        discovery_in_flight: true,
+        ..Scripted::default()
+    }
+    .node(
+        "a.ts",
+        Node {
+            parsed: Some((BSource::Disk, rev)),
+            ..Node::default()
+        },
+    );
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor);
+    assert_eq!(result.summary, IndexState::Partial);
+    assert!(result.reasons.contains(&IndexReason::DiscoveryInFlight));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_focus_without_relationship_discovery_is_unavailable() {
+    let root = temp_root("unavailable");
+    put(&root, "a.ts", "x\n");
+    let mut editor = Scripted::default().node(
+        "a.ts",
+        Node {
+            discoverable: false,
+            ..Node::default()
+        },
+    );
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts" })), &mut editor);
+    assert_eq!(result.summary, IndexState::Unavailable);
+    assert!(result.reasons.contains(&IndexReason::NoRelationshipDiscovery));
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Canvas shapes ----------------------------------------------------------
+
+#[test]
+fn off_canvas_discovered_edges_manual_wires_and_group_shapes() {
+    let root = temp_root("shapes");
+    let mut editor = Scripted::default()
+        .node(
+            "a.ts",
+            Node {
+                folder: Some("src".into()),
+                ..Node::default()
+            },
+        )
+        .node(
+            "b.ts",
+            Node {
+                on_canvas: false,
+                group_id: Some("group-9".into()),
+                folder: None,
+                ..Node::default()
+            },
+        )
+        .edge(Edge {
+            on_canvas: false,
+            ..source_edge("a.ts", "b.ts", "pending")
+        })
+        .edge(Edge {
+            importer: "a.ts".into(),
+            exporter: "b.ts".into(),
+            symbols: Vec::new(),
+            manual: true,
+            status: None,
+            on_canvas: true,
+        });
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports" })), &mut editor);
+    // Two edges between the same pair: one sourceDerived off-canvas, one manual.
+    assert_eq!(result.edges.len(), 2);
+    let discovered = result.edges.iter().find(|e| matches!(e.provenance, EdgeProvenance::SourceDerived { .. })).unwrap();
+    assert!(!discovered.on_canvas);
+    assert!(result.edges.iter().any(|e| matches!(e.provenance, EdgeProvenance::Manual)));
+    // A folder group and a legacy group both yield folder nodes.
+    let folders: Vec<&GraphNode> = result.nodes.iter().filter(|n| matches!(n, GraphNode::Folder { .. })).collect();
+    assert_eq!(folders.len(), 2);
+    assert!(result.nodes.iter().any(|n| matches!(n, GraphNode::Folder { folder: Some(f), .. } if f == "src")));
+    assert!(result.nodes.iter().any(|n| matches!(n, GraphNode::Folder { group_id: Some(g), .. } if g == "group-9")));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_orphaned_status_is_reported_as_itself() {
+    let root = temp_root("orphaned");
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("b.ts", Node::default())
+        .edge(source_edge("a.ts", "b.ts", "orphaned"));
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "imports" })), &mut editor);
+    match &result.edges[0].provenance {
+        EdgeProvenance::SourceDerived { status } => assert_eq!(status, "orphaned"),
+        other => panic!("{other:?}"),
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Bounds -----------------------------------------------------------------
+
+#[test]
+fn truncation_at_max_nodes() {
+    let root = temp_root("max-nodes");
+    let mut editor = Scripted::default().node("a.ts", Node::default());
+    for index in 0..10 {
+        let path = format!("dep{index}.ts");
+        editor.nodes.insert(path.clone(), Node::default());
+        editor.edges.push(source_edge("a.ts", &path, "resolved"));
+    }
+    let result = run_ok(
+        &root,
+        req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports", "maxNodes": 3 })),
+        &mut editor,
+    );
+    assert_eq!(file_paths(&result).len(), 3);
+    assert!(result.truncated && result.truncated_by.contains(&TruncationReason::MaxNodes));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn truncation_at_the_symbol_ceiling() {
+    let root = temp_root("symbols");
+    let symbols: Vec<(String, String)> = (0..MAX_SYMBOLS_PER_EDGE + 5)
+        .map(|index| (format!("s{index}"), "function".into()))
+        .collect();
+    let mut editor = Scripted::default()
+        .node("a.ts", Node::default())
+        .node("b.ts", Node::default())
+        .edge(Edge {
+            symbols,
+            ..source_edge("a.ts", "b.ts", "resolved")
+        });
+    let result = run_ok(&root, req(serde_json::json!({ "focus": "a.ts", "direction": "imports" })), &mut editor);
+    assert_eq!(result.edges[0].symbols.len(), MAX_SYMBOLS_PER_EDGE as usize);
+    assert!(result.truncated_by.contains(&TruncationReason::Symbols));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_reply_over_the_ceiling_is_bounded_not_refused() {
+    let root = temp_root("ceiling");
+    let mut editor = Scripted::default().node("a.ts", Node::default());
+    for index in 0..60 {
+        let path = format!("dep{index:03}.ts");
+        editor.nodes.insert(path.clone(), Node::default());
+        editor.edges.push(source_edge("a.ts", &path, "resolved"));
+    }
+    let result = run(
+        &root,
+        &req(serde_json::json!({ "focus": "a.ts", "depth": 2, "direction": "imports", "maxNodes": 100 })),
+        &mut editor,
+        2 * 1024,
+    )
+    .unwrap();
+    assert!(serde_json::to_vec(&result).unwrap().len() <= 2 * 1024);
+    assert!(result.truncated_by.contains(&TruncationReason::ResponseSize));
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Lifecycle --------------------------------------------------------------
+
+/// End to end over the wire, with the epoch fence: not attached is
+/// `ownerUnavailable`; attached, the owner answers and the walk runs.
+#[test]
+fn walks_through_the_bridge() {
+    use crate::contracts::catalog::Operation;
+    use crate::contracts::context::{Grant, Principal};
+    use crate::contracts::project_api::graph_query::GraphQueryOp;
+    use crate::db;
+    use crate::project_api::bridge::{testing::answering, Bridge};
+    use std::time::Duration;
+
+    let _serial = db::serial_guard();
+    let root = temp_root("bridge");
+    put(&root, "a.ts", "x\n");
+    let (_ro, epoch) = db::open_workspace_db(&root).unwrap();
+    let bridge: &'static Bridge = Box::leak(Box::new(Bridge::new(Duration::from_secs(5))));
+    answering(bridge, |event| {
+        let result = match event.op.as_str() {
+            "workspace.graph" => serde_json::json!({
+                "nodes": [{ "path": "a.ts", "onCanvas": true, "discoverable": true }],
+                "edges": [], "discoveryInFlight": false, "omitted": 0
+            }),
+            "editor.bufferIndex" => serde_json::json!({ "entries": [], "omitted": 0 }),
+            other => panic!("unexpected {other}"),
+        };
+        Some(serde_json::json!({ "kind": "result", "result": result }).to_string())
+    });
+    let context = CallContext {
+        principal: Principal::Test,
+        grant: Grant::of([GraphQueryOp::CAPABILITY]),
+        epoch: epoch.clone(),
+    };
+    let request = || req(serde_json::json!({ "focus": "a.ts", "direction": "imports" }));
+    let editor = || BridgeGraph {
+        bridge,
+        epoch: &epoch,
+    };
+    let error = handle_with(&context, request(), &mut editor(), MAX_RESPONSE_BYTES).unwrap_err();
+    assert_eq!(error.code, crate::contracts::error::ErrorCode::OwnerUnavailable);
+    bridge.attach(&epoch, Some(&epoch)).unwrap();
+    let result = handle_with(&context, request(), &mut editor(), MAX_RESPONSE_BYTES).unwrap();
+    assert_eq!(result.focus, FocusOutcome::Resolved);
+    assert_eq!(file_paths(&result), ["a.ts"]);
+    db::close_workspace_db().unwrap();
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_bridge_workspace_change_propagates() {
+    let root = temp_root("switch");
+    let mut editor = Scripted {
+        graph_error: Some(crate::contracts::error::ErrorCode::WorkspaceChanged),
+        ..Scripted::default()
+    }
+    .node("a.ts", Node::default());
+    let error = run(&root, &req(serde_json::json!({ "focus": "a.ts" })), &mut editor, MAX_RESPONSE_BYTES).unwrap_err();
+    assert_eq!(error.code, crate::contracts::error::ErrorCode::WorkspaceChanged);
+    let _ = fs::remove_dir_all(&root);
+}

@@ -179,14 +179,43 @@ export function createSyntaxDomain() {
   const fileRevision = new Map();
   let revisionCounter = 0;
 
-  function _putText(filePath, text) {
+  /**
+   * filePath → { source: 'editor' | 'disk', revision } of the text that was
+   * parsed. This is the CONTENT revision (brief §4.5/§7.4), minted by the
+   * owner of the state — the JS editor port for buffers, Rust for disk — and
+   * passed in here; the domain never computes one, so it stays dependency-free.
+   * A registration without a revision records none, so the graph reads that
+   * file `unknown`, never `current` (P4c, 2026-10-03). Distinct from
+   * `fileRevision`, which is an identity counter, not a content revision.
+   *
+   * @type {Map<string, { source: string, revision: string }>}
+   */
+  const parsedRevisionIndex = new Map();
+
+  function _normalizeParsedRevision(parsedRevision) {
+    if (
+      parsedRevision
+      && (parsedRevision.source === 'editor' || parsedRevision.source === 'disk')
+      && typeof parsedRevision.revision === 'string'
+      && parsedRevision.revision
+    ) {
+      return { source: parsedRevision.source, revision: parsedRevision.revision };
+    }
+    return null;
+  }
+
+  function _putText(filePath, text, parsedRevision) {
     fileTextCache.set(filePath, text);
     fileRevision.set(filePath, ++revisionCounter);
+    const normalized = _normalizeParsedRevision(parsedRevision);
+    if (normalized) parsedRevisionIndex.set(filePath, normalized);
+    else parsedRevisionIndex.delete(filePath);
   }
 
   function _dropText(filePath) {
     fileTextCache.delete(filePath);
     fileRevision.delete(filePath);
+    parsedRevisionIndex.delete(filePath);
   }
 
   /** @type {Map<string, string>} filePath → 'ok' | 'unknown' | 'parsing' */
@@ -993,9 +1022,13 @@ export function createSyntaxDomain() {
      *
      * @param {string} filePath - Absolute file path.
      * @param {string} text     - Current file content.
+     * @param {{ source: 'editor'|'disk', revision: string }} [parsedRevision]
+     *   The content revision of `text`, minted by its owner (brief §4.5): the
+     *   JS buffer revision for editor text, the Rust disk revision for disk
+     *   text. Absent → the file records no parsed revision (reads `unknown`).
      */
-    registerFile(filePath, text) {
-      _putText(filePath, text);
+    registerFile(filePath, text, parsedRevision) {
+      _putText(filePath, text, parsedRevision);
       _refreshFile(filePath);
       // Reconcile edge statuses too — registration is how discovery and the
       // incremental refresh push text into the domain, and without this the
@@ -1015,9 +1048,9 @@ export function createSyntaxDomain() {
      *
      * @returns {boolean} whether the text was registered
      */
-    registerFileIfAbsent(filePath, text) {
+    registerFileIfAbsent(filePath, text, parsedRevision) {
       if (fileTextCache.has(filePath)) return false;
-      commands.registerFile(filePath, text);
+      commands.registerFile(filePath, text, parsedRevision);
       return true;
     },
 
@@ -1073,7 +1106,7 @@ export function createSyntaxDomain() {
       const connectionsChanged = [...connectionToEdge.keys()];
       const edgesChanged = [...syntaxEdges.keys()];
       const portsChanged = [...new Set([...fileStatus.keys(), ...fileTextCache.keys(), ...portIndex.keys()])];
-      for (const map of [definitionIndex, symbolIndex, portIndex, syntaxEdges, connectionToEdge, bindingMap, fileTextCache, fileRevision, fileStatus]) {
+      for (const map of [definitionIndex, symbolIndex, portIndex, syntaxEdges, connectionToEdge, bindingMap, fileTextCache, fileRevision, parsedRevisionIndex, fileStatus]) {
         map.clear();
       }
       _notify({ portsChanged, connectionsChanged, edgesChanged, fileChanged: null });
@@ -1140,10 +1173,12 @@ export function createSyntaxDomain() {
      *
      * @param {string} filePath
      * @param {string} text
+     * @param {{ source: 'editor'|'disk', revision: string }} [parsedRevision]
+     *   The content revision of `text` (brief §4.5), as `registerFile`.
      * @returns {{ connectionsChanged: string[] }}
      */
-    notifyFileChanged(filePath, text) {
-      _putText(filePath, text);
+    notifyFileChanged(filePath, text, parsedRevision) {
+      _putText(filePath, text, parsedRevision);
       _refreshFile(filePath);
       const { changedEdges, changedConns } = _reconcileEdges(filePath);
       _notify({ portsChanged: [filePath], connectionsChanged: changedConns, edgesChanged: changedEdges, fileChanged: filePath });
@@ -1685,6 +1720,9 @@ export function createSyntaxDomain() {
       // Move file-level state to new path
       const text = fileTextCache.get(oldPath);
       const status = fileStatus.get(oldPath);
+      // A rename carries the entry's parsed revision to the new path (P4c): the
+      // bytes did not change, so their content revision is still valid there.
+      const parsedRevision = parsedRevisionIndex.get(oldPath);
       _dropText(oldPath);
       definitionIndex.delete(oldPath);
       symbolIndex.delete(oldPath);
@@ -1692,7 +1730,7 @@ export function createSyntaxDomain() {
       fileStatus.delete(oldPath);
 
       if (text != null) {
-        _putText(newPath, text);
+        _putText(newPath, text, parsedRevision);
         fileStatus.set(newPath, status ?? 'unknown');
         _refreshFile(newPath);
       }
@@ -1843,6 +1881,20 @@ export function createSyntaxDomain() {
       return fileRevision.get(filePath) ?? null;
     },
 
+    /**
+     * The content revision of the text a file was parsed from, as
+     * `{ source: 'editor'|'disk', revision }`, or null when none was recorded
+     * (the graph then reads that file `unknown`, never `current` — brief §7.4).
+     * Read-only; the owner bridge reads it to answer `workspace.graph` (P4c).
+     * A revision is opaque and comparable only within its source (brief §4.5):
+     * a buffer revision and a disk revision are never equal even for the same
+     * bytes.
+     */
+    getParsedRevision(filePath) {
+      const entry = parsedRevisionIndex.get(filePath);
+      return entry ? { source: entry.source, revision: entry.revision } : null;
+    },
+
     getImportBinding(connectionId) {
       return bindingMap.get(connectionId) ?? null;
     },
@@ -1929,6 +1981,45 @@ export function createSyntaxDomain() {
     /** Get the edge ID for a canvas connection ID. */
     getEdgeIdForConnection(connectionId) {
       return connectionToEdge.get(connectionId) ?? null;
+    },
+
+    /**
+     * Provenance for a canvas connection, read-only, for the owner bridge's
+     * `workspace.graph` answer (brief §7.4, P4c):
+     * - a syntax edge exists → `sourceDerived`, carrying the edge's aggregate
+     *   `status` (`pending`|`resolved`|`broken`|`orphaned`|`drifted`|`unused`),
+     *   its endpoints and symbols;
+     * - no syntax edge → `manual` (a hand-drawn wire with no import behind it).
+     * The bridge, not SyntaxDomain, maps absolute paths to project-relative
+     * ones, so this keeps the domain dependency-free.
+     */
+    getProvenanceForConnection(connectionId) {
+      const edgeId = connectionToEdge.get(connectionId);
+      const edge = edgeId ? syntaxEdges.get(edgeId) : null;
+      if (!edge) return { provenance: 'manual' };
+      return {
+        provenance: 'sourceDerived',
+        status: edge.status,
+        sourceFilePath: edge.sourceFilePath,
+        targetFilePath: edge.targetFilePath,
+        symbols: edge.symbols.map((s) => ({ name: s.symbolName, kind: s.exportKind })),
+      };
+    },
+
+    /**
+     * Every syntax edge as a provenance record (source and target absolute
+     * paths, aggregate status, symbols), for the off-canvas pending-edge set
+     * the bridge resolves to paths. Read-only.
+     */
+    getAllEdgeProvenance() {
+      return [...syntaxEdges.values()].map((edge) => ({
+        edgeId: edge.edgeId,
+        sourceFilePath: edge.sourceFilePath,
+        targetFilePath: edge.targetFilePath,
+        status: edge.status,
+        connectionIds: [...edge.connectionIds],
+        symbols: edge.symbols.map((s) => ({ name: s.symbolName, kind: s.exportKind })),
+      }));
     },
 
     /**

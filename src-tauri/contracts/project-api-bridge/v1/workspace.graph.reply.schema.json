@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BridgeReply",
+  "description": "A reply, as JavaScript sends it (the JSON text of the reply command's\n`reply` argument). Read strictly: unknown fields are rejected.",
+  "oneOf": [
+    {
+      "description": "The owner's answer.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "result"
+        },
+        "result": {
+          "$ref": "#/$defs/GraphResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "result"
+      ]
+    },
+    {
+      "description": "The owner refused or failed. Never forwarded as text.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/BridgeErrorCode"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ]
+    }
+  ],
+  "$defs": {
+    "BridgeErrorCode": {
+      "oneOf": [
+        {
+          "description": "The request's epoch is not the one the owner's state belongs to.",
+          "type": "string",
+          "const": "workspaceChanged"
+        },
+        {
+          "description": "The owner does not know the operation.",
+          "type": "string",
+          "const": "unknownOperation"
+        },
+        {
+          "description": "The owner could not read the request.",
+          "type": "string",
+          "const": "invalidRequest"
+        },
+        {
+          "description": "Any other failure.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "EdgeProvenance": {
+      "oneOf": [
+        {
+          "description": "Derived from a SyntaxDomain import edge.",
+          "type": "string",
+          "const": "sourceDerived"
+        },
+        {
+          "description": "A hand-drawn wire with no import behind it.",
+          "type": "string",
+          "const": "manual"
+        }
+      ]
+    },
+    "GraphEdge": {
+      "type": "object",
+      "properties": {
+        "exporter": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "importer": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "onCanvas": {
+          "description": "The wire is drawn on the canvas.",
+          "type": "boolean"
+        },
+        "provenance": {
+          "$ref": "#/$defs/EdgeProvenance"
+        },
+        "status": {
+          "description": "The SyntaxDomain aggregate status for a `sourceDerived` edge (including\nthe domain-only `orphaned`); absent for a `manual` wire.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 64
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GraphSymbol"
+          },
+          "maxItems": 50
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "importer",
+        "exporter",
+        "symbols",
+        "provenance",
+        "onCanvas"
+      ]
+    },
+    "GraphNode": {
+      "type": "object",
+      "properties": {
+        "discoverable": {
+          "description": "The file's language has relationship discovery (`isDiscoverableFilename`).",
+          "type": "boolean"
+        },
+        "folder": {
+          "description": "The folder group's folder, when the file's piece is in a folder group.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "groupId": {
+          "description": "An opaque id for a legacy group without a folder.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "onCanvas": {
+          "description": "A piece for the file is on the canvas.",
+          "type": "boolean"
+        },
+        "parsed": {
+          "description": "The `{ source, revision }` the file was parsed from, if recorded.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParsedRevision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "onCanvas",
+        "discoverable"
+      ]
+    },
+    "GraphResult": {
+      "description": "JavaScript → Rust.",
+      "type": "object",
+      "properties": {
+        "discoveryInFlight": {
+          "description": "An initial discovery run or a refresh is reading files or armed.",
+          "type": "boolean"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GraphEdge"
+          },
+          "maxItems": 50000
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GraphNode"
+          },
+          "maxItems": 10000
+        },
+        "omitted": {
+          "description": "Nodes or edges that did not fit a bound or the reply ceiling.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "nodes",
+        "edges",
+        "discoveryInFlight",
+        "omitted"
+      ]
+    },
+    "GraphSymbol": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "ParsedRevision": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "source": {
+          "$ref": "#/$defs/ParsedSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "revision"
+      ]
+    },
+    "ParsedSource": {
+      "type": "string",
+      "enum": [
+        "editor",
+        "disk"
+      ]
+    }
+  }
+}

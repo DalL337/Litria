@@ -14,6 +14,7 @@
 
 pub(crate) mod files_read;
 pub(crate) mod files_search;
+pub(crate) mod graph_query;
 pub(crate) mod project_context;
 
 #[cfg(test)]
@@ -32,6 +33,7 @@ pub(crate) fn catalog() -> Vec<crate::contracts::catalog::OperationEntry> {
         entry::<files_read::FilesReadOp>(),
         entry::<project_context::ProjectContextOp>(),
         entry::<files_search::FilesSearchOp>(),
+        entry::<graph_query::GraphQueryOp>(),
     ]
 }
 
@@ -48,6 +50,7 @@ pub(crate) fn test_dispatcher() -> crate::contracts::catalog::Dispatcher {
     dispatcher.register::<files_read::FilesReadOp>(|_, _| Ok(samples::files_read_result()));
     dispatcher.register::<project_context::ProjectContextOp>(|_, _| Ok(samples::project_context_result()));
     dispatcher.register::<files_search::FilesSearchOp>(|_, _| Ok(samples::files_search_result()));
+    dispatcher.register::<graph_query::GraphQueryOp>(|_, _| Ok(samples::graph_query_result()));
     dispatcher
 }
 
@@ -57,10 +60,14 @@ pub(crate) fn test_dispatcher() -> crate::contracts::catalog::Dispatcher {
 pub(crate) mod samples {
     use super::files_read::{DocumentOutcome, DocumentSource, FilesReadResult, LineRange};
     use super::files_search::{FilesSearchResult, SearchMatch, SearchScope, SkippedCounts, TruncationReason};
+    use super::graph_query::{
+        EdgeProvenance, FocusOutcome, Freshness, GraphEdge, GraphNode, GraphQueryResult, GraphSymbol, IndexReason,
+        IndexState, TruncationReason as GraphTruncationReason,
+    };
     use super::project_context::{
-        ActiveDocument, DeniedClass, DocumentsSummary, FilesReadLimits, FilesSearchLimits, LanguageCapabilities,
-        LanguageServer, PolicySummary, ProjectContextLimits, ProjectContextResult, ProjectSummary, SelectionSummary,
-        ServerLimits,
+        ActiveDocument, DeniedClass, DocumentsSummary, FilesReadLimits, FilesSearchLimits, GraphQueryLimits,
+        LanguageCapabilities, LanguageServer, PolicySummary, ProjectContextLimits, ProjectContextResult,
+        ProjectSummary, SelectionSummary, ServerLimits,
     };
 
     pub(crate) fn files_read_result() -> FilesReadResult {
@@ -181,6 +188,7 @@ pub(crate) mod samples {
             operations: vec![
                 "litria_files_read".into(),
                 "litria_files_search".into(),
+                "litria_graph_query".into(),
                 "litria_project_context".into(),
             ],
             limits: ServerLimits {
@@ -206,6 +214,14 @@ pub(crate) mod samples {
                     max_concurrent_searches: 2,
                 },
                 project_context: ProjectContextLimits { max_listed_paths: 100 },
+                graph: GraphQueryLimits {
+                    default_depth: 1,
+                    max_depth: 2,
+                    default_max_nodes: 50,
+                    max_nodes: 100,
+                    max_edges: 500,
+                    max_symbols_per_edge: 50,
+                },
             },
             policy: PolicySummary {
                 denied: vec![
@@ -271,6 +287,99 @@ pub(crate) mod samples {
             },
             files_searched: 812,
             buffers_searched: 3,
+        }
+    }
+
+    /// Both node kinds, every freshness, both edge provenances (including the
+    /// domain-only `orphaned` status), every summary reason and truncation.
+    pub(crate) fn graph_query_result() -> GraphQueryResult {
+        GraphQueryResult {
+            focus: FocusOutcome::Resolved,
+            nodes: vec![
+                GraphNode::File {
+                    path: "src/auth.ts".into(),
+                    on_canvas: true,
+                    folder: Some("src".into()),
+                    group_id: None,
+                    freshness: Freshness::Current,
+                    discoverable: true,
+                },
+                GraphNode::File {
+                    path: "src/session.ts".into(),
+                    on_canvas: true,
+                    folder: None,
+                    group_id: Some("group-7".into()),
+                    freshness: Freshness::Stale,
+                    discoverable: true,
+                },
+                GraphNode::File {
+                    path: "src/legacy.ts".into(),
+                    on_canvas: false,
+                    folder: None,
+                    group_id: None,
+                    freshness: Freshness::Unknown,
+                    discoverable: false,
+                },
+                GraphNode::Folder {
+                    folder: Some("src".into()),
+                    group_id: None,
+                },
+                GraphNode::Folder {
+                    folder: None,
+                    group_id: Some("group-7".into()),
+                },
+            ],
+            edges: vec![
+                GraphEdge {
+                    importer: "src/auth.ts".into(),
+                    exporter: "src/session.ts".into(),
+                    symbols: vec![
+                        GraphSymbol {
+                            name: "createSession".into(),
+                            kind: "function".into(),
+                        },
+                        GraphSymbol {
+                            name: "Session".into(),
+                            kind: "type".into(),
+                        },
+                    ],
+                    provenance: EdgeProvenance::SourceDerived {
+                        status: "resolved".into(),
+                    },
+                    on_canvas: true,
+                },
+                GraphEdge {
+                    importer: "src/auth.ts".into(),
+                    exporter: "src/legacy.ts".into(),
+                    symbols: Vec::new(),
+                    provenance: EdgeProvenance::SourceDerived {
+                        status: "orphaned".into(),
+                    },
+                    on_canvas: false,
+                },
+                GraphEdge {
+                    importer: "src/session.ts".into(),
+                    exporter: "src/auth.ts".into(),
+                    symbols: Vec::new(),
+                    provenance: EdgeProvenance::Manual,
+                    on_canvas: true,
+                },
+            ],
+            summary: IndexState::Partial,
+            reasons: vec![
+                IndexReason::NotParsed,
+                IndexReason::DiscoveryInFlight,
+                IndexReason::StaleNodes,
+                IndexReason::UnknownNodes,
+                IndexReason::NoRelationshipDiscovery,
+            ],
+            truncated: true,
+            truncated_by: vec![
+                GraphTruncationReason::MaxNodes,
+                GraphTruncationReason::Edges,
+                GraphTruncationReason::Symbols,
+                GraphTruncationReason::ResponseSize,
+            ],
         }
     }
 }

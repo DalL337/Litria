@@ -28,7 +28,8 @@ export const BRIDGE_OPS = Object.freeze({
   documents: 'editor.documents',
   bufferIndex: 'editor.bufferIndex',
   selection: 'workspace.selection',
-  capabilities: 'languages.capabilities'
+  capabilities: 'languages.capabilities',
+  graph: 'workspace.graph'
 });
 /** Encoded size of one reply (contract brief §10); the catalog publishes it. */
 export const MAX_REPLY_BYTES = 512 * 1024;
@@ -38,6 +39,12 @@ const MAX_QUERIES = 20;
 const MAX_INDEX_ENTRIES = 500;
 const MAX_SELECTED_PATHS = 1000;
 const MAX_LANGUAGE_ROWS = 32;
+/** Frontier paths named in one `workspace.graph` request (one walk level). */
+const MAX_GRAPH_FRONTIER = 200;
+/** Edges incident to one frontier node that a reply will carry. */
+const MAX_EDGES_PER_NODE = 500;
+/** Symbols named on one edge (contract brief §10). */
+const MAX_SYMBOLS_PER_EDGE = 50;
 /** Path length in code points, as the contract's schemas count it. */
 const MAX_PATH_LENGTH = 1024;
 const REMEMBERED_REQUESTS = 256;
@@ -413,6 +420,187 @@ export function answerSelection(request, snapshot, ceiling = MAX_REPLY_BYTES) {
 }
 
 /**
+ * The graph port's snapshot from owner state (contract brief §7.4, P4c). The
+ * graph is built from pieces, wires and pending edges, never from raw
+ * SyntaxDomain registrations: an edge's endpoints may be stale, and a file is
+ * a node only because a piece, a wire or a pending edge names it.
+ *
+ * @param {object} owners
+ * @param {Map} owners.piecesById            PieceDomain pieces (`filename`, on canvas)
+ * @param {Array} owners.groups              GroupDomain groups (folder groups carry `folderPath`)
+ * @param {Array} owners.edgeProvenance      SyntaxDomain `getAllEdgeProvenance()`
+ * @param {Array} owners.pendingEdges        off-canvas pending edges (exporter/importer paths)
+ * @param {(path:string)=>({source,revision}|null)} owners.parsedRevision  SyntaxDomain selector
+ * @param {(path:string)=>boolean} owners.discoverable  `isDiscoverableFilename`
+ * @param {boolean} owners.discoveryInFlight an initial run or refresh is reading
+ * @returns {{nodes: Map<string,object>, edges: Array, discoveryInFlight: boolean}}
+ */
+export function graphSnapshot({
+  piecesById,
+  groups,
+  edgeProvenance,
+  pendingEdges,
+  parsedRevision,
+  discoverable,
+  discoveryInFlight
+}) {
+  const groupById = new Map((groups ?? []).map((group) => [group.id, group]));
+  // Files a piece places on the canvas, with their folder-group facts.
+  const onCanvasPaths = new Map();
+  for (const piece of piecesById?.values?.() ?? []) {
+    const path = projectPath(piece?.filename);
+    if (!path) continue;
+    const group = piece.groupId == null ? null : groupById.get(piece.groupId);
+    const folder = projectPath(group?.folderPath) || null;
+    // A legacy group without a folderPath is named by an opaque id.
+    const groupId = group && !folder ? String(group.id) : null;
+    onCanvasPaths.set(path, { onCanvas: true, folder, groupId });
+  }
+
+  const parsedOf = typeof parsedRevision === 'function' ? parsedRevision : () => null;
+  const discoverableOf = typeof discoverable === 'function' ? discoverable : () => false;
+  const nodes = new Map();
+  const noteNode = (path) => {
+    if (!path || nodes.has(path)) return;
+    const placed = onCanvasPaths.get(path) ?? { onCanvas: false, folder: null, groupId: null };
+    const parsed = parsedOf(path);
+    nodes.set(path, {
+      path,
+      onCanvas: placed.onCanvas,
+      folder: placed.folder,
+      groupId: placed.groupId,
+      parsed: parsed ? { source: parsed.source, revision: parsed.revision } : null,
+      discoverable: discoverableOf(path) === true
+    });
+  };
+
+  // Edges, importer → exporter. SyntaxDomain stores sourceFilePath = exporter,
+  // targetFilePath = importer, so the contract direction flips them.
+  const edges = [];
+  const seen = new Set();
+  const addEdge = (exporter, importer, symbols, provenance, status, onCanvas) => {
+    const importerPath = projectPath(importer);
+    const exporterPath = projectPath(exporter);
+    if (!importerPath || !exporterPath) return;
+    const key = `${importerPath} ${exporterPath} ${provenance}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    noteNode(importerPath);
+    noteNode(exporterPath);
+    edges.push({
+      importer: importerPath,
+      exporter: exporterPath,
+      symbols: (symbols ?? []).slice(0, MAX_SYMBOLS_PER_EDGE).map((s) => ({ name: s.name, kind: s.kind })),
+      provenance,
+      status: status ?? null,
+      onCanvas: onCanvas === true
+    });
+  };
+
+  for (const edge of edgeProvenance ?? []) {
+    const onCanvas = Array.isArray(edge.connectionIds) && edge.connectionIds.length > 0;
+    addEdge(edge.sourceFilePath, edge.targetFilePath, edge.symbols, 'sourceDerived', edge.status ?? null, onCanvas);
+  }
+  for (const edge of pendingEdges ?? []) {
+    addEdge(edge.sourceFilePath, edge.targetFilePath, edge.symbols, 'sourceDerived', edge.status ?? null, false);
+  }
+
+  // Every on-canvas file is a node even with no edges, so a frontier path that
+  // names a placed-but-unwired piece still carries its folder and canvas facts.
+  for (const path of onCanvasPaths.keys()) noteNode(path);
+
+  return { nodes, edges, discoveryInFlight: discoveryInFlight === true, noteNode };
+}
+
+/**
+ * `workspace.graph` (contract brief §7.4, P4c): a frontier-scoped read. Rust
+ * names a set of project-relative `paths` and a `direction`; the reply carries,
+ * for each requested path, its node facts and the edges incident to it in that
+ * direction, each naming its other endpoint by path. Rust drives the walk one
+ * level at a time, so depth lives in Rust, not here.
+ *
+ * Bounded like the other operations: at most `MAX_EDGES_PER_NODE` edges per
+ * frontier node and within `ceiling`; anything that does not fit is counted in
+ * `omitted`, never dropped silently. The reply also carries the
+ * discovery-in-flight signal.
+ */
+export function answerGraph(request, snapshot, ceiling = MAX_REPLY_BYTES) {
+  const paths = request?.paths;
+  const direction = request?.direction;
+  if (!Array.isArray(paths) || paths.length < 1 || paths.length > MAX_GRAPH_FRONTIER
+    || !paths.every((path) => typeof path === 'string' && path)
+    || (direction !== 'imports' && direction !== 'importedBy' && direction !== 'both')) {
+    return refusal('invalidRequest');
+  }
+  const maxEdges = Number.isInteger(request.maxEdgesPerNode) && request.maxEdgesPerNode >= 0
+    ? Math.min(request.maxEdgesPerNode, MAX_EDGES_PER_NODE)
+    : MAX_EDGES_PER_NODE;
+
+  const { nodes, edges, discoveryInFlight } = snapshot ?? { nodes: new Map(), edges: [], discoveryInFlight: false };
+  const frontier = [...new Set(paths)];
+  // Edge keeps when it is incident to `path` in `direction` (importer→exporter).
+  const incident = (edge, path) => {
+    const imports = direction === 'imports' || direction === 'both';
+    const importedBy = direction === 'importedBy' || direction === 'both';
+    return (imports && edge.importer === path) || (importedBy && edge.exporter === path);
+  };
+
+  let omitted = 0;
+  const outNodes = [];
+  const outEdges = [];
+  const emittedEdge = new Set();
+  // Room for the largest possible omitted count and the signal, then content.
+  let used = encodedLength({
+    kind: 'result',
+    result: { nodes: [], edges: [], discoveryInFlight, omitted: 4294967295 }
+  });
+  const fits = (value) => {
+    const bytes = encodedLength(value) + 1;
+    if (used + bytes > ceiling) return false;
+    used += bytes;
+    return true;
+  };
+
+  for (const path of frontier) {
+    if (!isCarriablePath(path)) { omitted += 1; continue; }
+    const node = nodes.get(path) ?? {
+      path, onCanvas: false, folder: null, groupId: null, parsed: null, discoverable: false
+    };
+    const nodeFact = {
+      path: node.path,
+      onCanvas: node.onCanvas === true,
+      parsed: node.parsed ?? null,
+      discoverable: node.discoverable === true
+    };
+    if (node.folder) nodeFact.folder = node.folder;
+    else if (node.groupId) nodeFact.groupId = node.groupId;
+    if (!fits(nodeFact)) { omitted += 1; continue; }
+    outNodes.push(nodeFact);
+
+    let perNode = 0;
+    for (const edge of edges) {
+      if (!incident(edge, path)) continue;
+      if (perNode >= maxEdges) { omitted += 1; continue; }
+      const key = `${edge.importer} ${edge.exporter} ${edge.provenance}`;
+      if (emittedEdge.has(key)) { perNode += 1; continue; }
+      const out = {
+        importer: edge.importer,
+        exporter: edge.exporter,
+        symbols: edge.symbols ?? [],
+        provenance: edge.provenance,
+        onCanvas: edge.onCanvas === true
+      };
+      if (edge.provenance === 'sourceDerived' && edge.status) out.status = edge.status;
+      if (!fits(out)) { omitted += 1; continue; }
+      emittedEdge.add(key);
+      outEdges.push(out);
+      perNode += 1;
+    }
+  }
+  return { kind: 'result', result: { nodes: outNodes, edges: outEdges, discoveryInFlight, omitted } };
+}
+
+/**
  * `languages.capabilities`: the capability rows the owners report
  * (`src/app/languageCapabilities.js`), at most the contract's row limit.
  */
@@ -528,6 +716,8 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
         return answerBufferIndex(request, ports.sessionDocuments(), revisionOf, ceiling);
       case BRIDGE_OPS.selection:
         return answerSelection(request, ports.selection(), ceiling);
+      case BRIDGE_OPS.graph:
+        return answerGraph(request, ports.graph?.() ?? graphSnapshot({}), ceiling);
       case BRIDGE_OPS.capabilities:
         return answerCapabilities(request, ports.languageCapabilities());
       default:

@@ -306,6 +306,9 @@ export function createFilesystemWriteManager(deps) {
 
     // File content reader (for delete journal)
     readProjectFile,
+    // Revision-returning reader for the re-index paths (brief §4.5): disk text
+    // registered here carries the disk revision Rust minted for it.
+    readProjectFileWithRevision = null,
   } = deps;
 
   // ---- Syntax domain keys --------------------------------------------------
@@ -328,9 +331,29 @@ export function createFilesystemWriteManager(deps) {
   // Index a path from disk only if the domain holds nothing for it: an open
   // file's live buffer, registered by the editor's rename, must never be
   // overwritten by its saved text (Codex review F5, 2026-10-01).
-  function indexSyntaxFileIfAbsent(relativePath, contents) {
+  function indexSyntaxFileIfAbsent(relativePath, contents, parsedRevision) {
     const key = toProjectAbsPath(getRootPath(), relativePath);
-    if (registerFileIfAbsent && key) registerFileIfAbsent(key, contents);
+    if (registerFileIfAbsent && key) registerFileIfAbsent(key, contents, parsedRevision);
+  }
+
+  // Read disk text and its disk revision for the re-index paths. Falls back to
+  // the plain reader (no revision → the file reads `unknown`, never a wrong
+  // `current`) when the revision-returning reader is not injected.
+  async function readForReindex(rootPath, relPath) {
+    if (readProjectFileWithRevision) {
+      const read = await readProjectFileWithRevision(rootPath, relPath);
+      if (!read || typeof read.text !== 'string') return null;
+      const parsedRevision = typeof read.revision === 'string'
+        ? { source: 'disk', revision: read.revision }
+        : undefined;
+      return { text: read.text, parsedRevision };
+    }
+    if (readProjectFile) {
+      const text = await readProjectFile(rootPath, relPath);
+      if (typeof text !== 'string') return null;
+      return { text, parsedRevision: undefined };
+    }
+    return null;
   }
 
   // Every indexed file a delete or move touches — the path itself, or every
@@ -430,13 +453,13 @@ export function createFilesystemWriteManager(deps) {
         if (pieceRelPaths.has(rel)) continue;
         const next = `${to}${rel.slice(from.length)}`;
         unregisterSyntaxFile(rel);
-        let text = null;
+        let read = null;
         try {
-          text = readProjectFile ? await readProjectFile(rootPath, next) : null;
+          read = await readForReindex(rootPath, next);
         } catch (_) {
           // Unreadable: left for discovery's next run.
         }
-        if (typeof text === 'string') indexSyntaxFileIfAbsent(next, text);
+        if (read) indexSyntaxFileIfAbsent(next, read.text, read.parsedRevision);
       }
     };
 
@@ -568,15 +591,15 @@ export function createFilesystemWriteManager(deps) {
     // Step 8: Syntax domain — index the new paths from disk, so a rewritten
     // importer resolves against the moved file at once instead of staying
     // broken until discovery re-runs. An unreadable file is left to that run.
-    if (readProjectFile) {
+    if (readProjectFileWithRevision || readProjectFile) {
       await Promise.all(updates.map(async (entry) => {
-        let text = null;
+        let read = null;
         try {
-          text = await readProjectFile(rootPath, entry.path);
+          read = await readForReindex(rootPath, entry.path);
         } catch (_) {
           // Discovery's re-run on the scaffold refresh indexes it instead.
         }
-        if (typeof text === 'string') indexSyntaxFileIfAbsent(entry.path, text);
+        if (read) indexSyntaxFileIfAbsent(entry.path, read.text, read.parsedRevision);
       }));
     }
 

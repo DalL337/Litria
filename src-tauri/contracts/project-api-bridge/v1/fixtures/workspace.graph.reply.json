@@ -1,0 +1,45 @@
+{
+  "kind": "result",
+  "result": {
+    "nodes": [
+      {
+        "path": "src/a.ts",
+        "onCanvas": true,
+        "folder": "src",
+        "parsed": { "source": "editor", "revision": "b1-aa" },
+        "discoverable": true
+      },
+      {
+        "path": "src/b.ts",
+        "onCanvas": true,
+        "groupId": "42",
+        "parsed": { "source": "disk", "revision": "d1-bb" },
+        "discoverable": true
+      },
+      {
+        "path": "src/c.ts",
+        "onCanvas": false,
+        "discoverable": true
+      }
+    ],
+    "edges": [
+      {
+        "importer": "src/a.ts",
+        "exporter": "src/b.ts",
+        "symbols": [{ "name": "run", "kind": "function" }],
+        "provenance": "sourceDerived",
+        "status": "resolved",
+        "onCanvas": true
+      },
+      {
+        "importer": "src/a.ts",
+        "exporter": "src/c.ts",
+        "symbols": [],
+        "provenance": "manual",
+        "onCanvas": true
+      }
+    ],
+    "discoveryInFlight": false,
+    "omitted": 0
+  }
+}

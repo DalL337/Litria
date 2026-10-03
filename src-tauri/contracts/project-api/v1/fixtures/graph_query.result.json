@@ -1,0 +1,91 @@
+{
+  "edges": [
+    {
+      "exporter": "src/session.ts",
+      "importer": "src/auth.ts",
+      "onCanvas": true,
+      "provenance": {
+        "kind": "sourceDerived",
+        "status": "resolved"
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "createSession"
+        },
+        {
+          "kind": "type",
+          "name": "Session"
+        }
+      ]
+    },
+    {
+      "exporter": "src/legacy.ts",
+      "importer": "src/auth.ts",
+      "onCanvas": false,
+      "provenance": {
+        "kind": "sourceDerived",
+        "status": "orphaned"
+      },
+      "symbols": []
+    },
+    {
+      "exporter": "src/auth.ts",
+      "importer": "src/session.ts",
+      "onCanvas": true,
+      "provenance": {
+        "kind": "manual"
+      },
+      "symbols": []
+    }
+  ],
+  "focus": "resolved",
+  "nodes": [
+    {
+      "discoverable": true,
+      "folder": "src",
+      "freshness": "current",
+      "kind": "file",
+      "onCanvas": true,
+      "path": "src/auth.ts"
+    },
+    {
+      "discoverable": true,
+      "freshness": "stale",
+      "groupId": "group-7",
+      "kind": "file",
+      "onCanvas": true,
+      "path": "src/session.ts"
+    },
+    {
+      "discoverable": false,
+      "freshness": "unknown",
+      "kind": "file",
+      "onCanvas": false,
+      "path": "src/legacy.ts"
+    },
+    {
+      "folder": "src",
+      "kind": "folder"
+    },
+    {
+      "groupId": "group-7",
+      "kind": "folder"
+    }
+  ],
+  "reasons": [
+    "notParsed",
+    "discoveryInFlight",
+    "staleNodes",
+    "unknownNodes",
+    "noRelationshipDiscovery"
+  ],
+  "summary": "partial",
+  "truncated": true,
+  "truncatedBy": [
+    "maxNodes",
+    "edges",
+    "symbols",
+    "responseSize"
+  ]
+}

@@ -40,6 +40,8 @@
  *   await adapter.handleResolveMultipleSymbols({ edgeId, symbolIds });
  */
 
+import { bufferRevision } from '../app/projectApiBridge.js';
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -49,11 +51,16 @@
  *   syntaxDomain: object,
  *   projectRoot: string,
  *   readProjectFile?: (root: string, relPath: string) => Promise<string|null>,
+ *   readProjectFileWithRevision?: (root: string, relPath: string) => Promise<{text:string, revision:string}|null>,
  *   writeProjectFile?: (root: string, relPath: string, contents: string) => Promise<any>,
  * }} params
  * @returns {object} adapter
  */
-export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile, writeProjectFile }) {
+export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile, readProjectFileWithRevision, writeProjectFile }) {
+  /** The content revision of editor text (brief §4.5): the JS buffer revision,
+   *  the same function the owner bridge reports for a session document, so a
+   *  file parsed from the editor reads `current` against the bridge's view. */
+  const editorRevision = (text) => ({ source: 'editor', revision: bufferRevision(text) });
   // Python import composition derives absolute module specs from the project
   // root (brief-python-wires S2). The adapter is recreated on project switch
   // (useSyntaxDomainLifecycle), so this stays current.
@@ -125,7 +132,9 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
         }],
         () => null,
       );
-      syntaxDomain.commands.notifyFileChanged(absPath, newText);
+      // The buffer now holds newText; its revision is the editor revision of
+      // newText (brief §4.5). The disk is untouched until the user saves.
+      syntaxDomain.commands.notifyFileChanged(absPath, newText, editorRevision(newText));
       return true;
     }
 
@@ -139,7 +148,23 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
       // the bug: it would keep serving an import that is not on disk.
       const written = await writeProjectFile(projectRoot, absToRel(absPath), newText);
       if (!written) return false;
-      syntaxDomain.commands.notifyFileChanged(absPath, newText);
+      // A write through Litria records the disk revision of the bytes written,
+      // minted by Rust (brief §4.5). Re-read it with its revision; if that read
+      // cannot run, the file records no revision (reads `unknown`, never a
+      // wrong `current`). The write's success/failure claim is unchanged
+      // (ADR-032 D3): the boolean above is still the authority.
+      let diskRevision = null;
+      if (readProjectFileWithRevision) {
+        try {
+          const read = await readProjectFileWithRevision(projectRoot, absToRel(absPath));
+          if (read && read.text === newText && typeof read.revision === 'string') {
+            diskRevision = { source: 'disk', revision: read.revision };
+          }
+        } catch (_) {
+          diskRevision = null;
+        }
+      }
+      syntaxDomain.commands.notifyFileChanged(absPath, newText, diskRevision ?? undefined);
       return true;
     }
 
@@ -162,12 +187,12 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
   // ---- File lifecycle -------------------------------------------------------
 
   function onFileOpened(filePath, text, model = null) {
-    syntaxDomain.commands.registerFile(filePath, text);
+    syntaxDomain.commands.registerFile(filePath, text, editorRevision(text));
     if (model) modelRegistry.set(filePath, model);
   }
 
   function onFileChanged(filePath, text) {
-    syntaxDomain.commands.notifyFileChanged(filePath, text);
+    syntaxDomain.commands.notifyFileChanged(filePath, text, editorRevision(text));
   }
 
   /**
@@ -201,14 +226,26 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
     const revision = syntaxDomain.commands.stampFileRevision(filePath);
     if (revision == null) return;
 
-    if (!readProjectFile) {
+    // Prefer the revision-returning read so the re-indexed disk text carries
+    // its disk revision (brief §4.5); fall back to the plain read (no recorded
+    // revision → `unknown`, never a wrong `current`).
+    if (!readProjectFileWithRevision && !readProjectFile) {
       syntaxDomain.commands.unregisterFile(filePath);
       return;
     }
 
     let diskText = null;
+    let parsedRevision;
     try {
-      diskText = await readProjectFile(projectRoot, absToRel(filePath));
+      if (readProjectFileWithRevision) {
+        const read = await readProjectFileWithRevision(projectRoot, absToRel(filePath));
+        if (read) {
+          diskText = read.text;
+          if (typeof read.revision === 'string') parsedRevision = { source: 'disk', revision: read.revision };
+        }
+      } else {
+        diskText = await readProjectFile(projectRoot, absToRel(filePath));
+      }
     } catch (_) {
       diskText = null;
     }
@@ -223,7 +260,7 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
 
     // Still on disk: re-index from disk text, discarding any unsaved edits
     // that the close dropped.
-    syntaxDomain.commands.registerFile(filePath, diskText);
+    syntaxDomain.commands.registerFile(filePath, diskText, parsedRevision);
   }
 
   // ---- Canvas connection handlers -------------------------------------------
@@ -476,7 +513,8 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
     // and indexed the new one from DISK; the buffer wins either way (Codex
     // review F5, 2026-10-01).
     if (model) {
-      syntaxDomain.commands.notifyFileChanged(newPath, model.getValue());
+      const value = model.getValue();
+      syntaxDomain.commands.notifyFileChanged(newPath, value, editorRevision(value));
     }
 
     // Group rename patch plans by file and apply them to authoritative text.

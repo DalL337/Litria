@@ -17,7 +17,7 @@
 
 import { useEffect, useRef } from 'react';
 import { discoverProjectEdges } from './discoveryEngine.js';
-import { listProjectTree, readProjectFile } from '../project/storage.js';
+import { listProjectTree, readProjectFileWithRevision } from '../project/storage.js';
 import { chooseFacingSides } from './connectionAnchoring.js';
 
 /** File extensions to include in discovery: JS/TS family + Python (ADR-020
@@ -97,6 +97,12 @@ export function useDiscoveryLifecycle({
 }) {
   const ranForTokenRef = useRef(null);
   const armedTokenRef = useRef(null);
+  // Discovery-in-flight signal for the owner bridge (brief §("Bridge inputs"),
+  // P4c): true while an initial run or a refresh is reading files, or while
+  // armed for the current load but not yet started. The graph reports
+  // `partial` with a "discovery run pending" reason while it is true. A ref,
+  // not state: the bridge polls it when it answers; no re-render is needed.
+  const initialRunInFlightRef = useRef(false);
   const armedPiecesRef = useRef(null);
   const latestArgsRef = useRef(null);
   const refreshTimerRef = useRef(null);
@@ -192,6 +198,7 @@ export function useDiscoveryLifecycle({
     if (action !== 'run') return;
 
     ranForTokenRef.current = loadToken;
+    initialRunInFlightRef.current = true;
     _runDiscovery({
       projectRoot,
       syntaxDomain,
@@ -204,8 +211,20 @@ export function useDiscoveryLifecycle({
     }).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn('[discovery] Error during import discovery:', err);
+    }).finally(() => {
+      initialRunInFlightRef.current = false;
     });
   }, [enabled, projectRoot, loadToken, syntaxDomain, syntaxAdapter, connectionDomain, piecesById, persistedSides]);
+
+  // Whether discovery is reading or armed but not yet started (brief §("Bridge
+  // inputs"), P4c). Read-only; the owner bridge polls it when it answers
+  // `workspace.graph`.
+  const isDiscoveryInFlight = () =>
+    initialRunInFlightRef.current
+    || refreshInFlightRef.current
+    || (loadToken != null && armedTokenRef.current === loadToken && ranForTokenRef.current !== loadToken);
+
+  return { isDiscoveryInFlight };
 }
 
 // ---------------------------------------------------------------------------
@@ -343,22 +362,32 @@ async function _runDiscovery({ projectRoot, syntaxDomain, syntaxAdapter, connect
 
   // 4. Read files, then register them with syntaxDomain — all at once, after
   // the last read, so a run stopped mid-read registers nothing.
+  // Discovery reads disk, so it registers with the disk revision Rust mints
+  // for the bytes read (brief §4.5/§7.4): the graph can then tell whether the
+  // text the index parsed is still the file's effective text. A read that
+  // cannot carry a revision registers none (reads `unknown`, never a wrong
+  // `current`).
   const fileContents = new Map();
   for (const absPath of discoverableFiles) {
     const relPath = absPath.slice(root.length + 1);
-    const text = await readProjectFile(projectRoot, relPath);
+    const read = await readProjectFileWithRevision(projectRoot, relPath);
     if (!isCurrent()) return;
-    if (text != null) fileContents.set(absPath, text);
+    if (read && read.text != null) {
+      const parsedRevision = typeof read.revision === 'string'
+        ? { source: 'disk', revision: read.revision }
+        : undefined;
+      fileContents.set(absPath, { text: read.text, parsedRevision });
+    }
   }
-  for (const [absPath, text] of fileContents) {
-    syntaxDomain.commands.registerFile(absPath, text);
+  for (const [absPath, { text, parsedRevision }] of fileContents) {
+    syntaxDomain.commands.registerFile(absPath, text, parsedRevision);
   }
 
   // 5. Discover edges
   const { edges } = discoverProjectEdges({
     projectRoot,
     filePaths: [...fileContents.keys()],
-    readFile: (path) => fileContents.get(path) ?? null,
+    readFile: (path) => fileContents.get(path)?.text ?? null,
   });
 
   // 6. Create canvas connections + syntax edges for discovered edges

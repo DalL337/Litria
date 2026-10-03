@@ -187,7 +187,11 @@ marked below.
   application). Parser: `src/app/jstsSymbolParser.js` (editor-agnostic JS/TS export
   extractor).
 - Owns: symbol index, port index, syntax connection graph, import binding records, patch
-  plan generation for connection-driven code updates.
+  plan generation for connection-driven code updates, and (Project API build plan P4c,
+  2026-10-03) the per-file parsed-text revision — `{ source: 'editor' | 'disk', revision }`
+  set through its text chokepoint — exposed read-only through `getParsedRevision`, alongside
+  the per-connection provenance selectors `getProvenanceForConnection` /
+  `getAllEdgeProvenance` the `workspace.graph` bridge op and `litria_graph_query` read.
 - Depends on: none (pure domain); the adapter depends on the Monaco model API only.
 - Related pure services: `src/app/discoveryEngine.js` (discovers edges from existing
   imports/exports), `src/app/exportBlockManager.js` (managed `export { }` block utilities),

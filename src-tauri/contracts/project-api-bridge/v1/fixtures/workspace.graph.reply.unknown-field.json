@@ -1,0 +1,16 @@
+{
+  "kind": "result",
+  "result": {
+    "nodes": [
+      {
+        "path": "src/a.ts",
+        "onCanvas": true,
+        "discoverable": true,
+        "sneakyField": 1
+      }
+    ],
+    "edges": [],
+    "discoveryInFlight": false,
+    "omitted": 0
+  }
+}

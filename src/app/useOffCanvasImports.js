@@ -15,7 +15,7 @@
  * brings the entry back. No stored badge state.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { buildPathToPiece, createConnectionsForEdges } from './useDiscoveryLifecycle.js';
 import { pieceScale } from '../utils/spatialGeometry2d.js';
 
@@ -50,6 +50,12 @@ export function useOffCanvasImports({
   PIECE_WIDTH,
 }) {
   const [pendingEdges, setPendingEdges] = useState([]);
+  // The owner bridge reads the pending-edge set through a ref so it sees the
+  // live value without this hook having to run before `useProjectApiBridge`
+  // (brief §("Bridge inputs"), P4c): the graph is built from pieces, wires and
+  // pending edges, never from raw SyntaxDomain registrations.
+  const pendingEdgesRef = useRef([]);
+  pendingEdgesRef.current = pendingEdges;
   // null | { pieceId, entries: [{ id: absPath, label }], style }
   const [badgeMenu, setBadgeMenu] = useState(null);
 
@@ -135,6 +141,10 @@ export function useOffCanvasImports({
 
   return {
     onPendingEdges,
+    /** Read-only, live view of the off-canvas pending-edge set for the owner
+     *  bridge's `workspace.graph` answer (P4c). Each edge carries its absolute
+     *  sourceFilePath (exporter) and targetFilePath (importer). */
+    getPendingEdges: () => pendingEdgesRef.current,
     offCanvasCountByPieceId,
     badgeMenu,
     openOffCanvasBadgeMenu,

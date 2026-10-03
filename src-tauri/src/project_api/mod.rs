@@ -14,9 +14,10 @@
 pub(crate) mod bridge;
 mod context;
 mod files_read;
+mod graph_query;
 mod paths;
 pub(crate) mod policy;
-mod reader;
+pub(crate) mod reader;
 mod search;
 mod walk;
 mod workspace;
@@ -33,6 +34,7 @@ use crate::contracts::context::{CallContext, Grant, Principal};
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::files_read::FilesReadOp;
 use crate::contracts::project_api::files_search::FilesSearchOp;
+use crate::contracts::project_api::graph_query::GraphQueryOp;
 use crate::contracts::project_api::project_context::ProjectContextOp;
 #[cfg(debug_assertions)]
 use crate::contracts::project_api_bridge::{BridgeRequestEvent, REQUEST_EVENT};
@@ -53,6 +55,7 @@ pub(crate) fn dispatcher() -> &'static Dispatcher {
         dispatcher.register::<FilesReadOp>(files_read::handle);
         dispatcher.register::<ProjectContextOp>(context::handle);
         dispatcher.register::<FilesSearchOp>(search::handle);
+        dispatcher.register::<GraphQueryOp>(graph_query::handle);
         dispatcher
     })
 }

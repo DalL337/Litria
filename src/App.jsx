@@ -290,6 +290,7 @@ function App() {
     []
   );
   const readProjectFile = projectDomain.commands.readFile;
+  const readProjectFileWithRevision = projectDomain.commands.readFileWithRevision;
   const openFileDialog = projectDomain.commands.openFileDialog;
   const writeProjectFile = projectDomain.commands.writeFile;
   const moveProjectPath = projectDomain.commands.movePath;
@@ -490,6 +491,10 @@ function App() {
     [projectInstance?._dbState]
   );
 
+  // The graph owners (SyntaxDomain, the off-canvas pending-edge set, the
+  // discovery-in-flight signal) are created below this call; the bridge reads
+  // them through this ref at request time (populated after those hooks run).
+  const graphOwnersRef = useRef({});
   useProjectApiBridge({
     projectInstance,
     sessionReadyFor,
@@ -497,7 +502,8 @@ function App() {
     piecesById,
     selectedGroupId,
     groups,
-    languageSupportDomain
+    languageSupportDomain,
+    graphOwnersRef
   });
 
   useTerminalLifecycle({
@@ -577,6 +583,7 @@ function App() {
     // The same load identity discovery keys on: a new load empties the index.
     loadToken: projectInstance?._dbState ?? null,
     readProjectFile,
+    readProjectFileWithRevision,
     // Manager-backed + identity-stable: a churning writer identity would
     // recreate the adapter and wipe its Monaco model registry.
     writeProjectFile: writeContentFile,
@@ -740,6 +747,7 @@ function App() {
     openOffCanvasBadgeMenu,
     dismissOffCanvasBadgeMenu,
     handlePlaceOffCanvasImport,
+    getPendingEdges,
   } = useOffCanvasImports({
     piecesById,
     projectRootPath: projectInstance?.rootPath ?? null,
@@ -752,7 +760,7 @@ function App() {
     PIECE_WIDTH,
   });
 
-  useDiscoveryLifecycle({
+  const { isDiscoveryInFlight } = useDiscoveryLifecycle({
     projectRoot: projectInstance?.rootPath ?? null,
     // Fresh object per dbOpenProject (incl. reopening the same project), so
     // discovery re-runs on every project load — not just the first of a session.
@@ -768,9 +776,14 @@ function App() {
     enabled: !!projectInstance?.rootPath,
   });
 
+  // The Project API bridge reads the graph owners through this ref (it is
+  // created above, before these owners exist), so `workspace.graph` sees the
+  // latest SyntaxDomain, pending edges and discovery state at request time.
+  graphOwnersRef.current = { syntaxDomain, getPendingEdges, isDiscoveryInFlight };
+
   const fsManager = useFilesystemWriteManager({
     managerRef: fsManagerRef,
-    moveProjectPath, writeProjectFile, deleteProjectPath, readProjectFile,
+    moveProjectPath, writeProjectFile, deleteProjectPath, readProjectFile, readProjectFileWithRevision,
     pieceDomain, groupDomain, connectionDomain, syntaxDomain,
     piecesById, piecesByFilename, pieces, groups, groupByPieceId,
     updateTabFilename, closeTab, bumpScaffoldRefresh, projectInstance,
