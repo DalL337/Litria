@@ -70,6 +70,26 @@ Do not use it for:
   finds more than adjustments, move to an ordinary PR review with the owner
   rather than looping again.
 
+## Rule 3a — Choosing the Reviewer
+
+(Added 2026-10-03, owner decision, from the P4c graph-query run.) **When the
+arc builds or changes an enforcement point**
+([adversarial check policy](adversarial-check-policy.md) Rule 1: disclosure
+decisions, path guards, check-then-act filesystem code), use a Claude reviewer
+(the runner's checker option). The P4c run's Codex review was stopped partway
+by its provider's content-safety refusal while it probed the disclosure policy
+with a junction into `.git`, the very check the arc needed. Its partial
+findings were still real (nine of eleven reproduced), so before re-running or
+cleaning up:
+
+- salvage what a stopped reviewer left: its messages in the run's logs and any
+  notes or scripts in its review copy;
+- reproduce each finding and turn it into a task with a failing test, so the
+  security cases are covered by tests rather than depending on a reviewer's
+  probing;
+- tell the reviewer, in the arc, to keep scratch files outside its repository
+  copy: files it creates there mark the review as modified.
+
 ## Rule 4 — From Run to Pull Request
 
 - The run's `relay/<id>` branch is a local working branch. Replay its commits
