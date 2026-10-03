@@ -39,6 +39,7 @@ execution error.
 | Creating or changing an enforcement point: access/disclosure decisions, path guards, grants, trust-boundary validation and limits, check-then-act filesystem code, concurrency fences | `docs/adversarial-check-policy.md` — before calling the slice done / opening its PR (budgeted; not for UI, docs or unrelated fixes) |
 | Writing tests for code that produces or consumes a signal another module acts on (readiness, "loaded", current epoch, permission) | `docs/test-authoring-policy.md` |
 | Adding/updating dependencies; changing external tools, CLI arguments, generated-project recipes, or supported combinations; releasing recipes with moving dependencies | `docs/dependency-change-policy.md` — compatibility evidence in addition to security review |
+| Handing a written arc to the owner's unattended build-and-review runner (Arc Relay), or acting on its review | `docs/unattended-arc-policy.md` — before writing the arc; Rule 1 says when the runner is the right tool |
 
 Reserved scopes — files exist but are empty; rules accumulate as lessons are
 learned. An empty policy means no rules exist yet for that scope: proceed on
