@@ -4,6 +4,11 @@ Status: Proposed, 2026-10-03, as the arc for one unattended build-and-review run
 ([unattended arc policy](../../../Agents/docs/unattended-arc-policy.md)). One
 agent builds the whole checklist, a second agent reviews the result once, and
 nothing merges without the owner.
+Revised 2026-10-03 after the first review: the reviewer's provider stopped
+that review partway with a content-safety refusal while it probed the
+disclosure policy, but not before it found the defects listed under
+"First review" below. Each was reproduced against `e6e0285` and became one of
+tasks 9–17. The next review is done by a Claude reviewer (owner decision).
 
 Authority: [Project API contract brief](brief-project-api-contract.md) §4.5
 (revisions), §5 (effective reads), §6 (disclosure policy), §7.4 (graph query)
@@ -39,6 +44,15 @@ relationships, with derived provenance and honest per-node freshness (brief
 - [x] Tests: everything in the build plan's P4 Tests list and every sequence under "Sequences that must hold" below, in JavaScript and Rust.
 - [x] Docs: build-plan slice map (P3 row Done with PR #90; P4 row Done, PR pending), a P4c record in the build plan, the Domain Register entry in `docs/Orchestration.md`, and `docs/rust-command-contracts.md` for any command added.
 - [x] Record evidence under Evidence below; check:architecture, test:domains, build and cargo test pass, and `cargo build` has zero warnings.
+- [ ] Bridge paths: the graph snapshot converts absolute SyntaxDomain keys (edges and parsed revisions) to the project-relative paths that pieces and requests use, proven by a test that drives the real SyntaxDomain and adapter with an absolute project root (first review 1).
+- [ ] Manual wires: the production graph port reads canvas connections, so a wire with no syntax edge appears as a `manual` edge through the production snapshot, not an injected one (first review 2).
+- [ ] Policy at every step: every frontier path, every edge endpoint and every folder is resolved with `identity` before it becomes a node, a folder, an edge endpoint or the next frontier; a path whose identity is `Denied` (for example reached through a junction or link into `.git`) never appears and is never walked through (first review 3 and 8).
+- [ ] Closed neighbourhood: every returned edge's endpoints are returned nodes; at the outer boundary of the requested depth an endpoint is policy-checked and returned as a node, or the edge is dropped (first review 4).
+- [ ] `maxNodes` limits the walk: expansion stops when the node budget is reached, no edge reaches past the returned nodes, and the truncation is flagged (first review 5).
+- [ ] The encoded response never exceeds the dispatcher's response ceiling, including the truncation fields themselves (first review 6).
+- [ ] Symbol truncation at 50 per edge is flagged in the response (first review 7).
+- [ ] Discovery-in-flight signal: true while a refresh is armed but not started, and a previous project's run finishing never clears the current project's signal (first review 9 and 10).
+- [ ] Off-canvas files get the same node facts as on-canvas ones, including `discoverable` from the file name, proven by a test (first review 11).
 
 ## Requirements
 
@@ -174,6 +188,57 @@ Each needs a test. An arc that names only the goal gets exactly the goal.
 - **Canvas shapes:** an off-canvas discovered edge (from the pending-edge set),
   a manual wire with no syntax edge, a file in a folder group and one in a
   legacy group.
+
+## First review (2026-10-03)
+
+The reviewer worked against `e6e0285` and was stopped by its provider before it
+wrote a report. These findings come from its notes and reproduction scripts,
+and were re-run against the same commit before being written here. All are
+reproduced unless marked suspected.
+
+1. **Paths never meet.** The bridge snapshot keeps SyntaxDomain's absolute keys
+   (`C:/…/src/app.js`) while pieces and requests use project-relative paths, so
+   a query for `src/app.js` returned no edges and `parsed: null`. In production
+   the graph is empty.
+2. **Manual wires are never read.** The production graph port is never given the
+   canvas connections; the manual-wire test inserts an edge directly. A wire
+   with no syntax edge produced no edge.
+3. **Policy bypass through a link.** The walk resolved identity only for the
+   seed paths. With `alias` a junction to the denied `.git` directory,
+   `identity("alias/secret.ts")` returned `Denied`, yet `alias/secret.ts` was
+   returned as a node and the walk continued through it to `c.ts`.
+4. **Dangling edges.** At depth 1 the result listed only the focus as a node
+   while returning an edge to its neighbour; at depth 2 an edge reached a file
+   that was not returned or checked.
+5. **`maxNodes` applied late.** With `maxNodes: 1` the walk still expanded twice
+   and returned two edges.
+6. **Response ceiling overrun.** A response truncated for size was still over its
+   ceiling (210 bytes against 197 in a scaled test; 393 221 against the
+   production 393 216).
+7. **Symbols cut silently** at 50 per edge, with no flag (suspected; confirm with
+   a test).
+8. **Denied folder disclosed.** A node in a folder group at `.git` returned
+   `folder: ".git"` and a `.git` folder node.
+9. **Discovery signal false while a refresh is armed** (`signal: false` after a
+   refresh was scheduled and before it read anything).
+10. **Discovery signal cleared by the previous project.** With runs for project A
+    and project B both reading, A's run finishing set the signal to false while
+    B's run was still reading.
+11. **Off-canvas facts.** An off-canvas `.js` focus reported `discoverable: false`
+    (suspected; confirm with a test, and record it if it is intended).
+
+The review never reached freshness or lifecycle in depth. The next reviewer
+should cover them as well as tasks 9–17.
+
+**For tasks 9–17,** write each test first, run it against `e6e0285` (it must
+fail, except the two suspected items, which may turn out correct), and record
+the result under Evidence. Rust link tests: `src-tauri/src/project_api/reader.rs`
+has `a_junction_into_a_denied_directory_is_denied` and a `junction` helper
+(Windows `mklink /J`, no privilege needed; remove the junction before the tree).
+
+**Reviewer:** put any scratch reproduction files in the operating system's temp
+directory, never inside the repository copy; files created in the copy mark the
+review as modified.
 
 ## Models and commands
 
