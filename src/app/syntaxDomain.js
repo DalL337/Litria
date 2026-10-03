@@ -1796,6 +1796,15 @@ export function createSyntaxDomain() {
       return fileStatus.get(filePath);
     },
 
+    /**
+     * The text the index currently holds for a file, or null when it holds
+     * none. Read-only: the adapter compares it before applying a tab close's
+     * late disk read (tab-close build plan, 2026-10-03).
+     */
+    getFileText(filePath) {
+      return fileTextCache.get(filePath) ?? null;
+    },
+
     getImportBinding(connectionId) {
       return bindingMap.get(connectionId) ?? null;
     },

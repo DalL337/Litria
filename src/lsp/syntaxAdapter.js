@@ -161,7 +161,23 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
 
   // ---- File lifecycle -------------------------------------------------------
 
+  /**
+   * Per-path lifecycle ticket. Every open, close and rename of a path through
+   * this adapter takes a new one, so a close whose disk read returns later can
+   * tell a newer event superseded it (first review F2/F3, 2026-10-03).
+   *
+   * @type {Map<string, number>}
+   */
+  const fileTickets = new Map();
+
+  function nextTicket(filePath) {
+    const ticket = (fileTickets.get(filePath) ?? 0) + 1;
+    fileTickets.set(filePath, ticket);
+    return ticket;
+  }
+
   function onFileOpened(filePath, text, model = null) {
+    nextTicket(filePath);
     syntaxDomain.commands.registerFile(filePath, text);
     if (model) modelRegistry.set(filePath, model);
   }
@@ -183,15 +199,22 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
    * returned promise, and every path is caught so there is no unhandled
    * rejection. Tests await the promise.
    *
-   * A reopen that lands while the disk read is in flight wins: onFileOpened
-   * re-populates the registry, and the stale disk text must not overwrite the
-   * reopened model's freshly-registered text.
+   * Anything that changes the file's index entry while the read is in flight
+   * wins over it, success or failure (first review F1–F3, 2026-10-03): a
+   * reopen, a newer close or a rename through this adapter (its ticket moved
+   * on), or a project reset, a delete, a filesystem rename or a write (the
+   * indexed text is no longer what the close saw). A close never adds a file
+   * the index does not hold: after a project reset, the closing tabs belong to
+   * the previous project.
    *
    * @param {string} filePath
    * @returns {Promise<void>}
    */
   async function onFileClosed(filePath) {
     modelRegistry.delete(filePath);
+    const ticket = nextTicket(filePath);
+    const indexed = syntaxDomain.selectors.getFileText(filePath);
+    if (indexed == null) return;
 
     if (!readProjectFile) {
       syntaxDomain.commands.unregisterFile(filePath);
@@ -205,9 +228,8 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
       diskText = null;
     }
 
-    // Reopen-during-read wins: the file is open again, so its live model text
-    // is authoritative — do not clobber it with the stale disk read.
-    if (modelRegistry.has(filePath)) return;
+    if (fileTickets.get(filePath) !== ticket) return;
+    if (syntaxDomain.selectors.getFileText(filePath) !== indexed) return;
 
     if (diskText == null) {
       // Missing from disk or unreadable: keep today's behavior.
@@ -457,6 +479,8 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
    * @returns {Promise<{ patchesApplied: number }>}
    */
   async function onFileRenamed(oldPath, newPath) {
+    nextTicket(oldPath);
+    nextTicket(newPath);
     const model = modelRegistry.get(oldPath);
     if (model) {
       modelRegistry.set(newPath, model);

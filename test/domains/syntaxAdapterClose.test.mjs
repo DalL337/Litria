@@ -151,3 +151,111 @@ test('a reopen during the disk read wins: stale disk text does not overwrite the
   assert.ok(names.includes('fresh'), 'the reopened model text wins');
   assert.ok(!names.includes('old'), 'the stale disk text did not overwrite the reopened model');
 });
+
+// ---------------------------------------------------------------------------
+// A close's disk read finishes later, and anything that changed the file's
+// index entry meanwhile wins over it (first review, 2026-10-03: F1 project
+// switch, F2 repeated close, F3 rename/delete; plus writes and same-root
+// reloads). Every read below is held on its own gate and released in the
+// order the race needs.
+// ---------------------------------------------------------------------------
+
+const UTILS = '/proj/src/utils.js';
+const OLD = 'export function old() {}\n';
+const FRESH = 'export function fresh() {}\n';
+
+/** Disk reads that wait until the test releases them, one gate per read, in call order. */
+function gatedReads() {
+  const gates = [];
+  return {
+    readProjectFile: () => new Promise((resolve) => gates.push(resolve)),
+    release: (index, text) => gates[index](text),
+    get count() { return gates.length; },
+  };
+}
+
+function setupRace() {
+  const reads = gatedReads();
+  const setup = setupAdapter({ 'src/utils.js': OLD }, { readProjectFile: reads.readProjectFile });
+  return { ...setup, reads };
+}
+
+const names = (domain, path = UTILS) => domain.selectors.getDefinitionsForFile(path).map((d) => d.name);
+
+test('a project reset during the disk read leaves the old path unindexed (F1)', async () => {
+  const { domain, adapter, reads } = setupRace();
+  const closing = adapter.onFileClosed(UTILS);
+  domain.commands.reset();
+  reads.release(0, OLD);
+  await closing;
+  assert.deepEqual(domain.selectors.getRegisteredFilesUnder('/proj'), []);
+});
+
+test('a close after the index was reset adds nothing (F1, reset first)', async () => {
+  const { domain, adapter, reads } = setupRace();
+  domain.commands.reset();
+  const closing = adapter.onFileClosed(UTILS);
+  if (reads.count) reads.release(0, OLD);
+  await closing;
+  assert.deepEqual(domain.selectors.getRegisteredFilesUnder('/proj'), []);
+});
+
+test('an older close loses to a newer close of the same file, stale text or stale failure (F2)', async () => {
+  for (const stale of [OLD, null]) {
+    const { domain, adapter, reads } = setupRace();
+    const first = adapter.onFileClosed(UTILS);
+    adapter.onFileOpened(UTILS, FRESH, fakeModel(FRESH));
+    const second = adapter.onFileClosed(UTILS);
+    reads.release(1, FRESH);
+    await second;
+    reads.release(0, stale);
+    await first;
+    assert.deepEqual(names(domain), ['fresh'], `stale read returning ${stale === null ? 'null' : 'old text'}`);
+  }
+});
+
+test('a reopen without a model during the read wins (F2, optional-model form)', async () => {
+  const { domain, adapter, reads } = setupRace();
+  const closing = adapter.onFileClosed(UTILS);
+  adapter.onFileOpened(UTILS, FRESH);
+  reads.release(0, OLD);
+  await closing;
+  assert.deepEqual(names(domain), ['fresh']);
+});
+
+test('a rename during the read leaves only the new path (F3)', async () => {
+  const { domain, adapter, reads } = setupRace();
+  const closing = adapter.onFileClosed(UTILS);
+  await adapter.onFileRenamed(UTILS, '/proj/src/renamed.js');
+  reads.release(0, OLD);
+  await closing;
+  assert.deepEqual(domain.selectors.getRegisteredFilesUnder('/proj'), ['/proj/src/renamed.js']);
+});
+
+test('a delete during the read keeps the path forgotten (F3)', async () => {
+  const { domain, adapter, reads } = setupRace();
+  const closing = adapter.onFileClosed(UTILS);
+  domain.commands.forgetFile(UTILS);
+  reads.release(0, OLD);
+  await closing;
+  assert.deepEqual(domain.selectors.getRegisteredFilesUnder('/proj'), []);
+});
+
+test('a write that re-indexes the file during the read wins', async () => {
+  const { domain, adapter, reads } = setupRace();
+  const closing = adapter.onFileClosed(UTILS);
+  domain.commands.notifyFileChanged(UTILS, 'export function written() {}\n');
+  reads.release(0, OLD);
+  await closing;
+  assert.deepEqual(names(domain), ['written']);
+});
+
+test('a same-root reload that re-indexes the file during the read keeps the newer text', async () => {
+  const { domain, adapter, reads } = setupRace();
+  const closing = adapter.onFileClosed(UTILS);
+  domain.commands.reset();
+  domain.commands.registerFile(UTILS, 'export function reloaded() {}\n');
+  reads.release(0, OLD);
+  await closing;
+  assert.deepEqual(names(domain), ['reloaded']);
+});
