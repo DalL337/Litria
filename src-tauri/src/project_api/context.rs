@@ -21,9 +21,12 @@ use crate::contracts::context::CallContext;
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::files_read::{DEFAULT_BYTES_PER_DOCUMENT, MAX_BYTES_PER_DOCUMENT, MAX_DOCUMENTS};
 use crate::contracts::project_api::files_search::{DEFAULT_RESULTS, MAX_QUERY_LENGTH, MAX_RESULTS, PREVIEW_LENGTH};
+use crate::contracts::project_api::graph_query::{
+    DEFAULT_DEPTH, DEFAULT_MAX_NODES, MAX_DEPTH, MAX_EDGES, MAX_NODES, MAX_SYMBOLS_PER_EDGE,
+};
 use crate::contracts::project_api::project_context::{
-    ActiveDocument, DocumentsSummary, FilesReadLimits, FilesSearchLimits, LanguageCapabilities, LanguageServer,
-    PolicySummary, ProjectContextLimits, ProjectContextRequest, ProjectContextResult, ProjectSummary,
+    ActiveDocument, DocumentsSummary, FilesReadLimits, FilesSearchLimits, GraphQueryLimits, LanguageCapabilities,
+    LanguageServer, PolicySummary, ProjectContextLimits, ProjectContextRequest, ProjectContextResult, ProjectSummary,
     SelectionSummary, ServerLimits, MAX_LISTED_PATHS,
 };
 use crate::contracts::project_api::API_VERSION;
@@ -256,6 +259,14 @@ fn limits() -> ServerLimits {
         project_context: ProjectContextLimits {
             max_listed_paths: MAX_LISTED_PATHS as u32,
         },
+        graph: GraphQueryLimits {
+            default_depth: DEFAULT_DEPTH,
+            max_depth: MAX_DEPTH,
+            default_max_nodes: DEFAULT_MAX_NODES,
+            max_nodes: MAX_NODES,
+            max_edges: MAX_EDGES,
+            max_symbols_per_edge: MAX_SYMBOLS_PER_EDGE,
+        },
     }
 }
 
@@ -265,6 +276,7 @@ mod tests {
     use crate::contracts::context::{Grant, Principal};
     use crate::contracts::project_api::files_read::FilesReadOp;
     use crate::contracts::project_api::files_search::FilesSearchOp;
+    use crate::contracts::project_api::graph_query::GraphQueryOp;
     use crate::contracts::project_api::project_context::{DeniedClass, ProjectContextOp};
     use crate::contracts::catalog::Operation;
     use crate::contracts::project_api_bridge::editor::BufferIndexEntry;
@@ -571,7 +583,12 @@ mod tests {
         );
         assert_eq!(
             dispatcher.operations_for(&Grant::of(dispatcher.capabilities())),
-            [FilesReadOp::NAME, FilesSearchOp::NAME, ProjectContextOp::NAME]
+            [
+                FilesReadOp::NAME,
+                FilesSearchOp::NAME,
+                GraphQueryOp::NAME,
+                ProjectContextOp::NAME
+            ]
         );
         assert!(dispatcher.operations_for(&Grant::default()).is_empty());
     }

@@ -140,6 +140,7 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
         entry::bridge_entry::<editor::DocumentsOp>(),
         entry::bridge_entry::<editor::BufferIndexOp>(),
         entry::bridge_entry::<workspace::SelectionOp>(),
+        entry::bridge_entry::<workspace::GraphOp>(),
         entry::bridge_entry::<languages::CapabilitiesOp>(),
     ]
 }
@@ -150,7 +151,7 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
 pub(crate) mod samples {
     use super::editor::{BufferIndexOp, BufferIndexRequest, DocumentQuery, DocumentsOp, DocumentsRequest};
     use super::languages::{CapabilitiesOp, CapabilitiesRequest};
-    use super::workspace::{SelectionOp, SelectionRequest};
+    use super::workspace::{GraphDirection, GraphOp, GraphRequest, SelectionOp, SelectionRequest};
     use super::{BridgeOperation, BridgeRequestEvent};
 
     fn event<O: BridgeOperation>(request: &O::Request) -> BridgeRequestEvent {
@@ -194,6 +195,14 @@ pub(crate) mod samples {
 
     pub(crate) fn selection_event() -> BridgeRequestEvent {
         event::<SelectionOp>(&SelectionRequest { max_paths: 1000 })
+    }
+
+    pub(crate) fn graph_event() -> BridgeRequestEvent {
+        event::<GraphOp>(&GraphRequest {
+            paths: vec!["src/a.ts".into(), "src/b.ts".into()],
+            direction: GraphDirection::Both,
+            max_edges_per_node: 500,
+        })
     }
 
     pub(crate) fn capabilities_event() -> BridgeRequestEvent {

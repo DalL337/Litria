@@ -430,6 +430,51 @@
       "message": "result",
       "expect": "accept",
       "note": "Outputs are read tolerantly: unknown fields are ignored."
+    },
+    {
+      "file": "graph_query.result.json",
+      "operation": "litria_graph_query",
+      "message": "result",
+      "expect": "accept",
+      "note": "Both node kinds, every freshness and reason, both edge provenances, exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "graph_query.request.minimal.json",
+      "operation": "litria_graph_query",
+      "message": "request",
+      "expect": "accept",
+      "note": "No fields: focus takes the current selection, depth, direction and maxNodes their defaults."
+    },
+    {
+      "file": "graph_query.request.full.json",
+      "operation": "litria_graph_query",
+      "message": "request",
+      "expect": "accept",
+      "note": "Every field explicit, maxNodes at the server ceiling."
+    },
+    {
+      "file": "graph_query.request.unknown-field.json",
+      "operation": "litria_graph_query",
+      "message": "request",
+      "expect": "reject",
+      "note": "Unknown fields are rejected.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "graph_query.request.max-nodes-over-ceiling.json",
+      "operation": "litria_graph_query",
+      "message": "request",
+      "expect": "reject",
+      "note": "maxNodes is at most 100.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "graph_query.request.depth-out-of-range.json",
+      "operation": "litria_graph_query",
+      "message": "request",
+      "expect": "reject",
+      "note": "depth is 1 or 2.",
+      "errorCode": "invalidParams"
     }
   ]
 }

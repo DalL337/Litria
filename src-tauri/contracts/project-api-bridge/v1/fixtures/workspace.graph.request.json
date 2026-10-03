@@ -1,0 +1,14 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "workspace.graph",
+  "request": {
+    "direction": "both",
+    "maxEdgesPerNode": 500,
+    "paths": [
+      "src/a.ts",
+      "src/b.ts"
+    ]
+  },
+  "requestId": "r1"
+}

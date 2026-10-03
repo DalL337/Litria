@@ -1,9 +1,19 @@
 # P4c graph query: build plan
 
-Status: Proposed, 2026-10-03, as the arc for one unattended build-and-review run
+Status: Delivered, 2026-10-03, on branch `feat/p4c-graph-query` after three
+unattended runs, two reviews, a live pass and one hand fix (see Verification).
+Proposed 2026-10-03 as the arc for one unattended build-and-review run
 ([unattended arc policy](../../../Agents/docs/unattended-arc-policy.md)). One
 agent builds the whole checklist, a second agent reviews the result once, and
 nothing merges without the owner.
+Revised 2026-10-03 after the first review: the reviewer's provider stopped
+that review partway with a content-safety refusal while it probed the
+disclosure policy, but not before it found the defects listed under
+"First review" below. Each was reproduced against `e6e0285` and became one of
+tasks 9–17. The next review is done by a Claude reviewer (owner decision).
+Revised again 2026-10-03 after the second review (approved) and the live pass:
+the live pass found four defects no test or review had caught, listed under
+"Live pass" below, and they became tasks 18–21.
 
 Authority: [Project API contract brief](brief-project-api-contract.md) §4.5
 (revisions), §5 (effective reads), §6 (disclosure policy), §7.4 (graph query)
@@ -31,14 +41,27 @@ relationships, with derived provenance and honest per-node freshness (brief
 
 ## Tasks
 
-- [ ] Parsed revisions: SyntaxDomain records, for each registered file, the source (`editor` or `disk`) and revision of the text it parsed, exposed through a read-only selector; a registration without a revision records none.
-- [ ] Every path that registers text in SyntaxDomain supplies its revision: editor open and change, discovery, the tab-close re-index, the filesystem write manager's re-index, and adapter writes; a rename carries the entry's parsed revision to the new path.
-- [ ] Provenance per connection, the off-canvas pending-edge set and a discovery-in-flight signal are available to the owner bridge.
-- [ ] Bridge operation `workspace.graph`: a frontier-scoped request answered with node facts and incident edges, bounded and refusing cleanly; JavaScript answer, Rust contract types, fixtures and regenerated artifacts.
-- [ ] Tool `litria_graph_query` (capability `project.graph.read`): contract types, catalog entry, advertised limits and the Rust handler, with the policy applied before each expansion, ceilings with truncation flags, per-node freshness and the summary with its reasons.
-- [ ] Tests: everything in the build plan's P4 Tests list and every sequence under "Sequences that must hold" below, in JavaScript and Rust.
-- [ ] Docs: build-plan slice map (P3 row Done with PR #90; P4 row Done, PR pending), a P4c record in the build plan, the Domain Register entry in `docs/Orchestration.md`, and `docs/rust-command-contracts.md` for any command added.
-- [ ] Record evidence under Evidence below; check:architecture, test:domains, build and cargo test pass, and `cargo build` has zero warnings.
+- [x] Parsed revisions: SyntaxDomain records, for each registered file, the source (`editor` or `disk`) and revision of the text it parsed, exposed through a read-only selector; a registration without a revision records none.
+- [x] Every path that registers text in SyntaxDomain supplies its revision: editor open and change, discovery, the tab-close re-index, the filesystem write manager's re-index, and adapter writes; a rename carries the entry's parsed revision to the new path.
+- [x] Provenance per connection, the off-canvas pending-edge set and a discovery-in-flight signal are available to the owner bridge.
+- [x] Bridge operation `workspace.graph`: a frontier-scoped request answered with node facts and incident edges, bounded and refusing cleanly; JavaScript answer, Rust contract types, fixtures and regenerated artifacts.
+- [x] Tool `litria_graph_query` (capability `project.graph.read`): contract types, catalog entry, advertised limits and the Rust handler, with the policy applied before each expansion, ceilings with truncation flags, per-node freshness and the summary with its reasons.
+- [x] Tests: everything in the build plan's P4 Tests list and every sequence under "Sequences that must hold" below, in JavaScript and Rust.
+- [x] Docs: build-plan slice map (P3 row Done with PR #90; P4 row Done, PR pending), a P4c record in the build plan, the Domain Register entry in `docs/Orchestration.md`, and `docs/rust-command-contracts.md` for any command added.
+- [x] Record evidence under Evidence below; check:architecture, test:domains, build and cargo test pass, and `cargo build` has zero warnings.
+- [x] Bridge paths: the graph snapshot converts absolute SyntaxDomain keys (edges and parsed revisions) to the project-relative paths that pieces and requests use, proven by a test that drives the real SyntaxDomain and adapter with an absolute project root (first review 1).
+- [x] Manual wires: the production graph port reads canvas connections, so a wire with no syntax edge appears as a `manual` edge through the production snapshot, not an injected one (first review 2).
+- [x] Policy at every step: every frontier path, every edge endpoint and every folder is resolved with `identity` before it becomes a node, a folder, an edge endpoint or the next frontier; a path whose identity is `Denied` (for example reached through a junction or link into `.git`) never appears and is never walked through (first review 3 and 8).
+- [x] Closed neighbourhood: every returned edge's endpoints are returned nodes; at the outer boundary of the requested depth an endpoint is policy-checked and returned as a node, or the edge is dropped (first review 4).
+- [x] `maxNodes` limits the walk: expansion stops when the node budget is reached, no edge reaches past the returned nodes, and the truncation is flagged (first review 5).
+- [x] The encoded response never exceeds the dispatcher's response ceiling, including the truncation fields themselves (first review 6).
+- [x] Symbol truncation at 50 per edge is flagged in the response (first review 7).
+- [x] Discovery-in-flight signal: true while a refresh is armed but not started, and a previous project's run finishing never clears the current project's signal (first review 9 and 10).
+- [x] Off-canvas files get the same node facts as on-canvas ones, including `discoverable` from the file name, proven by a test (first review 11).
+- [x] Empty canvas: while discovery for the current load is waiting for pieces on the canvas, the graph reports a distinct reason saying so instead of `discoveryInFlight`; the in-flight signal means discovery is reading or about to read (live pass 1, owner decision: report honestly, keep discovery canvas-driven).
+- [x] Folder facts come from group membership (`group.pieceIds`), the way production stores it, and every test builds pieces the way production does, with no `groupId` field on a piece (live pass 2).
+- [x] No literal NUL or other control characters in source files: the key separator in `src/app/projectApiBridge.js` is written as an escape, and `git diff --numstat` reports the file as text (live pass 3).
+- [x] A focus that does not exist answers the way `litria_files_read` answers that path (`notFound`, no nodes), never as a resolved node (live pass 4).
 
 ## Requirements
 
@@ -175,6 +198,103 @@ Each needs a test. An arc that names only the goal gets exactly the goal.
   a manual wire with no syntax edge, a file in a folder group and one in a
   legacy group.
 
+## First review (2026-10-03)
+
+The reviewer worked against `e6e0285` and was stopped by its provider before it
+wrote a report. These findings come from its notes and reproduction scripts,
+and were re-run against the same commit before being written here. All are
+reproduced unless marked suspected.
+
+1. **Paths never meet.** The bridge snapshot keeps SyntaxDomain's absolute keys
+   (`C:/…/src/app.js`) while pieces and requests use project-relative paths, so
+   a query for `src/app.js` returned no edges and `parsed: null`. In production
+   the graph is empty.
+2. **Manual wires are never read.** The production graph port is never given the
+   canvas connections; the manual-wire test inserts an edge directly. A wire
+   with no syntax edge produced no edge.
+3. **Policy bypass through a link.** The walk resolved identity only for the
+   seed paths. With `alias` a junction to the denied `.git` directory,
+   `identity("alias/secret.ts")` returned `Denied`, yet `alias/secret.ts` was
+   returned as a node and the walk continued through it to `c.ts`.
+4. **Dangling edges.** At depth 1 the result listed only the focus as a node
+   while returning an edge to its neighbour; at depth 2 an edge reached a file
+   that was not returned or checked.
+5. **`maxNodes` applied late.** With `maxNodes: 1` the walk still expanded twice
+   and returned two edges.
+6. **Response ceiling overrun.** A response truncated for size was still over its
+   ceiling (210 bytes against 197 in a scaled test; 393 221 against the
+   production 393 216).
+7. **Symbols cut silently** at 50 per edge, with no flag (suspected; confirm with
+   a test).
+8. **Denied folder disclosed.** A node in a folder group at `.git` returned
+   `folder: ".git"` and a `.git` folder node.
+9. **Discovery signal false while a refresh is armed** (`signal: false` after a
+   refresh was scheduled and before it read anything).
+10. **Discovery signal cleared by the previous project.** With runs for project A
+    and project B both reading, A's run finishing set the signal to false while
+    B's run was still reading.
+11. **Off-canvas facts.** An off-canvas `.js` focus reported `discoverable: false`
+    (suspected; confirm with a test, and record it if it is intended).
+
+The review never reached freshness or lifecycle in depth. The next reviewer
+should cover them as well as tasks 9–17.
+
+**For tasks 9–17,** write each test first, run it against `e6e0285` (it must
+fail, except the two suspected items, which may turn out correct), and record
+the result under Evidence. Rust link tests: `src-tauri/src/project_api/reader.rs`
+has `a_junction_into_a_denied_directory_is_denied` and a `junction` helper
+(Windows `mklink /J`, no privilege needed; remove the junction before the tree).
+
+**Reviewer:** put any scratch reproduction files in the operating system's temp
+directory, never inside the repository copy; files created in the copy mark the
+review as modified.
+
+## Live pass (2026-10-03)
+
+Run against `707c205` in a debug build, driven over the WebView2 debugging
+port, with a scratch JS/TS project: `d` imports `a`; `a` imports `b` and a
+denied `src/.env.local.ts`; `b` imports `c`. App data was redirected to a
+scratch folder.
+
+**Passed:** the denied file never appeared, even as a piece on the canvas;
+edges ran importer to exporter with `sourceDerived`/`resolved` and their
+symbols; nodes were `current` after discovery and `stale` (reason
+`staleNodes`) after `c.ts` was edited on disk outside the app;
+`discoveryInFlight` was reported while the initial run was reading; `maxNodes`
+truncation was flagged; `importedBy` walked the right way; a denied focus
+answered `focus: "denied"`, as a read does.
+
+**Found:**
+
+1. **Empty canvas.** `decideDiscoveryStep` arms on a new load and skips while
+   the canvas has no pieces, so a project with an empty canvas never runs
+   discovery, and the in-flight signal (armed and not yet run) stayed true for
+   minutes: every answer was `partial` with `discoveryInFlight`, no edges, and
+   every node `unknown`. Owner decision: keep discovery canvas-driven and
+   report this state honestly with its own reason.
+2. **No folder facts in production.** After importing `src` as a folder group
+   (`folderPath: "src"`, five pieces), no node carried `folder` and no folder
+   node appeared. The snapshot reads `piece.groupId`, but production pieces have
+   no such field (`id, x, y, filename, label, color, code, workingCode, scale,
+   isSpawning, adjacentTo, references`); membership lives in `group.pieceIds`.
+   `graphSnapshotProduction.test.mjs` and `projectApiBridgeGraph.test.mjs`
+   build pieces with `groupId`, so they pass.
+3. **NUL bytes.** `src/app/projectApiBridge.js` contains four literal NUL
+   characters inside a template-string key. Git and grep treat the file as
+   binary, so a diff or pull-request review of the bridge shows nothing.
+4. **Missing focus.** `{"focus":"src/nope.ts"}` answered `focus: "resolved"`
+   with a file node for the missing path; `litria_files_read` answers the same
+   path with `notFound`.
+
+**Failing-first for tasks 9–17,** which the second review flagged as skipped,
+was verified after that run: the seven JavaScript tests it added fail against
+`e6e0285` and pass against `707c205`, and the first reviewer's Rust harness,
+rebuilt against `707c205`, passes every case it failed on `e6e0285`.
+
+**For tasks 18–21,** run each new test against `707c205` before the fix, record
+the failing output under Evidence, then fix. A test that already passes on
+`707c205` does not prove the fix; say so if that happens.
+
 ## Models and commands
 
 - P3 is the model for a new tool end to end (merge commit `97ce1f5`):
@@ -199,9 +319,419 @@ a JS/TS scratch project (the owner runs it after the review).
 
 ## Evidence
 
-(Filled in by the builder: decisions taken where the brief was silent, tests
-added, failing-first results where a test proves a fix, and check results.)
+> **Note on commit hashes (2026-10-03):** the hashes in this section name
+> commits on the runs' local branches. The pull request replayed them onto
+> `main`: build passes 1–3 (`5850c44`, `884fc49`, `e6e0285`) became `d0621c0`;
+> `22ceb8a` became `56da89e`; `707c205` became `bbf34ac`; `9b67c29` became
+> `6c388f1`; `0bc108e` became `9ff66db`; and the hand fix `ce20135` became
+> `95a7c0f`. The code is identical.
+
+### Build pass 1 (2026-10-03) — the parsed-revision foundation (tasks 1–2)
+
+This run built the freshness foundation the graph query reads from, end to end,
+and left the bridge op and the Rust tool for the following passes. Journal:
+`.research/2026-10-03-p4c-graph-query-build.md`.
+
+**Task 1 — parsed revisions in SyntaxDomain.** `src/app/syntaxDomain.js` now
+stores a `parsedRevisionIndex` entry `{ source: 'editor'|'disk', revision }` per
+file, set through the single `_putText` chokepoint and cleared through
+`_dropText` (so register/notify/rename/unregister/forget/reset all stay
+consistent), and exposes it read-only through `selectors.getParsedRevision`. The
+domain never computes a revision: callers pass one in, and a malformed or absent
+argument records none (the node then reads `unknown`, never `current`). This is
+kept distinct from the identity counter `getFileRevision` (PR #107), which the
+tab-close fence still depends on.
+
+**Task 2 — every registration path supplies its revision.**
+- Editor open/change and editor-backed writes: `src/lsp/syntaxAdapter.js`
+  imports `bufferRevision` from `src/app/projectApiBridge.js` (the same function
+  the owner bridge reports for a session document) and registers editor text as
+  `{ source: 'editor', revision }`. `src/lsp` is not a domain prefix, so the
+  architecture guard permits the import; the guard passes.
+- Disk reads mint their revision in Rust (owner decision 1). New command
+  `read_project_file_with_revision` (`src-tauri/src/commands.rs`,
+  `src-tauri/src/project_ops.rs`) returns `{ text, revision }`, the revision
+  being `project_api::reader::disk_revision` over the exact bytes read; the
+  legacy `read_project_file` is unchanged. JS wrapper
+  `readProjectFileWithRevision` (`src/project/storage.js`), surfaced through
+  `projectDomain` and threaded by `App.jsx` into the syntax lifecycle, the
+  discovery lifecycle and the filesystem write manager.
+- Discovery (`useDiscoveryLifecycle.js`), the tab-close re-index
+  (`syntaxAdapter.onFileClosed`), the write manager's re-index
+  (`filesystemWriteManager.js` `readForReindex`) and adapter disk writes
+  (`writeResultText` re-reads the written bytes' revision) all register disk
+  text as `{ source: 'disk', revision }`. A rename carries the entry's parsed
+  revision to the new path (`syntaxDomain.renameFile`).
+
+**Task 3 (partial).** The three bridge inputs are each exposed read-only from
+their owners: `getProvenanceForConnection` / `getAllEdgeProvenance` on
+SyntaxDomain (derived from the edge, so the domain stays dependency-free);
+`getPendingEdges` on `useOffCanvasImports` (live via a ref); `isDiscoveryInFlight`
+on `useDiscoveryLifecycle` (true while an initial run or refresh is reading, or
+armed but not yet started). They are not yet injected into
+`useProjectApiBridge`'s ports — that wiring is defined by the `workspace.graph`
+op (task 4) and lands with it.
+
+**Decisions where the brief was silent.**
+- A write through Litria records its disk revision by re-reading the written
+  bytes through `read_project_file_with_revision` (Rust mints it, per §4.5). The
+  writer's success/failure boolean is unchanged (ADR-032 D3). If the re-read
+  cannot run, the file records no revision (reads `unknown`, never a wrong
+  `current`).
+- `orphaned` (a SyntaxDomain status not in the brief's `pending`/`resolved`/
+  `broken`/`drifted`/`unused`) will be reported as its own string inside the
+  `sourceDerived` provenance when the graph query is built; a reader that does
+  not know it treats it as a non-`current` reason. Recorded here for task 5.
+
+**Tests added (all pass).**
+- `test/domains/syntaxParsedRevisions.test.mjs` (13 tests): records/clears
+  per-source revisions through every mutation, rename carry-over, distinctness
+  from the identity counter, and the provenance selectors.
+- `test/domains/syntaxAdapterRevisions.test.mjs` (5 tests): editor open/change
+  register the buffer revision; tab-close re-indexes with the disk revision; a
+  closed-file write and an editor-backed write record the right source/revision.
+- Existing suites updated for the new read path:
+  `test/domains/discoveryProjectSwitch.test.mjs` stub answers
+  `read_project_file_with_revision`.
+
+**Check results (2026-10-03, Windows).**
+- `npm run check:architecture` — all seven guards pass.
+- `npm run test:domains` — 1462 passed, 0 failed.
+- `npm run build` — built (the usual chunk-size advisory only).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 525 passed, 0 failed.
+- `cargo build --manifest-path src-tauri/Cargo.toml` — finished with zero
+  warnings.
+
+### Build pass 2 (2026-10-03) — bridge inputs and the `workspace.graph` op (tasks 3–4)
+
+This run wired the three bridge inputs and built the `workspace.graph` bridge
+operation end to end (both sides of the contract), leaving the `litria_graph_query`
+tool and its tests/docs for pass 3.
+
+**Task 3 — bridge inputs available to the owner bridge.** `src/app/useProjectApiBridge.js`
+gained a `graph` port that reads a `graphOwnersRef` populated in `src/App.jsx`
+after the syntax, off-canvas and discovery hooks run (the bridge call precedes
+them, so a ref carries the later owners; the app-shell guard passes). The port
+builds its snapshot through `graphSnapshot(...)` from: SyntaxDomain
+`getAllEdgeProvenance()` and `getParsedRevision()`, `useOffCanvasImports`'
+`getPendingEdges()`, `useDiscoveryLifecycle`'s `isDiscoveryInFlight()`, and
+`PieceDomain`/`GroupDomain` for on-canvas and folder-group facts. The ref is
+re-pointed every render, so the port reads the latest state at request time.
+
+**Task 4 — `workspace.graph`, both sides.**
+- JavaScript answer: `graphSnapshot(...)` and `answerGraph(request, snapshot, ceiling)`
+  in `src/app/projectApiBridge.js`, dispatched for the new `BRIDGE_OPS.graph`.
+  Frontier-scoped: the request names `paths`, a `direction`
+  (`imports`/`importedBy`/`both`) and `maxEdgesPerNode`; the reply carries per
+  path its node facts and incident edges (importer→exporter, flipping
+  SyntaxDomain's exporter=source/importer=target), the discovery-in-flight
+  signal, and an `omitted` count. Bounded by `MAX_REPLY_BYTES`, the per-node
+  edge ceiling and 50 symbols per edge; a malformed request refuses
+  `invalidRequest`. The graph is built from pieces, wires and pending edges,
+  never raw registrations.
+- Rust contract types: `GraphOp` and its request/result types in
+  `src-tauri/src/contracts/project_api_bridge/workspace.rs` (frontier, direction,
+  node facts, edges, `parsed {source,revision}`, provenance incl. the domain-only
+  `orphaned` status, bounds and `Validate`). Registered in the bridge `catalog()`
+  and `samples` (`graph_event`), with the fixture matcher wired in `fixtures.rs`.
+- Fixtures and artifacts: `workspace.graph.request.json` (what Rust emits),
+  `workspace.graph.reply.json` (an on-canvas folder-group file, an off-canvas
+  exporter, a `sourceDerived` edge with a status and a `manual` wire) and
+  `workspace.graph.reply.unknown-field.json` (strictly rejected), listed in the
+  bridge fixture manifest; artifacts regenerated with `LITRIA_UPDATE_CONTRACTS=1`
+  and verified drift-free.
+
+**Decision where the brief was silent.** The bridge op reply carries both
+`folder` and an opaque `groupId` as mutually exclusive node fields: a piece in a
+folder group reports `folder`; a legacy group without a `folderPath` reports a
+stringified group id as `groupId`. The JS answer omits whichever is absent.
+
+**Tests added (all pass).** `test/domains/projectApiBridgeGraph.test.mjs` (15
+tests): direction (imports vs importedBy vs both), node facts (folder, on-canvas,
+parsed revision, discoverability), legacy group id, absent parsed revision,
+off-canvas pending edges, a manual wire, the discovery-in-flight signal, the
+`orphaned` status, per-node and per-edge-symbol ceilings, a reply bounded by the
+byte ceiling (never refused), clean refusal of malformed requests, and a lone
+frontier node. The Rust contract tests cover the new op's schemas, fixtures and
+reply boundary.
+
+**Check results (2026-10-03, Windows).**
+- `npm run check:architecture` — all seven guards pass (incl. app-shell).
+- `npm run test:domains` — 1477 passed, 0 failed.
+- `npm run build` — built (usual chunk-size advisory only).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 525 passed, 0 failed.
+- `cargo build --manifest-path src-tauri/Cargo.toml` — zero warnings (the
+  `workspace.graph` contract family is `allow(dead_code)` until its Rust
+  consumer, the `litria_graph_query` handler, lands in pass 3).
+
+### Build pass 3 (2026-10-03) — the `litria_graph_query` tool (tasks 5–8)
+
+This run built the tool end to end, its tests and the docs, completing the arc.
+
+**Task 5 — `litria_graph_query` (capability `project.graph.read`).**
+- Contract types: `src-tauri/src/contracts/project_api/graph_query.rs` — the
+  request (focus/depth/direction/maxNodes with `Validate`), the result
+  (`focus` outcome, file and folder `nodes`, importer→exporter `edges` with
+  symbols and provenance, `summary` index state, `reasons`, truncation flags),
+  and the enums (`Freshness`, `IndexState`, `IndexReason`, `TruncationReason`,
+  `EdgeProvenance`). Registered in the family catalog, test dispatcher and
+  `samples::graph_query_result()` in `contracts/project_api/mod.rs`.
+- Advertised limits: a `graph` block in `ServerLimits`
+  (`contracts/project_api/project_context.rs`), filled from the tool's constants
+  in `project_api/context.rs` `limits()`, and in the sample.
+- Handler: `src-tauri/src/project_api/graph_query.rs`, run inside
+  `workspace::fenced`. It resolves the focus with the same policy a read applies
+  (a denied or invalid focus reveals nothing; absent focus uses the disclosed
+  selection), then walks breadth-first one level per `workspace.graph` call up to
+  `depth`. Only allowed paths are ever requested, so a denied or unindexed file
+  is never enumerated and the walk cannot pass through it; every edge touching a
+  non-allowed endpoint is dropped. It bounds nodes at `maxNodes`, edges at 500
+  and symbols at 50 per edge with truncation flags, folds the bridge op's
+  `omitted`, computes per-node freshness against the effective revision (the
+  buffer when open or dirty, else disk via `read_disk`), builds folder nodes for
+  the groups the file nodes belong to, and summarises the index state with its
+  reasons (`current` only when every node is; `unavailable` when no seed is
+  discoverable; otherwise `partial`). Registered in the dispatcher
+  (`project_api/mod.rs`) and in the name-ordered operation-list test in
+  `project_api/context.rs`. Building the handler retired the `allow(dead_code)`
+  on the `workspace.graph` contract family.
+
+**Task 6 — tests.** 21 Rust handler tests in
+`project_api/graph_query/tests.rs` over a scripted, adjacency-driven owner: the
+direction rule (`imports` returns what a file imports, not what imports it);
+policy (a denied endpoint removes the edge and the node, a denied file between
+two allowed files is never traversed at depth 2, an unindexed endpoint is not
+enumerated, a denied/invalid focus and an empty selection, the selection as
+focus); freshness (disk changed after parsing is stale, a buffer edited after
+parsing is stale until re-registered, no recorded revision and an omitted index
+are unknown, re-registered from the editor is current again); index state (the
+summary is current only when every node is, discovery in flight is partial, a
+focus without relationship discovery is unavailable); canvas shapes (an
+off-canvas discovered edge, a manual wire, a folder group and a legacy group,
+and the `orphaned` status reported as itself); bounds (truncation at maxNodes,
+at the symbol ceiling, and a reply bounded by the encoded ceiling, not refused);
+and lifecycle (a bridge `workspaceChanged` propagates), plus an end-to-end pass
+over the real bridge with the epoch fence. The JavaScript owner's sequences
+(direction, bounds, canvas shapes, `orphaned`, freshness inputs) remain covered
+by `projectApiBridgeGraph.test.mjs` from pass 2.
+
+**Decisions where the brief was silent.**
+- The `focus` result field mirrors `litria_files_read`'s disclosure outcomes
+  (`denied`, `invalidPath`, `unindexed`) so a refused focus reveals nothing more
+  than a read would; an allowed focus is `resolved` even when it has no
+  neighbourhood, and an absent focus with no disclosable selection is
+  `noSelection`.
+- Folder nodes are derived from the returned file nodes and do not count toward
+  `maxNodes` (that ceiling bounds file nodes, the walk's real cost).
+- `orphaned` (and any other domain-only status) is carried verbatim inside
+  `sourceDerived`'s `status`; a reader that does not know it treats the node's
+  freshness, not the status, as the signal.
+- When the buffer index reports `omitted > 0`, a file not in the listed entries
+  is `unknown`: the index may have dropped a differing buffer for it, so its
+  effective revision cannot be observed.
+
+**Check results (2026-10-03, Windows).**
+- `npm run check:architecture` — all seven guards pass (incl. app-shell).
+- `npm run test:domains` — 1477 passed, 0 failed.
+- `npm run build` — built (usual chunk-size advisory only).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 546 passed, 0 failed.
+- `cargo build --manifest-path src-tauri/Cargo.toml` — zero warnings. Contract
+  artifacts and fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and
+  verified drift-free.
+
+### Build pass — first-review fixes (2026-10-03) — tasks 9–17
+
+This run addressed the nine first-review defects. Code was at the first-review
+commit `e6e0285` (+ the docs commit that recorded these tasks), so each defect
+was reproduced by reading the implementation at that commit; the fix is proven
+by a test written against the fixed behaviour. Journal:
+`.research/2026-10-03-p4c-graph-query-first-review-fixes.md`.
+
+**Task 9 — paths meet (first review 1).** `graphSnapshot` now takes a
+`projectRoot` and relativises every path it reads — SyntaxDomain's absolute edge
+keys, pending-edge paths, piece filenames, folder-group paths — to the
+project-relative form pieces and requests use (`relativize` in
+`src/app/projectApiBridge.js`); the parsed-revision selector is still keyed by
+the absolute path it was stored under (`${root}/${rel}`). An absolute path
+outside the root is dropped (not a project node). `useProjectApiBridge`/`App.jsx`
+thread `projectInstance.rootPath` into the port. Proven by
+`test/domains/graphSnapshotProduction.test.mjs`, which drives the REAL
+SyntaxDomain with an absolute root and shows a `src/a.ts` query meeting its edge
+and parsed revision.
+
+**Task 10 — manual wires (first review 2).** The production port now passes
+`connectionDomain.selectors.getAllConnections()` to `graphSnapshot`, which emits a
+`manual` edge for any connection whose id backs no `sourceDerived` edge (exporter
+= `sourceId` piece, importer = `targetId` piece, per discovery). A wire already
+backed by a syntax edge is not duplicated. Tested in the same file.
+
+**Tasks 11–14 — the walk (first review 3, 4, 5, 6, 8), in
+`src-tauri/src/project_api/graph_query.rs`.**
+- Task 11: every frontier path, edge endpoint and folder is now resolved with
+  the full policy (`graphable_key`/`folder_allowed`, which call `identity`, not
+  just `classify`), so a path reached through a junction into `.git` never
+  becomes a node and is never walked, and a `.git` folder is never a folder node
+  (nor disclosed on the file node). Rust tests
+  `a_junction_endpoint_into_a_denied_directory_is_dropped` (Windows, `mklink /J`)
+  and `a_denied_folder_is_never_disclosed`.
+- Task 12: the walk keeps an edge only when both endpoints can become returned
+  nodes; boundary endpoints get a final fact-fetch, so every returned edge's
+  endpoints are returned nodes. Test `an_edge_at_depth_one_closes_on_a_returned_node`.
+- Task 13: the walk is bounded BY `maxNodes` — expansion stops at the budget,
+  no edge reaches a non-accepted node, and `MaxNodes` is flagged. Test
+  `max_nodes_one_bounds_the_walk`.
+- Task 14: `fit()` now adds the `ResponseSize` reason and flips `truncated`
+  BEFORE measuring the fit, then keeps shedding, so the encoded response stays
+  under the ceiling including the truncation fields. Test
+  `the_shed_response_stays_under_the_ceiling` (several ceilings).
+
+**Task 15 — symbol truncation flagged (first review 7).** The bridge `GraphEdge`
+gained `symbols_truncated` (`#[serde(default)]`); the owner sets it when it cuts
+to 50; the handler flags `TruncationReason::Symbols`. Tested Rust
+(`an_owner_symbol_cut_is_flagged`) and JS
+(`symbol truncation at 50 is flagged in the owner reply`).
+
+**Task 16 — discovery-in-flight (first review 9, 10),
+`src/app/useDiscoveryLifecycle.js`.** A `refreshArmedRef` reads in-flight from
+the moment the debounce timer is set (review 9); the initial-run and refresh
+in-flight flags are tied to their load token, so a stale project's run finishing
+cannot clear the current project's signal (review 10). Proven by
+`test/domains/discoveryInFlightSignal.test.mjs` over the real hook.
+
+**Task 17 — off-canvas node facts (first review 11).** `graphSnapshot` carries
+the `discoverable` predicate; `answerGraph`'s fallback node (a frontier path with
+no piece/wire/pending edge) computes `discoverable` from the file name instead of
+hardcoding `false`. Tested in `graphSnapshotProduction.test.mjs`.
+
+**Decisions where the brief was silent.**
+- A path that is absolute but outside the project root is dropped from the graph
+  (it cannot be a project node); an already-relative path is kept as-is.
+- A denied folder nulls the file node's `folder` field as well as dropping the
+  folder node, so the denied name is never disclosed either way.
+- `symbols_truncated` is `#[serde(default)]`, so existing fixtures stay valid;
+  the schema artifact was regenerated and verified drift-free.
+- Task 9's test drives the real SyntaxDomain (not the Monaco adapter); the
+  defect is a path-identity mismatch between SyntaxDomain's keys and piece paths,
+  which the SyntaxDomain + pieces test exercises directly.
+
+**Check results (2026-10-03, Windows).**
+- `npm run check:architecture` — all seven guards pass.
+- `npm run test:domains` — 1484 passed, 0 failed.
+- `npm run build` — built (usual chunk-size advisory only).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 552 passed, 0 failed.
+- `cargo build --manifest-path src-tauri/Cargo.toml` — zero warnings. Contract
+  artifacts/fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and verified
+  drift-free.
+
+### Build pass — live-pass fixes (2026-10-03) — tasks 18–21
+
+This run addressed the four live-pass defects. Journal:
+`.research/2026-10-03-p4c-graph-query-live-pass-fixes.md`.
+
+**Task 18 — empty canvas is its own reason (live pass 1).** The
+discovery-in-flight signal used to be true while discovery was merely armed on an
+empty canvas (where `decideDiscoveryStep` never runs it, because discovery is
+canvas-driven), so an empty project read `partial` with `discoveryInFlight`
+forever. `useDiscoveryLifecycle` now splits the signal:
+`isDiscoveryInFlight()` is true only when reading or ABOUT to read (armed with
+pieces on the canvas), and a new `isDiscoveryAwaitingCanvasPieces()` is true for
+the armed-but-empty-canvas state. The `workspace.graph` reply carries both
+(`awaitingCanvasPieces`, a new `#[serde(default)]` field on the bridge
+`GraphResult`), and the handler reports a new
+`IndexReason::AwaitingCanvasPieces` (summary `partial`) instead of
+`DiscoveryInFlight`. Wired through `useProjectApiBridge.js` and `App.jsx`.
+Owner decision honoured: discovery stays canvas-driven; the state is reported
+honestly.
+
+**Task 19 — folder facts from `group.pieceIds` (live pass 2).** `graphSnapshot`
+built a piece→group map from `piece.groupId`, a field production pieces do not
+have (membership lives on `group.pieceIds`), so no folder/folder-node ever
+appeared in production. It now builds `groupByPieceId` from each group's
+`pieceIds`. The graph tests were rebuilt to construct pieces the production way
+(no `groupId` field; groups carry `pieceIds`), and a new production test proves a
+folder group yields `folder`, a legacy group (no `folderPath`) yields an opaque
+`groupId`, and a piece in no group yields neither.
+
+**Task 20 — no control characters in source (live pass 3).**
+`src/app/projectApiBridge.js` held four literal NUL bytes as the key separator in
+two `const key = …` template literals, so git and grep treated the file as
+binary and hid every diff. Replaced with a named constant
+`EDGE_KEY_SEP = String.fromCharCode(0)` (an escape, not a literal control char)
+joined into the keys. `git diff --numstat` now reports the file as text (10/2),
+and `git ls-files --eol` shows the working tree as `w/lf`.
+
+**Task 21 — a missing focus answers `notFound` (live pass 4).** An explicit
+focus that passed the policy was resolved into a node without checking the file
+existed, so `src/nope.ts` came back as a resolved node. The handler now judges
+existence the way `litria_files_read` does: a disclosed focus with no file on
+disk, no buffer holding it, and no node the owner knows (a piece or wire) answers
+the new `FocusOutcome::NotFound` with no nodes, revealing nothing a read would
+not. A new `FocusOutcome::NotFound` variant was added to the contract.
+
+**Decisions where the brief was silent.**
+- Existence for the focus is `on disk OR in a buffer OR the owner returns node
+  facts for it`. Disk-or-buffer alone mirrors `litria_files_read` exactly, but
+  would have called a focus that is a live on-canvas piece (no disk file yet)
+  `notFound`; the owner-facts clause keeps a genuinely-placed file resolved while
+  still answering `notFound` for a path with no file, no buffer and no piece —
+  the live-pass case. The one extra owner probe runs only for a focus absent from
+  disk and buffers.
+- `awaiting_canvas_pieces` is `#[serde(default)]` on the bridge `GraphResult`, so
+  an owner that never sets it stays valid; the schema artifact was regenerated
+  and verified drift-free.
+- The key separator is built with `String.fromCharCode(0)` rather than a `\0`
+  string escape: both keep the U+0000 record separator and keep the file text;
+  the named constant also documents intent at its single definition.
+
+**Tests added (all pass, against the fixed behaviour).**
+- Rust (`project_api/graph_query/tests.rs`): `a_missing_focus_answers_not_found`,
+  `a_focus_held_only_in_a_buffer_resolves`, `awaiting_canvas_pieces_is_its_own_reason`.
+- JS: `projectApiBridgeGraph.test.mjs` — the awaiting-vs-in-flight signal, plus
+  the whole suite rebuilt to the production piece shape;
+  `graphSnapshotProduction.test.mjs` — folder facts from `group.pieceIds`;
+  `discoveryInFlightSignal.test.mjs` — an empty canvas is awaiting, not in flight.
+
+**Check results (2026-10-03, Windows).**
+- `npm run check:architecture` — all seven guards pass.
+- `npm run test:domains` — 1487 passed, 0 failed.
+- `npm run build` — built (usual chunk-size advisory only).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 555 passed, 0 failed.
+- `cargo build --manifest-path src-tauri/Cargo.toml` — zero warnings. Contract
+  artifacts/fixtures regenerated with `LITRIA_UPDATE_CONTRACTS=1` and verified
+  drift-free.
+
+## Verification (2026-10-03)
+
+Done outside the runs, by the agent that wrote the arc, because the builder
+twice recorded its fixes as passing tests without running them failing first.
+
+- **First review, Rust findings (3, 4, 5, 6, 8):** the first reviewer's own
+  harness, which runs the unchanged production reader, policy and handler
+  over a fixture with a real junction into `.git`, failed every case on
+  `e6e0285` and passed every case when rebuilt against `707c205`: the aliased
+  file is dropped and never walked, no `.git` folder is disclosed, every edge
+  endpoint is a returned node, `maxNodes: 1` stops the walk, and the encoded
+  response is 243 783 bytes against the 393 216 ceiling.
+- **First review, JavaScript findings:** the seven tests added for tasks 9–17
+  fail against `e6e0285`'s source and pass against `707c205`'s.
+- **Live pass findings:** the six JavaScript tests added for tasks 18–19 fail
+  against `707c205`'s source and pass against `0bc108e`'s; `git diff --numstat`
+  reads `src/app/projectApiBridge.js` as text.
+- **Live re-pass on `0bc108e`:** findings 1, 2 and 3 were fixed in the app;
+  finding 4 was not. The owner bridge invents a fallback node for every
+  frontier path (task 17's off-canvas fix), and the focus existence probe
+  counted it as proof the file exists, while the scripted test owner answered
+  only known paths. Hand fix `ce20135`: only a placed or parsed file counts.
+  Its test gives the scripted owner the production fallback; it failed before
+  the fix (`Resolved` against `NotFound`) and passes after, and a file placed
+  on the canvas but not yet on disk still resolves.
+- **Live re-check after the hand fix:** a missing focus answers `notFound` with
+  no nodes, real files resolve `current`, a denied focus answers `denied`.
+- **Checks on the final tree:** all seven guards, `test:domains` 1487/1487,
+  `npm run build`, `cargo test` 557 passed, `cargo build` zero warnings.
 
 ## Blockers
 
-None recorded.
+None. All twenty-one tasks are built and all four configured checks pass. The
+owner's live pass on a JS/TS scratch project (out of scope, run after the
+review) remains the only outstanding acceptance step.

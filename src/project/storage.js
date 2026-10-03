@@ -113,6 +113,25 @@ export async function readProjectFile(rootPath, relativePath) {
   return response.ok ? response.data : null;
 }
 
+/**
+ * Read a project file together with its disk revision (Project API brief §4.5:
+ * Rust mints every disk revision). Returns `{ text, revision }` on success, or
+ * null on error. The syntax registration paths use this so SyntaxDomain records
+ * the revision of the disk text it parsed (P4c). Semantics match
+ * `readProjectFile`: strict UTF-8, no BOM stripping.
+ */
+export async function readProjectFileWithRevision(rootPath, relativePath) {
+  if (!rootPath || !relativePath) {
+    setLastProjectStorageError(createClientValidationError('project_file.path.required', 'Project and file paths are required.'));
+    return null;
+  }
+  const response = await invokeWithTypedError('read_project_file_with_revision', { rootPath, relativePath }, {
+    fallbackCode: 'project_file.read.failed',
+    fallbackMessage: 'Unable to read project file.'
+  });
+  return response.ok ? response.data : null;
+}
+
 export async function writeProjectFile(rootPath, relativePath, contents) {
   if (!rootPath || !relativePath) {
     setLastProjectStorageError(createClientValidationError('project_file.path.required', 'Project and file paths are required.'));

@@ -22,6 +22,7 @@ The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand,
 | Command | Defined in | Frontend caller | Notes |
 |---|---|---|---|
 | `read_project_file` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
+| `read_project_file_with_revision` | `src-tauri/src/commands.rs` | `src/project/storage.js` | Returns `{ text, revision }`, the revision minted by `project_api::reader::disk_revision` over the exact bytes read (Project API build plan P4c). Used on the syntax registration paths; `read_project_file` is unchanged. |
 | `open_file_dialog` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
 | `write_project_file` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
 | `list_project_tree` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |

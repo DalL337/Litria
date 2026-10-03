@@ -247,6 +247,7 @@ mod outbound {
     use crate::contracts::error::ContractError;
     use crate::contracts::project_api::files_read::FilesReadResult;
     use crate::contracts::project_api::files_search::FilesSearchResult;
+    use crate::contracts::project_api::graph_query::GraphQueryResult;
     use crate::contracts::project_api::project_context::ProjectContextResult;
     use crate::contracts::project_api::samples;
     use schemars::JsonSchema;
@@ -269,6 +270,9 @@ mod outbound {
         assert_conforms("project context", &samples::project_context_result());
         let search = assert_conforms("files search", &samples::files_search_result());
         assert_eq!(search["matches"][2]["kind"], "path");
+        let graph = assert_conforms("graph query", &samples::graph_query_result());
+        assert_eq!(graph["nodes"][0]["kind"], "file");
+        assert_eq!(graph["edges"][0]["provenance"]["kind"], "sourceDerived");
         let files_read = assert_conforms("files read", &samples::files_read_result());
         let empty = &files_read["documents"][2];
         assert_eq!(empty["kind"], "read");
@@ -301,6 +305,7 @@ mod outbound {
         check::<FilesReadResult>("files_read.result.json", &samples::files_read_result());
         check::<ProjectContextResult>("project_context.result.json", &samples::project_context_result());
         check::<FilesSearchResult>("files_search.result.json", &samples::files_search_result());
+        check::<GraphQueryResult>("graph_query.result.json", &samples::graph_query_result());
     }
 }
 
@@ -405,6 +410,7 @@ mod bridge_family {
                 Some("documents") => samples::documents_event(),
                 Some("bufferIndex") => samples::buffer_index_event(),
                 Some("selection") => samples::selection_event(),
+                Some("graph") => samples::graph_event(),
                 Some("capabilities") => samples::capabilities_event(),
                 other => panic!("{file}: unknown sample {other:?}"),
             };

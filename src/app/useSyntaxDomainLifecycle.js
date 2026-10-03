@@ -28,16 +28,16 @@ import { createSyntaxAdapter } from '../lsp/syntaxAdapter.js';
  * }} params
  * @returns {{ syntaxDomain: object, syntaxAdapter: object }}
  */
-export function useSyntaxDomainLifecycle({ projectRoot, loadToken = null, readProjectFile, writeProjectFile }) {
+export function useSyntaxDomainLifecycle({ projectRoot, loadToken = null, readProjectFile, readProjectFileWithRevision, writeProjectFile }) {
   // Domain and adapter are singletons for the component lifetime.
   // They are recreated only if projectRoot changes (effectively on project switch).
   const syntaxDomain = useMemo(() => createSyntaxDomain(), []);
 
   const syntaxAdapter = useMemo(
-    () => createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile, writeProjectFile }),
+    () => createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile, readProjectFileWithRevision, writeProjectFile }),
     // projectRoot change intentionally re-creates the adapter (relative paths depend on it).
     // Domain state is preserved — file registration is per-session.
-    [syntaxDomain, projectRoot, readProjectFile, writeProjectFile],
+    [syntaxDomain, projectRoot, readProjectFile, readProjectFileWithRevision, writeProjectFile],
   );
 
   // Mirror the domain's per-connection status into React state so the canvas

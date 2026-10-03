@@ -53,12 +53,14 @@ function backend() {
     if (command === 'list_project_tree') {
       return Object.keys(files).map((path) => ({ path, entryType: 'file', depth: path.split('/').length - 1 }));
     }
-    if (command === 'read_project_file') {
+    if (command === 'read_project_file' || command === 'read_project_file_with_revision') {
       const text = files[payload.relativePath] ?? null;
+      const shape = (value) =>
+        value == null ? null : command === 'read_project_file_with_revision' ? { text: value, revision: `d1-${value.length}` } : value;
       if (payload.rootPath === '/a' && holdA) {
-        return new Promise((resolve) => held.push(() => resolve(text)));
+        return new Promise((resolve) => held.push(() => resolve(shape(text))));
       }
-      return text;
+      return shape(text);
     }
     throw new Error(`unexpected ${command}`);
   };

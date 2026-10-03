@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GraphQueryRequest",
+  "type": "object",
+  "properties": {
+    "depth": {
+      "description": "How far to walk (1 or 2); absent means the server default.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "maximum": 2,
+      "minimum": 1
+    },
+    "direction": {
+      "description": "Which edges to follow. Defaults to both.",
+      "$ref": "#/$defs/GraphDirection",
+      "default": "both"
+    },
+    "focus": {
+      "description": "The focus file (project-relative, forward slashes). Absent means the\ncurrent canvas selection.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "maxLength": 1024,
+      "minLength": 1
+    },
+    "maxNodes": {
+      "description": "At most this many nodes; absent means the server default.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "maximum": 100,
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "GraphDirection": {
+      "description": "The walk direction, importer to exporter.",
+      "oneOf": [
+        {
+          "description": "What the focus imports.",
+          "type": "string",
+          "const": "imports"
+        },
+        {
+          "description": "What imports the focus.",
+          "type": "string",
+          "const": "importedBy"
+        },
+        {
+          "description": "Both.",
+          "type": "string",
+          "const": "both"
+        }
+      ]
+    }
+  }
+}

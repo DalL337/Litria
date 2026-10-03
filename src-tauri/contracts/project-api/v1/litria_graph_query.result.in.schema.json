@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GraphQueryResult",
+  "type": "object",
+  "properties": {
+    "edges": {
+      "description": "Edges from importer to exporter.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GraphEdge"
+      }
+    },
+    "focus": {
+      "description": "What became of the focus. A neighbourhood is returned only when it is\n`resolved`; every other outcome mirrors `litria_files_read`, revealing\nnothing more.",
+      "$ref": "#/$defs/FocusOutcome"
+    },
+    "nodes": {
+      "description": "File and folder nodes, file nodes in path order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GraphNode"
+      }
+    },
+    "reasons": {
+      "description": "Why the summary is not `current`, in a fixed order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/IndexReason"
+      }
+    },
+    "summary": {
+      "description": "The neighbourhood's freshness, summarised.",
+      "$ref": "#/$defs/IndexState"
+    },
+    "truncated": {
+      "description": "The walk stopped before covering everything; see `truncatedBy`.",
+      "type": "boolean"
+    },
+    "truncatedBy": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TruncationReason"
+      }
+    }
+  },
+  "required": [
+    "focus",
+    "nodes",
+    "edges",
+    "summary",
+    "reasons",
+    "truncated",
+    "truncatedBy"
+  ],
+  "$defs": {
+    "EdgeProvenance": {
+      "description": "An edge's provenance. A reader that meets an unfamiliar `kind` must treat\nthe edge as of unknown origin.",
+      "oneOf": [
+        {
+          "description": "A syntax edge exists; its SyntaxDomain status is included (the\ndomain-only `orphaned` is reported as itself).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "sourceDerived"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "status"
+          ]
+        },
+        {
+          "description": "A hand-drawn wire with no syntax edge behind it.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "manual"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "FocusOutcome": {
+      "description": "What the focus resolved to. A reader that meets an unfamiliar value must not\nassume a neighbourhood was returned.",
+      "oneOf": [
+        {
+          "description": "A neighbourhood was walked (nodes and edges below).",
+          "type": "string",
+          "const": "resolved"
+        },
+        {
+          "description": "The disclosure policy withholds the focus. Existence is not revealed.",
+          "type": "string",
+          "const": "denied"
+        },
+        {
+          "description": "The focus is in a directory the graph never enters (dependencies, build\noutput). Readable by explicit path, but not graphed.",
+          "type": "string",
+          "const": "unindexed"
+        },
+        {
+          "description": "The focus is not a path the API accepts (contract brief §6).",
+          "type": "string",
+          "const": "invalidPath"
+        },
+        {
+          "description": "The focus is disclosed but no such file exists (not on disk, not held in\na buffer): answered exactly as `litria_files_read` answers it, revealing\nnothing more and returning no nodes (P4c live pass 4).",
+          "type": "string",
+          "const": "notFound"
+        },
+        {
+          "description": "No focus was given and nothing disclosable is selected on the canvas.",
+          "type": "string",
+          "const": "noSelection"
+        }
+      ]
+    },
+    "Freshness": {
+      "description": "Per-node freshness (brief §7.4). A reader that meets an unfamiliar value\nmust not treat the node as current.",
+      "oneOf": [
+        {
+          "description": "The parsed revision equals the file's effective revision, same source.",
+          "type": "string",
+          "const": "current"
+        },
+        {
+          "description": "Both revisions are known and differ (including a different source).",
+          "type": "string",
+          "const": "stale"
+        },
+        {
+          "description": "No parsed revision is recorded, the effective one cannot be observed,\nor the buffer index omitted the document. Never shown as current.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "GraphEdge": {
+      "type": "object",
+      "properties": {
+        "exporter": {
+          "type": "string"
+        },
+        "importer": {
+          "type": "string"
+        },
+        "onCanvas": {
+          "description": "The wire is drawn on the canvas.",
+          "type": "boolean"
+        },
+        "provenance": {
+          "$ref": "#/$defs/EdgeProvenance"
+        },
+        "symbols": {
+          "description": "The imported symbols, at most 50.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GraphSymbol"
+          }
+        }
+      },
+      "required": [
+        "importer",
+        "exporter",
+        "symbols",
+        "provenance",
+        "onCanvas"
+      ]
+    },
+    "GraphNode": {
+      "description": "A node, identified by path (file) or by its folder group (folder).",
+      "oneOf": [
+        {
+          "description": "A file in the neighbourhood.",
+          "type": "object",
+          "properties": {
+            "discoverable": {
+              "description": "The file's language has relationship discovery.",
+              "type": "boolean"
+            },
+            "folder": {
+              "description": "The folder group's folder, when the file's piece is in a folder group.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "freshness": {
+              "description": "Honest freshness of the parsed text against the file's effective text.",
+              "$ref": "#/$defs/Freshness"
+            },
+            "groupId": {
+              "description": "An opaque id for a legacy group without a folder.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "file"
+            },
+            "onCanvas": {
+              "description": "A piece for the file is on the canvas.",
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "onCanvas",
+            "freshness",
+            "discoverable"
+          ]
+        },
+        {
+          "description": "A folder group the returned file nodes belong to.",
+          "type": "object",
+          "properties": {
+            "folder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "groupId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "folder"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "GraphSymbol": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "IndexReason": {
+      "description": "Why the summary is not `current`.",
+      "oneOf": [
+        {
+          "description": "A returned file has no recorded parsed revision.",
+          "type": "string",
+          "const": "notParsed"
+        },
+        {
+          "description": "A discovery run is in flight.",
+          "type": "string",
+          "const": "discoveryInFlight"
+        },
+        {
+          "description": "Discovery is armed for this load but waiting for pieces on an empty\ncanvas, so no relationships have been read yet (P4c live pass 1).",
+          "type": "string",
+          "const": "awaitingCanvasPieces"
+        },
+        {
+          "description": "A returned node is stale.",
+          "type": "string",
+          "const": "staleNodes"
+        },
+        {
+          "description": "A returned node's freshness is unknown.",
+          "type": "string",
+          "const": "unknownNodes"
+        },
+        {
+          "description": "A returned file's language has no relationship discovery.",
+          "type": "string",
+          "const": "noRelationshipDiscovery"
+        }
+      ]
+    },
+    "IndexState": {
+      "description": "The neighbourhood's freshness, summarised. A reader that meets an\nunfamiliar value must not treat the neighbourhood as current.",
+      "oneOf": [
+        {
+          "description": "Every returned node is `current`.",
+          "type": "string",
+          "const": "current"
+        },
+        {
+          "description": "Some nodes are stale or unknown; see `reasons`.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "The focus itself has no relationship discovery, so no neighbourhood\ncan be trusted.",
+          "type": "string",
+          "const": "unavailable"
+        }
+      ]
+    },
+    "TruncationReason": {
+      "description": "A limit that ended or narrowed the walk.",
+      "oneOf": [
+        {
+          "description": "More nodes exist than `maxNodes` allowed.",
+          "type": "string",
+          "const": "maxNodes"
+        },
+        {
+          "description": "The edge ceiling was reached.",
+          "type": "string",
+          "const": "edges"
+        },
+        {
+          "description": "An edge named more than 50 symbols.",
+          "type": "string",
+          "const": "symbols"
+        },
+        {
+          "description": "The encoded response ceiling was reached.",
+          "type": "string",
+          "const": "responseSize"
+        }
+      ]
+    }
+  }
+}

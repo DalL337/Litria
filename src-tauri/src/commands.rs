@@ -25,6 +25,17 @@ pub(crate) fn read_project_file(root_path: &str, relative_path: &str) -> Command
     project_ops::read_project_file(root_path, relative_path)
 }
 
+/// Read a project file together with its disk revision (Project API brief
+/// §4.5). The syntax registration paths use this so SyntaxDomain can record
+/// the revision of the disk text it parsed (P4c).
+#[tauri::command]
+pub(crate) fn read_project_file_with_revision(
+    root_path: &str,
+    relative_path: &str,
+) -> CommandResult<project_ops::FileWithRevision> {
+    project_ops::read_project_file_with_revision(root_path, relative_path)
+}
+
 /// Opened-file payload (ADR-022): the path the OS picker returned plus its
 /// contents.
 #[derive(serde::Serialize)]

@@ -36,8 +36,8 @@ This document owns sequencing, executable evidence and completion status. It own
 |---|---|---|---|
 | P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | Done: PR #86, merged 2026-09-30 (see [P1 record](#p1-record)) |
 | P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Done: PR #89, merged 2026-09-30 (see [P2 record](#p2-record)) |
-| P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | In review: PR #90 (see [P3 record](#p3-record)) |
-| P4 | `litria_graph_query` | P2 | Pending |
+| P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Done: PR #90 (see [P3 record](#p3-record)) |
+| P4 | `litria_graph_query` | P2 | Done, PR pending (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Pending |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Outline |
@@ -690,6 +690,42 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
 ### Acceptance
 
 All tests and standard checks pass, plus a live pass on a JS/TS scratch project.
+
+### P4c record
+
+> **Built in the unattended P4c arc (2026-10-03).** Delivery checklist and
+> decisions: [P4c graph query build plan](p4c-graph-query-build-plan.md). Three
+> build passes; one Codex review once the arc is complete; nothing merges
+> without the owner.
+>
+> - **Pass 1 — parsed revisions (tasks 1–2).** SyntaxDomain records
+>   `{ source: 'editor' | 'disk', revision }` per file through its single text
+>   chokepoint, exposed read-only; every registration path (editor open/change,
+>   discovery, tab-close re-index, the write manager's re-index, adapter writes)
+>   supplies its revision, and a rename carries it. Disk revisions are minted in
+>   Rust by the new `read_project_file_with_revision` command; the editor carries
+>   `bufferRevision`.
+> - **Pass 2 — bridge inputs and `workspace.graph` (tasks 3–4).** The three
+>   bridge inputs (per-connection provenance, the off-canvas pending-edge set, a
+>   discovery-in-flight signal) reach the owner bridge; the `workspace.graph`
+>   bridge operation is built end to end (JavaScript answer, Rust contract types,
+>   fixtures, regenerated artifacts).
+> - **Pass 3 — `litria_graph_query` (tasks 5–8).** The tool
+>   (`project.graph.read`): contract types
+>   (`contracts/project_api/graph_query.rs`), catalog entry, the `graph` block in
+>   `ServerLimits`, the fenced handler (`project_api/graph_query.rs`) that drives
+>   the walk one level at a time over `workspace.graph`, applies the policy
+>   before each expansion (a denied or unindexed file is never a node and edges
+>   touching one are dropped), bounds nodes/edges/symbols with truncation flags,
+>   reports per-node freshness against the effective revision, and summarises the
+>   index state with its reasons. Registered in the dispatcher and in the
+>   name-ordered operation list. Twenty-one Rust tests cover the sequences that
+>   must hold (direction, policy, freshness, lifecycle, index state, bounds,
+>   canvas shapes), plus an end-to-end pass over the real bridge. The
+>   `workspace.graph` contract family's `allow(dead_code)` is retired now that the
+>   handler consumes it. All four configured checks pass; `cargo build` is
+>   warning-free. Decisions where the brief was silent are recorded under the
+>   P4c plan's Evidence.
 
 ## P5. Diagnostics list
 

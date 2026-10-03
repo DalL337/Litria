@@ -55,6 +55,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Core project ops
             commands::read_project_file,
+            commands::read_project_file_with_revision,
             commands::open_file_dialog,
             commands::write_project_file,
             commands::list_project_tree,

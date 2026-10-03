@@ -27,6 +27,13 @@
       "request": "workspace.selection.request.schema.json"
     },
     {
+      "description": "A frontier-scoped slice of the import graph. For each requested project-relative path, the reply carries its node facts (on-canvas, its folder group or an opaque legacy group id, the parsed source and revision if recorded, and whether its language has relationship discovery) and the edges incident to it in the requested direction (importer to exporter, with symbols, provenance and whether the wire is drawn). The graph is built from pieces, wires and pending edges, never from raw registrations; an edge's paths may be stale. Anything over a bound is counted in omitted. The reply also carries whether a discovery run is in flight.",
+      "name": "workspace.graph",
+      "owner": "PieceDomain, GroupDomain, SyntaxDomain, DiscoveryLifecycle",
+      "reply": "workspace.graph.reply.schema.json",
+      "request": "workspace.graph.request.schema.json"
+    },
+    {
       "description": "For each kind of file Litria recognises (a language and the exact extensions that share its flags), what is available in this session: document access, diagnostics, navigation, symbols, relationship discovery and source transformations, plus the state of its language server.",
       "name": "languages.capabilities",
       "owner": "LanguageSupportDomain, SyntaxDomain",

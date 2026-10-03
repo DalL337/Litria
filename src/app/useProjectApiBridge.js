@@ -19,10 +19,12 @@ import { useEditorSession } from '../editor/EditorSessionContext';
 import { getActiveSessionDocument, getSessionDocumentsByPath } from '../editor/editorSessionDomain.js';
 import { getWorkspaceEpoch } from '../project/dbStorage.js';
 import { buildCapabilityMatrix } from './languageCapabilities.js';
+import { isDiscoverableFilename } from './useDiscoveryLifecycle.js';
 import {
   BRIDGE_REQUEST_EVENT,
   createProjectApiBridge,
   deriveReadyEpoch,
+  graphSnapshot,
   selectionSnapshot,
   serializeAttachments
 } from './projectApiBridge.js';
@@ -46,6 +48,10 @@ const transport = serializeAttachments({
  * @param {*} owners.selectedGroupId  the selected group pill
  * @param {Array} owners.groups  GroupDomain's groups (folder groups carry `folderPath`)
  * @param {object} owners.languageSupportDomain  for language-server state
+ * @param {{current: {syntaxDomain?: object, getPendingEdges?: ()=>Array, isDiscoveryInFlight?: ()=>boolean, isDiscoveryAwaitingCanvasPieces?: ()=>boolean}}} [owners.graphOwnersRef]
+ *   The graph owners (SyntaxDomain, the off-canvas pending-edge set, the
+ *   discovery-in-flight signal). A ref because they are created after this hook
+ *   in App.jsx; the port reads `.current` at request time.
  */
 export function useProjectApiBridge({
   projectInstance,
@@ -54,15 +60,18 @@ export function useProjectApiBridge({
   piecesById,
   selectedGroupId,
   groups,
-  languageSupportDomain
+  languageSupportDomain,
+  graphOwnersRef
 }) {
   const { tabsById, openTabIds, activeTabId } = useEditorSession();
+  const fallbackGraphRef = useRef({});
   const ownersRef = useRef(null);
   ownersRef.current = {
     session: { tabsById, openTabIds },
     activeTabId,
     workspace: { selectedIds, piecesById, selectedGroupId, groups },
-    languageSupportDomain
+    languageSupportDomain,
+    graph: graphOwnersRef ?? fallbackGraphRef
   };
   const bridgeRef = useRef(null);
 
@@ -75,7 +84,30 @@ export function useProjectApiBridge({
           const { session, activeTabId: active, workspace } = ownersRef.current;
           return selectionSnapshot(workspace, getActiveSessionDocument(session, active));
         },
-        languageCapabilities: () => buildCapabilityMatrix(ownersRef.current.languageSupportDomain)
+        languageCapabilities: () => buildCapabilityMatrix(ownersRef.current.languageSupportDomain),
+        graph: () => {
+          const { workspace, graph } = ownersRef.current;
+          const owners = graph.current ?? {};
+          const syntax = owners.syntaxDomain?.selectors ?? null;
+          return graphSnapshot({
+            piecesById: workspace.piecesById,
+            groups: workspace.groups,
+            edgeProvenance: syntax?.getAllEdgeProvenance?.() ?? [],
+            pendingEdges: owners.getPendingEdges?.() ?? [],
+            // Canvas connections, so a wire with no syntax edge surfaces as a
+            // `manual` edge through the production snapshot (P4c task 10).
+            connections: owners.connectionDomain?.selectors?.getAllConnections?.() ?? [],
+            // The absolute project root, so SyntaxDomain's absolute keys meet the
+            // project-relative paths pieces and requests use (P4c task 9).
+            projectRoot: owners.projectRoot ?? '',
+            parsedRevision: (path) => syntax?.getParsedRevision?.(path) ?? null,
+            discoverable: isDiscoverableFilename,
+            discoveryInFlight: owners.isDiscoveryInFlight?.() === true,
+            // Distinct from in-flight: armed on an empty canvas, waiting for
+            // pieces, so the graph reports its own reason (P4c live pass 1).
+            awaitingCanvasPieces: owners.isDiscoveryAwaitingCanvasPieces?.() === true
+          });
+        }
       },
       transport,
       getWorkspaceEpoch

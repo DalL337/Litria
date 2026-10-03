@@ -214,6 +214,28 @@
       "sample": "capabilities"
     },
     {
+      "file": "workspace.graph.request.json",
+      "operation": "workspace.graph",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits for one walk level (asserted in fixtures.rs).",
+      "sample": "graph"
+    },
+    {
+      "file": "workspace.graph.reply.json",
+      "operation": "workspace.graph",
+      "message": "reply",
+      "expect": "accept",
+      "note": "A frontier slice: an on-canvas file in a folder group, an off-canvas exporter, a sourceDerived edge with a status and a manual wire."
+    },
+    {
+      "file": "workspace.graph.reply.unknown-field.json",
+      "operation": "workspace.graph",
+      "message": "reply",
+      "expect": "reject",
+      "note": "A reply is read strictly: an unknown field is rejected."
+    },
+    {
       "file": "workspace.selection.reply.json",
       "operation": "workspace.selection",
       "message": "reply",
