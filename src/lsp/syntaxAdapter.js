@@ -187,16 +187,18 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
    * wins over it, success or failure: a reopen, a newer close, a rename, a
    * delete, a write or a project reset, through this adapter or any other,
    * even when the text comes back identical. The domain's entry revision
-   * fences it (reviews of 2026-10-03: F1–F3, then identical-text changes). A
-   * close never adds a file the index does not hold: after a project reset,
-   * the closing tabs belong to the previous project.
+   * fences it, and the close stamps a new one first, so of two closes the
+   * newer read wins whichever finishes first (reviews of 2026-10-03: F1–F3,
+   * identical-text changes, then consecutive closes). A close never adds a
+   * file the index does not hold: after a project reset, the closing tabs
+   * belong to the previous project.
    *
    * @param {string} filePath
    * @returns {Promise<void>}
    */
   async function onFileClosed(filePath) {
     modelRegistry.delete(filePath);
-    const revision = syntaxDomain.selectors.getFileRevision(filePath);
+    const revision = syntaxDomain.commands.stampFileRevision(filePath);
     if (revision == null) return;
 
     if (!readProjectFile) {

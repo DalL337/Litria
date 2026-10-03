@@ -1022,6 +1022,20 @@ export function createSyntaxDomain() {
     },
 
     /**
+     * Give a file's entry a new revision without changing its text, and
+     * return it; null when the index holds no text for the file. A tab close
+     * stamps the entry before its disk read, so the newest close always holds
+     * the newest revision (tab-close build plan, third review, 2026-10-03).
+     *
+     * @returns {number|null}
+     */
+    stampFileRevision(filePath) {
+      if (!fileTextCache.has(filePath)) return null;
+      fileRevision.set(filePath, ++revisionCounter);
+      return revisionCounter;
+    },
+
+    /**
      * Unregister a file and mark dependent edges broken.
      *
      * @param {string} filePath

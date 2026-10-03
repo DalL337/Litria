@@ -10,6 +10,10 @@ Revised again 2026-10-03: the second review showed that the text comparison
 used for F1–F3 missed changes whose text came back identical. A revision
 kept by the domain replaced it (task 6), and the branch goes to a third
 review.
+Revised a third time 2026-10-03: the third review showed the revision fence
+dropped a case the per-path tickets had covered, two closes with no reopen
+between them. A close now stamps a new revision before its read (task 7),
+and the branch goes to a fourth review.
 
 Origin: found in P4b and recorded as the first P4c item in the
 [Project API build plan](project-api-build-plan.md) ("Closing a tab drops its
@@ -34,6 +38,7 @@ Rule 7 "State Follows Disk").
 - [x] A close's late disk read changes nothing once the file's index entry has changed: a project reset or reload, a rename, a delete, a write, or a newer open or close of the same file (first review F1–F3).
 - [x] A close never adds a file the index does not hold, and the project-switch case is tested through the real lifecycle hook.
 - [x] The late read is fenced by a revision of the file's index entry kept by the domain, so changes whose text comes back identical, and changes made through a replacement adapter, also win (second review).
+- [x] Of two closes of the same path with no reopen between them, the newer close's read wins whichever read finishes first, through the same adapter or a replacement (third review).
 
 ## Requirements
 
@@ -193,6 +198,40 @@ current entry in all six combinations.
 - `npm run check:architecture` → all seven guards passed.
 - `npm run test:domains` → tests 1443, pass 1443, fail 0.
 - `npm run build` → `✓ built in 40.59s`.
+- `cargo test --manifest-path src-tauri/Cargo.toml` → 525 passed; 0 failed. Rust is unchanged.
+
+> **Erratum (2026-10-03, third review):** the revision fence above recorded
+> the revision a close found but did not advance it, so two closes with no
+> reopen between them held the same number, and the older read's re-index
+> made the newer read look stale. The per-path tickets it replaced had covered
+> that case; no test pinned it, because the "newer close" test reopened the
+> file between the closes. Fixed below.
+
+### Consecutive closes (2026-10-03, third review)
+
+**Review finding, reproduced before fixing** against commit `90c1f71`: two
+closes of the same path with no reopen between them, the older read finishing
+first, left stale text (older read stale) or dropped the file (older read
+failed), through the same adapter or a replacement one (four of four).
+
+**Fix.** A new domain command, `stampFileRevision`, gives an indexed entry a
+new revision without changing its text and returns it (null when the index
+holds no text). `onFileClosed` stamps the entry instead of reading its
+revision, so the newest close always holds the newest revision.
+
+**Tests.** One added to `syntaxAdapterClose.test.mjs`, looping over the same
+adapter and a replacement, both completion orders, and an older read that is
+stale or fails: eight combinations, each expecting the newer close's text.
+
+**Failing-first.** Against commit `90c1f71` the new test fails ("older read
+first, older read stale") and the 21 existing tests in both files pass. With
+the fix: 22 of 22. The reviewer's reproduction passes all four cases, and the
+earlier reviews' reproductions still pass (four and six cases).
+
+**Checks (all pass, 2026-10-03).**
+- `npm run check:architecture` → all seven guards passed.
+- `npm run test:domains` → tests 1444, pass 1444, fail 0.
+- `npm run build` → `✓ built in 40.22s`.
 - `cargo test --manifest-path src-tauri/Cargo.toml` → 525 passed; 0 failed. Rust is unchanged.
 
 ## Blockers

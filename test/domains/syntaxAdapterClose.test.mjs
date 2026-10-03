@@ -286,6 +286,34 @@ for (const [change, apply] of Object.entries(IDENTICAL_CHANGES)) {
   });
 }
 
+// Third review (2026-10-03): two closes of the same path with no reopen
+// between them. The newer close's read must win whichever read finishes
+// first, also when the newer close comes through a replacement adapter.
+test('a newer close wins over an older one whichever read finishes first (third review)', async () => {
+  for (const replacement of [false, true]) {
+    for (const olderFirst of [true, false]) {
+      for (const older of [STALE, null]) {
+        const { domain, adapter, reads } = setupRace();
+        const other = replacement
+          ? createSyntaxAdapter({ syntaxDomain: domain, projectRoot: '/proj', readProjectFile: reads.readProjectFile })
+          : adapter;
+        const first = adapter.onFileClosed(UTILS);
+        const second = other.onFileClosed(UTILS);
+        const finish = async (index, text, closing) => { reads.release(index, text); await closing; };
+        if (olderFirst) {
+          await finish(0, older, first);
+          await finish(1, FRESH, second);
+        } else {
+          await finish(1, FRESH, second);
+          await finish(0, older, first);
+        }
+        assert.deepEqual(names(domain), ['fresh'],
+          `${replacement ? 'replacement adapter, ' : ''}${olderFirst ? 'older' : 'newer'} read first, older read ${older === null ? 'failed' : 'stale'}`);
+      }
+    }
+  }
+});
+
 test('a same-root reload that re-indexes the file during the read keeps the newer text', async () => {
   const { domain, adapter, reads } = setupRace();
   const closing = adapter.onFileClosed(UTILS);
