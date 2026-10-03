@@ -670,6 +670,10 @@ Debug builds take about 2–3 times as long. In the working tree (5,855 walkable
   >   - SyntaxDomain was never reset, while each load restarts wire ids at `conn_1`. The next project's `conn_1` was linked to the previous project's edge. SyntaxDomain now has `reset()`, run on each new load.
   >   - Overlapping opens ended on whichever finished last, and the loser skipped its teardown. Opens now run one at a time and the newest request wins. Teardown reads a live instance ref.
 - *(Found in P4b, 2026-10-01; for P4c.)* **Closing a tab drops its file from the index.** `syntaxAdapter.onFileClosed` calls `unregisterFile`, even though the file is still on disk. Until discovery runs again, wires from that file are marked broken, and the graph would report the file as not parsed. Reproduce it, then fix it (likely: re-index from disk on close) or withdraw it.
+  > **Done (branch `fix/tab-close-reindex`, 2026-10-03): REPRODUCED and FIXED.**
+  > - Closing a tab re-indexes the file from disk. A file that cannot be read is unregistered, as before.
+  > - The disk read finishes after the close, so it is fenced: the domain stamps every change to a file's entry with a revision that never repeats, and the close applies its read only if the revision is still the one it stamped. A reset, reload, rename, delete, write, reopen or newer close therefore always wins, through any adapter.
+  > - Four review rounds; the fourth approved with no findings. Evidence per round: [tab-close build plan](tab-close-reindex-build-plan.md).
 
 ### Tests
 

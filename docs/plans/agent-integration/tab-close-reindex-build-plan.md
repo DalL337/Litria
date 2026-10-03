@@ -1,6 +1,8 @@
 # Tab close keeps the file indexed: build plan
 
-Status: Proposed, 2026-10-02. The owner chose this as the first unattended
+Status: Delivered, 2026-10-03, on branch `fix/tab-close-reindex`, after four
+reviews; the fourth approved with no findings. Proposed 2026-10-02. The owner
+chose this as the first unattended
 build-and-review trial: one agent builds the whole checklist below, a second
 agent reviews the result once, and nothing merges without the owner.
 Revised 2026-10-03: the first review reproduced three races the asynchronous
