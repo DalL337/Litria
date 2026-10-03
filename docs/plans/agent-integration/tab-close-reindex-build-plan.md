@@ -79,6 +79,12 @@ All tasks checked, the four checks passing, and the evidence below filled in.
 
 ## Evidence
 
+> **Note on commit hashes (2026-10-03):** the hashes below name commits on the
+> run's local branch. PR #107 replayed them onto `main` as `63a793f` (was
+> `2d52f7f`), `2027010` (was `640d4bd`), `c4dbbf7` (was `90c1f71`) and
+> `d2614f4` (was `489cd9c`, the commit the fourth review approved). The code
+> is identical.
+
 **Fix.** `onFileClosed` in `src/lsp/syntaxAdapter.js` is now async. It clears
 the model registry synchronously (so the file immediately reads as closed),
 then reads the file through the injected `readProjectFile` via `absToRel`. If
