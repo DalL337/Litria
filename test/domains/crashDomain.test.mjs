@@ -11,6 +11,7 @@ import {
   normalizeErrorLike,
   scrubText,
   buildIssueUrl,
+  leadNotice,
   RING_CAP,
   REPORT_URL_MAX
 } from '../../src/crash/crashDomain.js';
@@ -135,4 +136,42 @@ test('buildIssueUrl truncation engages under a tight cap AND lands under it', ()
   });
   assert.ok(decodeURIComponent(url).includes('truncated'));
   assert.ok(url.length <= 1200, `url length ${url.length}`);
+});
+
+// ── Banner lead ─────────────────────────────────────────────────────────────
+
+// Startup-scan notices, newest first; file names are crash-<ts_ms>-<pid>-<layer>.json.
+const notice = (ts, pid, layer, message) => ({ fileName: `crash-${ts}-${pid}-${layer}.json`, layer, message });
+
+test('leadNotice leads with the newest notice', () => {
+  const notices = [
+    notice(2000, 7, 'react', 'render failed'),
+    notice(1000, 3, 'unclean-shutdown', 'Litria did not shut down cleanly (last phase: webview-ready).')
+  ];
+  assert.equal(leadNotice(notices), notices[0]);
+  assert.equal(leadNotice([]), null);
+  assert.equal(leadNotice(undefined), null);
+});
+
+test('after an abort, leadNotice leads with the panic that caused it, not the follow-up', () => {
+  // A panic that reaches a frame that cannot unwind writes two records about
+  // half a second apart, and the second one only says why the process aborted
+  // (2026-10-03 crash test, records 1791082154956 and 1791082155473).
+  const followUp = notice(1791082155473, 22876, 'rust', 'panic in a function that cannot unwind');
+  const cause = notice(1791082154956, 22876, 'rust', 'crash_test_panic: intentional dev-only panic to exercise the crash hook');
+  const older = notice(1791052609582, 16816, 'unclean-shutdown', 'Litria did not shut down cleanly (last phase: webview-ready).');
+  assert.equal(leadNotice([followUp, cause, older]), cause);
+  // core::panicking's other follow-up message behaves the same way.
+  const cleanup = { ...followUp, message: 'panic in a destructor during cleanup' };
+  assert.equal(leadNotice([cleanup, cause, older]), cause);
+});
+
+test('a follow-up panic with no cause from its own session stays the lead', () => {
+  const followUp = notice(5_000_000, 22876, 'rust', 'panic in a function that cannot unwind');
+  // Another session's record is never presented as the cause.
+  const otherSession = notice(4_999_900, 16816, 'rust', 'some other panic');
+  assert.equal(leadNotice([followUp, otherSession]), followUp);
+  // The same pid a minute earlier is a reused pid, not the same session.
+  const reusedPid = notice(5_000_000 - 60_000, 22876, 'rust', 'an older panic');
+  assert.equal(leadNotice([followUp, reusedPid]), followUp);
 });

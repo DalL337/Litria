@@ -171,3 +171,46 @@ export function buildIssueUrl({
   }
   return url;
 }
+
+
+// ── Next-launch banner ──────────────────────────────────────────────────────
+
+// The messages core::panicking uses for a SECOND panic when the first one
+// reaches a frame that cannot unwind. The process then aborts, so the record
+// that explains the crash is the panic just before this one.
+const RUST_FOLLOW_UP_PANICS = new Set([
+  'panic in a function that cannot unwind',
+  'panic in a destructor during cleanup'
+]);
+// Both records of one abort land within a second of each other (0.5 s in the
+// 2026-10-03 crash test). The same pid further apart is a reused pid.
+const SAME_SESSION_MS = 10_000;
+
+/** `{ ts, pid }` from a record file name `crash-<ts_ms>-<pid>-<layer>.json`. */
+function recordOrigin(fileName) {
+  const match = /^crash-(\d+)-(\d+)-/.exec(typeof fileName === 'string' ? fileName : '');
+  return match ? { ts: Number(match[1]), pid: match[2] } : null;
+}
+
+/**
+ * The notice the crash banner leads with. Startup-scan notices arrive newest
+ * first, and the newest normally leads. When the newest is only a Rust abort
+ * follow-up, the same session's panic before it leads instead: that one names
+ * what went wrong. Both records stay on disk and in the count.
+ */
+export function leadNotice(notices) {
+  if (!Array.isArray(notices) || notices.length === 0) return null;
+  const newest = notices[0];
+  if (!RUST_FOLLOW_UP_PANICS.has(newest.message)) return newest;
+  const origin = recordOrigin(newest.fileName);
+  if (!origin) return newest;
+  const cause = notices.slice(1).find((notice) => {
+    const other = recordOrigin(notice.fileName);
+    return other !== null
+      && other.pid === origin.pid
+      && origin.ts - other.ts >= 0
+      && origin.ts - other.ts <= SAME_SESSION_MS
+      && !RUST_FOLLOW_UP_PANICS.has(notice.message);
+  });
+  return cause ?? newest;
+}

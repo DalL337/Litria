@@ -1,4 +1,4 @@
-import { buildIssueUrl } from './crashDomain.js';
+import { buildIssueUrl, leadNotice } from './crashDomain.js';
 import { invokeSafe } from './invoke.js';
 
 // Next-launch notice (hard crashes / unclean shutdowns). Inline banner, not
@@ -18,8 +18,9 @@ function layerLabel(layer) {
 
 function CrashNoticeBanner({ notices = [], onDismissed }) {
   if (!notices.length) return null;
-  // Lead with the newest; the rest are summarized by count.
-  const latest = notices[0];
+  // Lead with the newest, or with the panic behind a Rust abort record; the
+  // rest are summarized by count.
+  const latest = leadNotice(notices);
 
   const handleViewLog = () => {
     invokeSafe('crash_open_logs_dir');
