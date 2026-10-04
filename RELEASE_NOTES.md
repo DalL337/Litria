@@ -1,5 +1,150 @@
 # Release Notes
 
+## v1.1.0 — Structural grid
+
+**Date:** 2026-10-03 (PRs #68–#109)
+
+> Platform status: unsigned artifacts everywhere. Windows is the only platform
+> a human has run end-to-end this cycle. The macOS and Linux artifacts compile
+> and pass their test suites in CI, and Rust tests now run on both for every
+> pull request (#70), but nobody has clicked through them. The scaffold evidence
+> behind this release was recorded on Windows.
+
+The canvas has a structural grid. Nodes land on a lattice instead of wherever
+the mouse let go, smart guides show alignment while you drag, and the grid
+travels with the project. This release also fixes three ways v1.0.9 could
+change or delete files you never asked it to touch.
+
+### ⚠️ Data-loss fixes — please update
+
+- **Renaming an open file no longer rewrites its importers (#105).** In v1.0.9,
+  renaming or moving a file that was open in a tab rewrote every import of it,
+  on disk and in closed files too. Multi-line imports were left half-replaced,
+  which is a syntax error. Aliases and names Litria wasn't tracking were
+  dropped. Quote and extension style changed. Imports found when the project
+  opened were replaced with `import { /* TODO: select symbol */ }`. A rename
+  now changes only the path in each `from '…'`, and leaves the rest of the
+  statement as you wrote it. When no import matches, nothing is written.
+- **Deleting or moving a link acts on the link (#88).** Deleting, moving, or
+  removing an empty folder through a symbolic link or junction acted on the
+  link's target. Deleting a link that pointed back to the project root deleted
+  the project. The selected entry is now the one that changes, dangling links
+  included.
+- **Opening a project no longer writes into your files (#91).** When discovery
+  didn't recognize an import, for example a directory import such as
+  `'./utils'`, it could insert a `TODO: select symbol` stub. For a closed file
+  that went straight to disk, with no undo. It could also push an import you
+  had deleted in an unsaved buffer back into that buffer. Discovery now records
+  wires without writing. Code edits from a wire also check both files'
+  languages, so a Python-to-TypeScript wire no longer writes a JavaScript import
+  into Markdown or an `export` into Python (#91, #98).
+
+### New: structural grid (ADR-030)
+
+- **Nodes land on the grid (#76–#80).** Each workspace has a three-level grid
+  (100 · 20 · 10 by default), saved with the project.
+  - **Flex** (the default) docks against neighbors as before, and otherwise
+    lands on the finest grid point.
+  - **Strict** lands only on major intersections and never docks flush.
+  - A drop never overlaps another node.
+  - The move, including its settle, is one undo step.
+- **Smart guides** show when a node lines up with another node's edge or
+  center. In Flex, a node pulls into line from 6 pixels away (#78, #82).
+- **Settle slide.** A dropped node slides onto its grid point in 150 ms by
+  default. The slide follows your system's reduce-motion setting (#79).
+- **A Grid widget in the canvas HUD (#79)** and a **Grid section in
+  Preferences** hold the same settings: placement mode, guides, settle time and
+  easing, which line levels show, line color, per-theme opacity, and the origin
+  marker. Every HUD section now folds to its title row (#82).
+- **Existing layouts stay where they are (#80).** Opening a project moves no
+  node and writes nothing back. Zoom, pan, theme switches and hiding the grid
+  don't move nodes either. A node lands on the grid the next time you move it.
+- **Folder groups (#81, #83).** Opening some projects failed with `Failed to
+  create group: UNIQUE constraint failed: groups.id`; group ids are now
+  distinct. New empty folders get their own boxes, laid out apart in a column
+  rather than piled on one spot. Dragging a group now carries its empty
+  subfolders too, so an empty parent's box no longer stretches on the drop.
+
+### New
+
+- **Logs ▸ Open folder (#101)** opens the build-log or crash-record folder for
+  the tab you're on.
+- **Language-server installs show progress and can be cancelled (#102).** A
+  cancel now says "Nothing was installed" instead of reporting a download
+  failure, and a cancel during the last chunk no longer installs anyway.
+- **The New Project wizard checks your machine before Create (#103).** A
+  package manager the run would refuse, such as one that isn't installed or
+  Yarn Classic, shows as disabled with the run's own reason, before any
+  network call. A Tauri project on a machine without Rust can still be created,
+  and the review page says what running it needs.
+- **Yarn with Angular (#109).** The wizard now offers Yarn for Angular projects
+  on Windows, with and without Tailwind. The earlier evidence run had let
+  Angular's own install fall back to Yarn Classic, which a real run never
+  uses; re-run with the same Yarn 4 throughout, it passes. Yarn with shadcn or
+  a router stays disabled: Yarn 4's one-day release gate blocks the packages
+  shadcn installs while they are new.
+- **Withhold from AI agents (#96).** A Preferences setting that lists paths an
+  AI agent connected to Litria may never read, search or list, on top of the
+  built-in rules for environment files, keys and credentials. Agent connections
+  are still in development (see *Under the hood*), so the setting has nothing
+  to restrict yet.
+
+### Fixed
+
+- **Opening and switching projects (#94, #106).** Litria checks the new path
+  before closing the current project, so a deleted recent project or a typo
+  leaves you where you were. An open that fails later lands on the launcher
+  with the error. The in-workspace switcher reports failures instead of failing
+  silently. A discovery run from the previous project is cancelled at the
+  switch, and wire status no longer carries over between projects.
+- **Discard resets the node too (#95).** Discarding an edit left the discarded
+  text on the canvas node, where a later restore could bring it back as an
+  unsaved edit.
+- **Wires stay accurate after file operations (#93, #98, #107).** Deleting or
+  moving a file from the canvas now updates the syntax index, so wires from a
+  deleted file turn broken and a moved file's importers resolve at once. Moving
+  a file with unsaved edits keeps those edits' definitions. Closing a tab keeps
+  a file that's still on disk indexed, so its wires stay healthy.
+- **TypeScript-only symbols** are no longer offered to, or written into, plain
+  JavaScript files (#98).
+
+### Compatibility
+
+- Workspace databases move from schema v3 to v4 (a new `workspace_grid` table)
+  the first time 1.1.0 opens them. The step is additive: v1.0.9 still opens a
+  v4 workspace and ignores the grid. A read-only workspace from before the grid
+  opens view-only, without migrating.
+
+### Under the hood
+
+- **Project API groundwork (ADR-031, ADR-033; #84, #86, #89, #90, #96, #108).**
+  This is a read-only interface for AI agents: workspace binding, versioned JSON
+  contracts, bounded disk reads, project context, file search that honours
+  `.gitignore`, and a graph query over the syntax index. Its commands are
+  registered in debug builds only, so a release build exposes none of it.
+- **React 19.3**, in lockstep with react-konva (#75).
+- **CI:** Rust tests run on Linux and macOS for pull requests (#70), and one
+  required check reports on every pull request (#99).
+- **Scaffold pins refreshed (#109):** shadcn 4.21.1, shadcn-svelte 1.7.0,
+  Vue 3.5.43, Svelte 5.57.1, Fastify 5.12.5. All 66 recorded scaffold
+  combinations were re-run on Windows against them: 65 pass, and the one
+  failure is the Yarn shadcn case above. Four new majors are held, each with
+  its reason recorded in the registry: `@vitejs/plugin-react` 6 and `@sveltejs/vite-plugin-svelte` 7 (both
+  need Vite 8), `@vitejs/plugin-vue` 6, and `create-electron-app` 8.
+- Removed `greet`, the Tauri template's sample command (#104). A dev-only
+  `brace-expansion` bump clears three DoS advisories (#92). The wizard's
+  cancel-during-run test is now deterministic (#73).
+
+### Documentation (no behaviour change)
+
+- ADR-031 agent integration (#71), ADR-033 contract pipeline and the Project
+  API brief and build plan (#84, #85), the adversarial check policy (#87), and
+  the merge rule under branch protection (#100).
+- The Rust module map, command inventory and domain register refreshed (#97).
+- Dependency policy Rule 4: every dependency and tool change is exercised (#72).
+- React 19.3 and ViewTransition briefs, and an in-app updates brief (#74).
+- README unsigned-build heading (#68) and the v1.0.9 notes (#69).
+
 ## v1.0.9 — Live durability
 
 **Date:** 2026-09-19 (PRs #54–#61; documentation #62–#66)
