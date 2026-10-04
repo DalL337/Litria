@@ -21,6 +21,7 @@ import {
   addonCli,
   resolveRoute,
   assemblePrimaryArgv,
+  deriveScaffoldSteps,
   getCoverage,
   pinsOutOfDate,
   SELECTABLE_STATUSES,
@@ -274,4 +275,31 @@ test('the legacy projections agree with the registry', () => {
   assert.equal(CREATE_CLI_VERSIONS.vite, RECIPES.tools['create-vite'].version);
   assert.equal(CREATE_CLI_VERSIONS['tauri-app'], RECIPES.tools['create-tauri-app'].version);
   assert.equal(ADDON_CLI_VERSIONS['shadcn-vue'], RECIPES.tools['shadcn-vue'].version);
+});
+
+test('Yarn defers the Angular CLI install until its project marker and age gate are written', () => {
+  // 2026-10-04: with Yarn 4 doing `ng new`'s own install, Yarn refused it
+  // whenever a parent folder holds a package.json (home folders often do).
+  // The yarn.lock marker that prevents that is a postCreate step, and
+  // postCreate runs only after the create CLI. So for Yarn the CLI skips its
+  // install, and the runner installs once the marker and .yarnrc.yml exist.
+  const route = resolveRoute('web', 'angular', 'ts');
+  const yarnArgv = assemblePrimaryArgv({ route, managerId: 'yarn', projectName: 'demo' });
+  assert.deepEqual(yarnArgv.slice(-3), ['--package-manager', 'yarn', '--skip-install']);
+  const steps = deriveScaffoldSteps({ wrapper: 'web', framework: 'angular', language: 'ts', manager: 'yarn', projectName: 'demo' });
+  assert.deepEqual(steps.map((s) => [s.source, s.op, s.path ?? s.argv.join(' ')]), [
+    ['manager:yarn', 'write', 'yarn.lock'],
+    ['manager:yarn', 'write', '.yarnrc.yml'],
+    ['manager:yarn', 'installAll', 'install --mode=skip-build'],
+  ]);
+  // npm and pnpm keep the Angular CLI's own install.
+  for (const managerId of ['npm', 'pnpm']) {
+    assert.ok(!assemblePrimaryArgv({ route, managerId, projectName: 'demo' }).includes('--skip-install'), managerId);
+    const managerSteps = deriveScaffoldSteps({ wrapper: 'web', framework: 'angular', language: 'ts', manager: managerId, projectName: 'demo' });
+    assert.ok(!managerSteps.some((s) => s.op === 'installAll'), managerId);
+  }
+  // A Yarn route whose create CLI installs nothing is unchanged.
+  const reactRoute = resolveRoute('web', 'react', 'ts');
+  assert.ok(!assemblePrimaryArgv({ route: reactRoute, managerId: 'yarn', projectName: 'demo' }).includes('--skip-install'));
+  assert.ok(!deriveScaffoldSteps({ wrapper: 'web', framework: 'react', language: 'ts', manager: 'yarn', projectName: 'demo' }).some((s) => s.op === 'installAll'));
 });

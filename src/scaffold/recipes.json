@@ -132,7 +132,7 @@
           "path": "yarn.lock",
           "mode": "keep",
           "content": "",
-          "$comment": "Yarn Berry walks up from the new folder looking for a project; a package.json in any ancestor (a user's home directory is common) makes it refuse the scaffold as 'not part of the project declared in …'. An empty yarn.lock marks the new folder as its own project (Yarn's documented remedy); `yarn install` rewrites it. Mode `keep`: a create CLI that already wrote one (ng new) wins."
+          "$comment": "Yarn Berry walks up from the new folder looking for a project; a package.json in any ancestor (a user's home directory is common) makes it refuse the scaffold as 'not part of the project declared in …'. An empty yarn.lock marks the new folder as its own project (Yarn's documented remedy); `yarn install` rewrites it. Mode `keep`: a lockfile a create CLI already wrote wins."
         },
         {
           "op": "write",
@@ -146,6 +146,13 @@
         "YARN_NODE_LINKER": "node-modules",
         "YARN_ENABLE_IMMUTABLE_INSTALLS": "false",
         "YARN_NPM_MINIMAL_AGE_GATE": "1d"
+      },
+      "deferCreateInstall": {
+        "argv": [
+          "install",
+          "--mode=skip-build"
+        ],
+        "$comment": "Observed 2026-10-04 with Yarn 4.18.0: `ng new`'s own install runs before the postCreate yarn.lock marker exists, so Yarn refuses it whenever a parent folder holds a package.json (the trap that marker exists for). Classic never checked, which hid it while the evidence harness let corepack's default Classic answer that install. So for a route with `skipInstall` the create CLI skips its install, and the runner runs this right after postCreate: the marker and .yarnrc.yml (node_modules linker, 1-day gate) are in place. `--mode=skip-build` skips dependency build scripts, as `ng new` did with YARN_ENABLE_SCRIPTS=false."
       }
     }
   },
@@ -783,7 +790,9 @@
             "--skip-git",
             "--package-manager",
             "{manager}"
-          ]
+          ],
+          "skipInstall": "--skip-install",
+          "$comment": "`ng new` installs during create. `skipInstall` is its flag to skip that, used for a manager with `deferCreateInstall` (Yarn): the runner installs after the manager's postCreate steps instead."
         }
       },
       "templates": {
@@ -3241,7 +3250,7 @@
         "platform": "windows",
         "status": "covered-by-equivalence",
         "evidence": {
-          "date": "2026-10-03",
+          "date": "2026-10-04",
           "representative": "addon run web/angular/ts yarn windows [tailwind]",
           "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
           "pins": {
@@ -3260,7 +3269,8 @@
               "--defaults",
               "--skip-git",
               "--package-manager",
-              "yarn"
+              "yarn",
+              "--skip-install"
             ]
           },
           "versions": {
@@ -3432,8 +3442,8 @@
         "platform": "windows",
         "status": "covered-by-equivalence",
         "evidence": {
-          "date": "2026-10-03",
-          "representative": "addon run web/react/ts yarn windows [tailwind]",
+          "date": "2026-10-04",
+          "representative": "addon run web/react/ts yarn windows [tailwind+shadcn+router +express]",
           "rationale": "same create argv, install and build as the primary path; the add-on steps only add files before the build",
           "pins": {
             "create-vite": "9.2.1"
@@ -4899,7 +4909,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-10-03",
+          "date": "2026-10-04",
           "pins": {
             "@angular/cli": "21.2.24",
             "tailwindcss": "4.3.3",
@@ -4909,6 +4919,7 @@
           "steps": [
             "manager:yarn: write yarn.lock",
             "manager:yarn: write .yarnrc.yml",
+            "manager:yarn: yarn install --mode=skip-build",
             "addon:tailwind: yarn add -D tailwindcss@4.3.3 @tailwindcss/postcss@4.3.3 postcss@8.5.28",
             "addon:tailwind: write .postcssrc.json",
             "addon:tailwind: append to src/styles.css"
@@ -4925,7 +4936,7 @@
             "build"
           ],
           "notExercised": [
-            "install (scripts off): add-on steps install (runner flow)"
+            "install (scripts off): the manager step installed (runner flow)"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
         }
@@ -5187,9 +5198,9 @@
           "router"
         ],
         "backend": "express",
-        "status": "failing",
+        "status": "verified",
         "evidence": {
-          "date": "2026-10-03",
+          "date": "2026-10-04",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",
@@ -5227,14 +5238,16 @@
           "checks": [
             "create",
             "files",
-            "manager steps"
+            "manager steps",
+            "steps",
+            "build",
+            "server syntax (node --check)"
           ],
           "notExercised": [
             "install (scripts off): add-on steps install (runner flow)"
           ],
           "source": "scripts/scaffold-recipe-evidence.mjs"
-        },
-        "reason": "step failed: addon:router: yarn add react-router-dom@7.18.4 Cause (evidence log, 2026-10-03): Yarn 4.18's one-day release gate (npmMinimalAgeGate) quarantined lucide-react 1.51.0, published 17 hours earlier, which shadcn's inner `yarn add` had locked; the next add fails (YN0016). Same class as 2026-09-16 and 2026-09-17."
+        }
       },
       {
         "wrapper": "web",
@@ -5248,7 +5261,7 @@
         "backend": null,
         "status": "verified",
         "evidence": {
-          "date": "2026-10-03",
+          "date": "2026-10-04",
           "pins": {
             "create-vite": "9.2.1",
             "tailwindcss": "4.3.3",

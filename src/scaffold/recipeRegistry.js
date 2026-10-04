@@ -140,7 +140,14 @@ export function resolveRoute(wrapperId, frameworkId, languageId) {
     version: tool.version,
     template,
     args: route.args,
+    skipInstall: route.skipInstall ?? null,
   };
+}
+
+/** True when the manager installs after its postCreate steps instead of
+ *  letting this route's create CLI install (Yarn + `ng new`, 2026-10-04). */
+function defersCreateInstall(route, manager) {
+  return Boolean(route && !route.unsupported && route.skipInstall && manager?.deferCreateInstall);
 }
 
 /**
@@ -156,14 +163,15 @@ export function assemblePrimaryArgv({ route, managerId, projectName }) {
     .replaceAll('{manager}', managerId)
     .replaceAll('{name}', projectName);
   const spec = `${route.invoke}@${route.version}`;
+  const deferred = defersCreateInstall(route, manager) ? [route.skipInstall] : [];
   if (route.kind === 'initializer') {
     const argv = [...manager.create, spec, projectName];
     if (manager.forwardSeparator) argv.push(manager.forwardSeparator);
-    argv.push(...route.args.map(substitute));
+    argv.push(...route.args.map(substitute), ...deferred);
     return argv;
   }
   if (route.kind === 'exec') {
-    return [...manager.exec, spec, ...route.args.map(substitute)];
+    return [...manager.exec, spec, ...route.args.map(substitute), ...deferred];
   }
   return null;
 }
@@ -300,6 +308,12 @@ function materialize(step, ctx, source) {
       out.argv = [...manager.install, ...(step.dev ? [manager.devFlag] : []), ...step.packages];
       break;
     }
+    case 'installAll': {
+      // The install a create CLI skipped (`deferCreateInstall`).
+      if (!manager.deferCreateInstall) throw new Error(`recipes.json: ${ctx.manager} has no deferCreateInstall`);
+      out.argv = [...manager.deferCreateInstall.argv];
+      break;
+    }
     case 'exec': {
       const spec = pinnedSpec(step.cli);
       out.cli = step.cli;
@@ -350,9 +364,13 @@ export function deriveScaffoldSteps({ wrapper, framework, language, manager, add
       for (const step of recipe.steps) out.push(materialize(step, ctx, source));
     }
   };
-  // Manager-specific post-create steps come first (Yarn Berry's project marker).
+  // Manager-specific post-create steps come first (Yarn Berry's project marker),
+  // then the install the create CLI skipped, once that marker exists.
   if (recipes.managers[manager]?.postCreate?.length) {
     apply([{ when: {}, steps: recipes.managers[manager].postCreate }], `manager:${manager}`);
+  }
+  if (defersCreateInstall(resolveRoute(wrapper, framework, language), recipes.managers[manager])) {
+    out.push(materialize({ op: 'installAll' }, ctx, `manager:${manager}`));
   }
   apply(recipes.wrappers[wrapper]?.frameworkRecipes?.[framework], `framework:${framework}`);
   for (const addon of orderAddons(addons)) apply(recipes.addons[addon]?.recipes, `addon:${addon}`);
@@ -366,7 +384,8 @@ export function deriveScaffoldSteps({ wrapper, framework, language, manager, add
 export function describeStep(step, managerId) {
   const who = step.source;
   switch (step.op) {
-    case 'install': return `${who}: ${managerId} ${step.argv.join(' ')}`;
+    case 'install':
+    case 'installAll': return `${who}: ${managerId} ${step.argv.join(' ')}`;
     case 'exec': return `${who}: ${managerId} ${(step.argv ?? [step.cli, ...step.args]).join(' ')}`;
     case 'write': return `${who}: write ${step.path}${step.mode === 'replace' ? ' (replace)' : ''}`;
     case 'prepend': return `${who}: prepend to ${step.path}`;

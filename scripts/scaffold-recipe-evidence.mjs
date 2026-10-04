@@ -195,7 +195,7 @@ function runSteps(projectDir, steps) {
   const results = [];
   for (const step of steps) {
     const label = describeStep(step, manager);
-    if (step.op === 'install' || step.op === 'exec') {
+    if (step.op === 'install' || step.op === 'installAll' || step.op === 'exec') {
       const args = step.op === 'install' && manager === 'npm' ? [...step.argv.slice(0, 1), '--ignore-scripts', ...step.argv.slice(1)] : step.argv;
       const r = pmRun(args, projectDir);
       results.push({ step: label, ok: r.ok, ms: r.ms, tail: r.ok ? '' : r.tail });
@@ -315,18 +315,21 @@ for (const { wrapper, framework, language, route, addons, backend } of combos) {
   record.generated = { name: pkg.name ?? null, scripts: Object.keys(pkg.scripts ?? {}), dependencies: pkg.dependencies ?? {}, devDependencies: pkg.devDependencies ?? {} };
 
   if (!skipInstall) {
-    // The runner never runs a bare install: the create CLI installs (Forge,
-    // Angular) or the add-on steps do (`add`). A standalone `install` here is
-    // the creation-stage check for templates that ship without one; for
-    // pnpm/Yarn it is skipped when post steps will install anyway so the
-    // evidence flow matches the runner's (Yarn's install-on-empty-lockfile
-    // path differs from `add`, which showed up as quarantined lock entries).
-    const stepsInstall = steps.some((st) => !st.source.startsWith('manager:') && (st.op === 'install' || st.op === 'exec'));
+    // The runner runs a bare install only where a manager defers the create
+    // CLI's own (`installAll`, a manager step that ran above: Yarn + Angular);
+    // otherwise the create CLI installs (Forge, Angular) or the add-on steps
+    // do (`add`). A standalone `install` here is the creation-stage check for
+    // templates that ship without one; for pnpm/Yarn it is skipped when post
+    // steps will install anyway so the evidence flow matches the runner's
+    // (Yarn's install-on-empty-lockfile path differs from `add`, which showed
+    // up as quarantined lock entries).
+    const installedAlready = steps.some((st) => st.op === 'installAll');
+    const stepsInstall = installedAlready || steps.some((st) => !st.source.startsWith('manager:') && (st.op === 'install' || st.op === 'exec'));
     const installArgs = manager === 'npm'
       ? ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--fetch-retries=1']
       : ['install'];
     const install = stepsInstall && manager !== 'npm' ? { ok: null, ms: 0, tail: '' } : pmRun(installArgs, projectDir);
-    checks.push({ check: 'install (scripts off)', ok: install.ok, ms: install.ms, tail: install.ok === false ? install.tail : '', ...(install.ok === null ? { detail: 'add-on steps install (runner flow)' } : {}) });
+    checks.push({ check: 'install (scripts off)', ok: install.ok, ms: install.ms, tail: install.ok === false ? install.tail : '', ...(install.ok === null ? { detail: installedAlready ? 'the manager step installed (runner flow)' : 'add-on steps install (runner flow)' } : {}) });
     if (install.ok === false) {
       record.status = 'failing';
       record.reason = `install exited ${install.status}`;

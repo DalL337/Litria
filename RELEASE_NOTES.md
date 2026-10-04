@@ -83,6 +83,14 @@ change or delete files you never asked it to touch.
   uses; re-run with the same Yarn 4 throughout, it passes. Yarn with shadcn or
   a router stays disabled: Yarn 4's one-day release gate blocks the packages
   shadcn installs while they are new.
+
+  > **Corrected 2026-10-04:** the re-run did not use Yarn 4 throughout.
+  > Angular's own install still ran Yarn Classic, and the pass depended on
+  > nothing in Angular's dependencies being under a day old. With Yarn 4 as
+  > your default and a package.json in a parent folder (a home folder often
+  > has one), creating an Angular project with Yarn in 1.1.0 can fail at
+  > create. Fixed after 1.1.0 (#113): Litria now runs that install itself,
+  > after writing the files Yarn needs.
 - **Withhold from AI agents (#96).** A Preferences setting that lists paths an
   AI agent connected to Litria may never read, search or list, on top of the
   built-in rules for environment files, keys and credentials. Agent connections

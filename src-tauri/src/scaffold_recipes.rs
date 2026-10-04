@@ -143,6 +143,18 @@ pub(crate) struct Manager {
     /// reach the create CLI's own install, which precedes `postCreate`).
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// For a route with `skipInstall`, the create CLI skips its install and
+    /// this runs right after `postCreate` instead (Yarn: the yarn.lock marker
+    /// must exist first, 2026-10-04).
+    #[serde(default)]
+    pub defer_create_install: Option<DeferredInstall>,
+}
+
+/// True when `manager` installs after its postCreate steps instead of letting
+/// `route`'s create CLI install. Same rule as `defersCreateInstall` in
+/// src/scaffold/recipeRegistry.js.
+fn defers_create_install(route: &Route, manager: &Manager) -> bool {
+    route.skip_install.is_some() && manager.defer_create_install.is_some()
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,6 +189,16 @@ pub(crate) struct Route {
     /// template manifest; the id only names the recipe in the plan).
     #[serde(default)]
     pub template: Option<String>,
+    /// The create CLI's flag to skip its own install (`ng new
+    /// --skip-install`), passed for a manager with `deferCreateInstall`.
+    #[serde(default)]
+    pub skip_install: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeferredInstall {
+    pub argv: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -343,7 +365,7 @@ pub(crate) fn derive_primary(
             .replace("{manager}", manager)
             .replace("{name}", project_name)
     };
-    let argv: Vec<String> = match route.kind.as_str() {
+    let mut argv: Vec<String> = match route.kind.as_str() {
         "initializer" => {
             let mut argv = m.create.clone();
             argv.push(spec);
@@ -362,6 +384,9 @@ pub(crate) fn derive_primary(
         }
         other => return Err(format!("unknown route kind '{other}'")),
     };
+    if defers_create_install(route, m) {
+        argv.extend(route.skip_install.iter().cloned());
+    }
 
     Ok(DerivedPrimary {
         route_kind: route.kind.clone(),
@@ -487,6 +512,14 @@ fn materialize(step: &Value, ctx: &StepContext, source: &str, manager: &Manager)
             out.insert("packages".into(), json!(packages));
             out.insert("argv".into(), json!(argv));
         }
+        "installAll" => {
+            // The install a create CLI skipped (`deferCreateInstall`).
+            let deferred = manager
+                .defer_create_install
+                .as_ref()
+                .ok_or_else(|| format!("recipes.json: {} has no deferCreateInstall", ctx.manager))?;
+            out.insert("argv".into(), json!(deferred.argv));
+        }
         "exec" => {
             let cli = str_field(obj, "cli")?;
             let spec = addon_cli_spec(cli);
@@ -579,6 +612,12 @@ pub(crate) fn derive_steps(
     };
     if !post_create.steps.is_empty() {
         apply(std::slice::from_ref(&post_create), &format!("manager:{manager}"))?;
+    }
+    // Then the install the create CLI skipped, once that marker exists.
+    let route = w.routes.get(framework).or(w.route.as_ref());
+    if route.is_some_and(|r| defers_create_install(r, m)) {
+        let deferred = Recipe { when: HashMap::new(), steps: vec![json!({ "op": "installAll" })] };
+        apply(std::slice::from_ref(&deferred), &format!("manager:{manager}"))?;
     }
     if let Some(fw) = w.framework_recipes.get(framework) {
         apply(fw, &format!("framework:{framework}"))?;
@@ -892,6 +931,46 @@ mod tests {
         assert_eq!(order_addons(&["shadcn".into(), "tailwind".into()]), vec!["tailwind", "shadcn"]);
         assert_eq!(order_addons(&["router".into(), "shadcn".into()]), vec!["tailwind", "shadcn", "router"]);
         assert!(order_addons(&["nope".into()]).is_empty());
+    }
+
+    #[test]
+    fn yarn_defers_the_angular_cli_install_until_its_marker_and_gate_exist() {
+        // 2026-10-04: with Yarn 4 doing `ng new`'s own install, Yarn refused
+        // it whenever a parent folder holds a package.json. The yarn.lock
+        // marker is a postCreate step, which runs only after the create CLI,
+        // so for Yarn the CLI skips its install and the runner installs.
+        let yarn = derive_primary("web", "angular", "ts", "yarn", "demo").unwrap();
+        assert_eq!(yarn.argv[yarn.argv.len() - 3..], ["--package-manager", "yarn", "--skip-install"]);
+        let shape = |manager: &str, framework: &str| -> Vec<(String, String)> {
+            derive_steps("web", framework, "ts", manager, &[], None, "demo")
+                .unwrap()
+                .iter()
+                .map(|s| {
+                    let detail = s.get("path").and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| {
+                        s["argv"].as_array().unwrap().iter().filter_map(|a| a.as_str()).collect::<Vec<_>>().join(" ")
+                    });
+                    (s["op"].as_str().unwrap().to_string(), detail)
+                })
+                .collect()
+        };
+        assert_eq!(
+            shape("yarn", "angular"),
+            vec![
+                ("write".to_string(), "yarn.lock".to_string()),
+                ("write".to_string(), ".yarnrc.yml".to_string()),
+                ("installAll".to_string(), "install --mode=skip-build".to_string()),
+            ]
+        );
+        // npm and pnpm keep the Angular CLI's own install.
+        for manager in ["npm", "pnpm"] {
+            let d = derive_primary("web", "angular", "ts", manager, "demo").unwrap();
+            assert!(!d.argv.iter().any(|a| a == "--skip-install"), "{manager}");
+            assert!(!shape(manager, "angular").iter().any(|(op, _)| op == "installAll"), "{manager}");
+        }
+        // A Yarn route whose create CLI installs nothing is unchanged.
+        let react = derive_primary("web", "react", "ts", "yarn", "demo").unwrap();
+        assert!(!react.argv.iter().any(|a| a == "--skip-install"));
+        assert!(!shape("yarn", "react").iter().any(|(op, _)| op == "installAll"));
     }
 
     #[test]

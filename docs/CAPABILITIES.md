@@ -442,10 +442,11 @@ scripts stay off, with explicit consent to run them.
   - Preact, Lit, Qwik, Vanilla — present in create-vite but not offered;
     scaffold them from a terminal (`npm create vite@latest`).
   - pnpm and Yarn — offered only for the combinations with evidence
-    (2026-10-03: web/react/ts and web/angular/ts on both). Yarn with shadcn
-    or router is recorded *failing* (Yarn 4's one-day release gate
-    quarantines what shadcn's inner install locks) and stays disabled until
-    a passing run replaces the record.
+    (2026-10-04: web/react/ts and web/angular/ts on both, each with the
+    add-ons its evidence covers). For Yarn + Angular the
+    Angular CLI skips its own install and Litria runs `yarn install` once
+    its project marker and 1-day release gate are written (ADR-028 §5
+    addendum).
   - macOS and Linux — every combination is unverified there until evidence
     exists; the wizard disables them by name rather than assuming a
     Windows run carries over.

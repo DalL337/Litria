@@ -415,6 +415,38 @@
         "projectName": "demo"
       },
       "expect": []
+    },
+    {
+      "name": "web angular ts yarn: the Angular CLI skips its install; the runner installs after the marker and gate",
+      "input": {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "yarn",
+        "addons": [],
+        "backend": null,
+        "projectName": "demo"
+      },
+      "expect": [
+        {
+          "source": "manager:yarn",
+          "op": "write",
+          "path": "yarn.lock"
+        },
+        {
+          "source": "manager:yarn",
+          "op": "write",
+          "path": ".yarnrc.yml"
+        },
+        {
+          "source": "manager:yarn",
+          "op": "installAll",
+          "argv": [
+            "install",
+            "--mode=skip-build"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -115,6 +115,23 @@ detected and refused visibly. The posture note (ADR-021 §5) renders the
 selected manager's actual coverage, and its guarding test carries one case
 per manager.
 
+> **Addendum (2026-10-04): a manager can defer the create CLI's install.**
+> `ng new` installs during create, before the Yarn `postCreate` steps write
+> the empty `yarn.lock` marker. Under Yarn 4 that install was refused whenever
+> a parent folder holds a package.json (a home folder often does). The
+> evidence harness never showed this: it pinned only the outer Yarn, and the
+> wrapper `yarn dlx` puts on the child's PATH runs corepack's yarn with no
+> version, so corepack's default Yarn Classic answered `ng new`'s install.
+> Classic never checks for an enclosing project and has no release-age gate.
+> Now a route may name its create CLI's skip flag (`skipInstall`), and a
+> manager may declare `deferCreateInstall`. For that pair the CLI skips its
+> install, and the runner runs the manager's install (Yarn:
+> `yarn install --mode=skip-build`) right after `postCreate`, with the marker
+> and `.yarnrc.yml` (node_modules linker, 1-day gate) in place. npm and pnpm
+> keep the CLI's own install. The harness now makes the run's manager
+> corepack's default in a run-local `COREPACK_HOME`, so every inner call runs
+> the same Yarn as a real run.
+
 ### 6. The wizard has one lifecycle state
 
 `runState` (`idle | running | held | opening | failed`) replaces the
