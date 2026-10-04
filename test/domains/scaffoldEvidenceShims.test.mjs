@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { writeManagerShim, withPathFirst } from '../../scripts/scaffold-evidence-shims.mjs';
+import { writeManagerShim, withPathFirst, corepackDefaultActivation } from '../../scripts/scaffold-evidence-shims.mjs';
 
 // `scripts/scaffold-recipe-evidence.mjs --corepack <v>` runs the outer manager
 // as `node corepack.js <id>@<v> …`, but child CLIs (`ng new --package-manager`,
@@ -66,4 +66,20 @@ test('a child process calling the manager by name reaches corepack with the pinn
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the run makes its manager corepack\'s default in a COREPACK_HOME of its own', () => {
+  // `yarn dlx` puts a wrapper first on the child's PATH that runs corepack's
+  // yarn.js with no version, so a PATH shim never sees `ng new`'s install;
+  // corepack's own default answered it: Yarn Classic 1.22 (2026-10-04).
+  const env = { Path: 'C:\Windows', corepack_home: 'C:\Users\alice\AppData\Local\node\corepack' };
+  const activation = corepackDefaultActivation({
+    home: 'C:\fixture\.corepack', id: 'yarn', version: '4.18.0', corepackPath: 'C:\node\corepack.js', env,
+  });
+  assert.deepEqual(activation.argv, ['C:\node\corepack.js', 'install', '-g', 'yarn@4.18.0']);
+  // The user's own COREPACK_HOME, however it is cased, is replaced for the run only.
+  assert.deepEqual(activation.env, { Path: 'C:\Windows', COREPACK_HOME: 'C:\fixture\.corepack' });
+  assert.equal(env.corepack_home, 'C:\Users\alice\AppData\Local\node\corepack', 'the input is not mutated');
+  assert.throws(() => corepackDefaultActivation({ home: 'h', id: 'npm', version: '11.0.0', corepackPath: 'c', env: {} }), /pnpm or yarn/);
+  assert.throws(() => corepackDefaultActivation({ home: 'h', id: 'yarn', version: 'stable', corepackPath: 'c', env: {} }), /exact version/);
 });

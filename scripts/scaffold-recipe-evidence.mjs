@@ -39,7 +39,7 @@ import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { writeManagerShim, withPathFirst } from './scaffold-evidence-shims.mjs';
+import { writeManagerShim, withPathFirst, corepackDefaultActivation } from './scaffold-evidence-shims.mjs';
 import { RECIPES, listWrappers, getWrapper, getLanguages, resolveRoute, assemblePrimaryArgv, deriveScaffoldSteps, describeStep, getAddons, getBackendOptions, managerEnv } from '../src/scaffold/recipeRegistry.js';
 
 const args = process.argv.slice(2);
@@ -254,6 +254,13 @@ if (corepackVersion && manager !== 'npm') {
   writeManagerShim({ dir: shimDir, id: manager, version: corepackVersion, nodePath: process.execPath, corepackPath: COREPACK_JS });
   childEnv = withPathFirst(process.env, shimDir);
   console.log(`shim: ${manager} by name runs corepack ${manager}@${corepackVersion} (first on PATH for child CLIs)`);
+  // Version-less corepack calls (the wrapper `yarn dlx` puts on PATH) must
+  // land on the same version: make it corepack's default for this run.
+  const activation = corepackDefaultActivation({ home: join(root, '.corepack'), id: manager, version: corepackVersion, corepackPath: COREPACK_JS, env: childEnv });
+  childEnv = activation.env;
+  const activated = run(process.execPath, activation.argv, root);
+  if (!activated.ok) throw new Error(`corepack could not make ${manager}@${corepackVersion} its default for this run:\n${activated.tail}`);
+  console.log(`corepack default: ${manager}@${corepackVersion} (COREPACK_HOME in the fixture root)`);
 }
 const versions = toolVersions();
 
