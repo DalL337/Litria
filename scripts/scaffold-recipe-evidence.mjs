@@ -28,7 +28,9 @@
 // `--corepack 10.34.5` runs pnpm/yarn through Node's bundled corepack
 // (`node corepack.js pnpm@10.34.5 …`) when the manager is not installed
 // globally — the same argv, a provisioned binary. The evidence records the
-// exact manager version either way.
+// exact manager version either way. Child CLIs (`ng new`, shadcn) call the
+// manager by name, so the run also puts a shim for it first on PATH
+// (scaffold-evidence-shims.mjs): inside and out, one manager and version.
 // Network is required (the CLIs download). Nothing in the repo is touched.
 // ---------------------------------------------------------------------------
 
@@ -37,6 +39,7 @@ import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { writeManagerShim, withPathFirst, corepackDefaultActivation } from './scaffold-evidence-shims.mjs';
 import { RECIPES, listWrappers, getWrapper, getLanguages, resolveRoute, assemblePrimaryArgv, deriveScaffoldSteps, describeStep, getAddons, getBackendOptions, managerEnv } from '../src/scaffold/recipeRegistry.js';
 
 const args = process.argv.slice(2);
@@ -60,6 +63,8 @@ const platform = process.platform === 'win32' ? 'windows' : process.platform ===
 // (Node ≥ 20 refuses without a shell, and a shell re-parses argv). npm runs as
 // `node <npm-cli.js>` from this Node's own install; other managers must be
 // resolvable as an absolute executable via `where`/`which`.
+const COREPACK_JS = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'corepack.js');
+
 function resolveManager(id) {
   if (id === 'npm') {
     const cli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
@@ -67,9 +72,8 @@ function resolveManager(id) {
     return { exe: process.execPath, prefix: [cli] };
   }
   if (corepackVersion) {
-    const corepack = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'corepack.js');
-    if (!existsSync(corepack)) throw new Error(`corepack.js not found beside node: ${corepack}`);
-    return { exe: process.execPath, prefix: [corepack, `${id}@${corepackVersion}`] };
+    if (!existsSync(COREPACK_JS)) throw new Error(`corepack.js not found beside node: ${COREPACK_JS}`);
+    return { exe: process.execPath, prefix: [COREPACK_JS, `${id}@${corepackVersion}`] };
   }
   const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [id], { encoding: 'utf8' });
   const lines = (probe.stdout ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
@@ -79,6 +83,10 @@ function resolveManager(id) {
 }
 const pm = resolveManager(manager);
 
+// The environment every step runs in. It gains the manager shim's PATH entry
+// once the fixture root exists (below).
+let childEnv = process.env;
+
 function run(cmd, cmdArgs, cwd, extraEnv = {}) {
   const started = Date.now();
   const res = spawnSync(cmd, cmdArgs, {
@@ -86,7 +94,7 @@ function run(cmd, cmdArgs, cwd, extraEnv = {}) {
     encoding: 'utf8',
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, CI: 'true', npm_config_ignore_scripts: 'true', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', COREPACK_ENABLE_STRICT: '0', ...extraEnv },
+    env: { ...childEnv, CI: 'true', npm_config_ignore_scripts: 'true', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', COREPACK_ENABLE_STRICT: '0', ...extraEnv },
     maxBuffer: 64 * 1024 * 1024,
   });
   return {
@@ -241,6 +249,19 @@ for (const wrapper of listWrappers()) {
 
 const root = mkdtempSync(join(tmpdir(), 'litria-recipe-evidence-'));
 console.log(`fixture root: ${root}\nplatform: ${platform}, manager: ${manager}, combos: ${combos.length}`);
+if (corepackVersion && manager !== 'npm') {
+  const shimDir = join(root, '.manager-shims');
+  writeManagerShim({ dir: shimDir, id: manager, version: corepackVersion, nodePath: process.execPath, corepackPath: COREPACK_JS });
+  childEnv = withPathFirst(process.env, shimDir);
+  console.log(`shim: ${manager} by name runs corepack ${manager}@${corepackVersion} (first on PATH for child CLIs)`);
+  // Version-less corepack calls (the wrapper `yarn dlx` puts on PATH) must
+  // land on the same version: make it corepack's default for this run.
+  const activation = corepackDefaultActivation({ home: join(root, '.corepack'), id: manager, version: corepackVersion, corepackPath: COREPACK_JS, env: childEnv });
+  childEnv = activation.env;
+  const activated = run(process.execPath, activation.argv, root);
+  if (!activated.ok) throw new Error(`corepack could not make ${manager}@${corepackVersion} its default for this run:\n${activated.tail}`);
+  console.log(`corepack default: ${manager}@${corepackVersion} (COREPACK_HOME in the fixture root)`);
+}
 const versions = toolVersions();
 
 for (const { wrapper, framework, language, route, addons, backend } of combos) {
