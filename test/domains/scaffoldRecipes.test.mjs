@@ -240,13 +240,23 @@ test('every offered coverage entry was recorded against the current pins', () =>
 });
 
 test('a failing add-on run names its cause on the framework card when the primary has no entry', () => {
-  // Yarn + Angular: the registry holds a failing add-on entry and no primary entry.
-  const avail = availability({ wrapper: 'web', framework: 'angular', language: 'ts', manager: 'yarn', platform: 'windows' });
-  assert.equal(avail.selectable, false);
-  assert.equal(avail.status, 'failing');
-  assert.match(avail.reason, /failed verification: .*Yarn Classic/);
+  // The registry's only real case of this shape (Yarn + Angular, Yarn Classic
+  // cause) was replaced by a passing run on 2026-10-03, so the test plants a
+  // failing add-on entry for a combination with nothing recorded, then removes it.
+  const combo = { wrapper: 'electron', framework: 'react', language: 'ts', manager: 'yarn', platform: 'windows' };
+  assert.equal(availability(combo).status, 'unverified', 'precondition: nothing recorded for this combination');
+  const planted = { ...combo, addons: ['tailwind'], backend: null, status: 'failing', reason: 'step failed: planted cause' };
+  RECIPES.addonCoverage.entries.push(planted);
+  try {
+    const avail = availability(combo);
+    assert.equal(avail.selectable, false);
+    assert.equal(avail.status, 'failing');
+    assert.match(avail.reason, /failed verification: step failed: planted cause/);
+  } finally {
+    RECIPES.addonCoverage.entries.splice(RECIPES.addonCoverage.entries.indexOf(planted), 1);
+  }
   // Nothing recorded at all stays "not verified".
-  const none = availability({ wrapper: 'electron', framework: 'react', language: 'ts', manager: 'yarn', platform: 'windows' });
+  const none = availability(combo);
   assert.equal(none.status, 'unverified');
   assert.match(none.reason, /not been verified/);
 });

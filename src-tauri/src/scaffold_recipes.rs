@@ -611,7 +611,18 @@ pub(crate) fn coverage_status(
     manager: &str,
     platform: &str,
 ) -> (String, Option<String>) {
-    let reg = registry();
+    coverage_status_in(registry(), wrapper, framework, language, manager, platform)
+}
+
+/// `coverage_status` against a given registry (tests plant entries in a copy).
+fn coverage_status_in(
+    reg: &Registry,
+    wrapper: &str,
+    framework: &str,
+    language: &str,
+    manager: &str,
+    platform: &str,
+) -> (String, Option<String>) {
     reg.coverage
         .entries
         .iter()
@@ -965,11 +976,26 @@ mod tests {
 
     #[test]
     fn a_failing_addon_run_names_its_cause_when_the_primary_has_no_entry() {
-        // Yarn + Angular: no primary entry, one failing add-on run (S4/S8).
-        let (status, reason) = coverage_status("web", "angular", "ts", "yarn", "windows");
+        // The registry's only real case of this shape (Yarn + Angular, Yarn
+        // Classic cause) was replaced by a passing run on 2026-10-03, so the
+        // test plants a failing add-on entry, in a copy of the registry, for a
+        // combination with nothing recorded.
+        let mut value: serde_json::Value = serde_json::from_str(REGISTRY_JSON).unwrap();
+        value["addonCoverage"]["entries"].as_array_mut().unwrap().push(serde_json::json!({
+            "wrapper": "electron", "framework": "react", "language": "ts", "manager": "yarn",
+            "platform": "windows", "addons": ["tailwind"], "backend": null,
+            "status": "failing", "reason": "step failed: planted cause"
+        }));
+        let planted: Registry = serde_json::from_value(value).unwrap();
+        let (status, reason) = coverage_status_in(&planted, "electron", "react", "ts", "yarn", "windows");
         assert_eq!(status, "failing");
-        assert!(reason.as_deref().unwrap_or("").contains("Yarn Classic"), "{reason:?}");
+        assert_eq!(reason.as_deref(), Some("step failed: planted cause"));
         assert!(!is_selectable_status(&status));
+        // Without the planted run, nothing recorded stays unverified.
+        assert_eq!(
+            coverage_status("electron", "react", "ts", "yarn", "windows"),
+            ("unverified".to_string(), None)
+        );
     }
 
     #[test]
