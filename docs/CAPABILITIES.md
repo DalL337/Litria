@@ -1,6 +1,6 @@
 # Litria — Capabilities & Features
 
-> **Version**: 1.1.0 | **Date**: 2026-10-03 | **Status**: Public Beta (MIT)
+> **Version**: 1.1.1 | **Date**: 2026-10-04 | **Status**: Public Beta (MIT)
 
 ## How to read this document
 
@@ -479,7 +479,8 @@ are detected on the next launch.
 - Friendly crash screen ("files already saved are safe") with Reload /
   View Logs / Report
 - Local-only records at `~/.litria/logs/crashes/`; relaunch banner with
-  content-free breadcrumbs; the Logs drawer (Actions ▸ Logs) opens the
+  content-free breadcrumbs (after a Rust abort it leads with the panic that
+  caused it); the Logs drawer (Actions ▸ Logs) opens the
   build-log or crash-record folder for the tab in view
 - Assisted reporting: prefilled GitHub issue (URL repoints to the public
   repo at flip time)
@@ -520,8 +521,8 @@ The capability layer itself is held together by enforced architecture:
 |--------|---------|
 | Domain modules | 16 contract-checked (registry: `docs/Orchestration.md` §2) |
 | Architecture guards | **7** — imports, app shell, protected zones, domain contract, settings keys, editor engine, db chokepoint |
-| JS tests | **1487** across 137 suites (`test/domains/`) |
-| Rust tests | **557** (plus 11 ignored) |
+| JS tests | **1497** across 139 suites (`test/domains/`) |
+| Rust tests | **559** (plus 11 ignored) |
 | ADRs | **33** (ADR-031 lives in `docs/plans/agent-integration/`) |
 | Tauri commands | 84 in release builds, 89 in debug builds (registry of record: `src-tauri/src/lib.rs`) |
 | Workspace DB schema | v4 (3 migrations) |

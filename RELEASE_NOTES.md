@@ -1,5 +1,56 @@
 # Release Notes
 
+## v1.1.1 — Yarn + Angular fix
+
+**Date:** 2026-10-04 (PRs #111–#113)
+
+> Platform status: unsigned artifacts everywhere. Windows is the only platform
+> a human has run end-to-end this cycle. The macOS and Linux artifacts compile
+> and pass their test suites in CI, but nobody has clicked through them. The
+> scaffold evidence behind this release was recorded on Windows.
+
+A fix release for 1.1.0. Creating an Angular project with Yarn could fail, and
+the crash banner could name the wrong record.
+
+### Fixed
+
+- **Angular projects create with Yarn 4 again (#113).** In 1.1.0, creating an
+  Angular project with Yarn could fail at create if two things were true: Yarn
+  4 was your default, and a folder above the new project held a package.json
+  (a home folder often does). Yarn refused Angular's own install because the
+  file that marks the new folder as its own project wasn't written yet. Litria
+  now has Angular skip that install. It writes Yarn's project marker and its
+  settings (node_modules linker, one-day release gate), then runs
+  `yarn install` itself, skipping dependency build scripts as before.
+- **The crash banner names the real panic (#111).** When Litria's backend
+  panicked in a way that ends the process, the banner on the next launch led
+  with a generic "panic in a function that cannot unwind", and Report filed
+  that. It now leads with the panic that caused it. Both records stay in your
+  local crash logs.
+
+### New
+
+- **Yarn with shadcn and a router (#113).** The wizard now offers Yarn for
+  React projects with Tailwind, shadcn, a router and Express on Windows. These
+  combinations were recorded as failing, but the failures came from how Litria
+  tested Yarn, not from Yarn.
+
+### Under the hood
+
+- **Scaffold evidence runs one package manager throughout (#112).** Tools such
+  as Angular's CLI and shadcn call the package manager by name, and
+  `yarn dlx` hands them a Yarn that falls back to corepack's default, Yarn
+  Classic. The evidence script now makes the pinned manager corepack's default
+  for each run, in its own corepack folder, and puts it first on PATH. All 70
+  recorded scaffold combinations pass.
+- **Design record:** an ADR-028 §5 addendum on deferring a create CLI's
+  install.
+
+### Documentation (no behaviour change)
+
+- The v1.1.0 entry's "Yarn with Angular" note carries a correction: its
+  explanation was wrong, and the combination could fail (fixed above).
+
 ## v1.1.0 — Structural grid
 
 **Date:** 2026-10-03 (PRs #68–#109)
