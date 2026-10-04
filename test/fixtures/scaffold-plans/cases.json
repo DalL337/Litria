@@ -278,6 +278,33 @@
       }
     },
     {
+      "name": "web angular ts yarn: the Angular CLI skips its install (the runner installs after the yarn.lock marker and .yarnrc.yml)",
+      "input": {
+        "wrapper": "web",
+        "framework": "angular",
+        "language": "ts",
+        "manager": "yarn",
+        "projectName": "demo"
+      },
+      "expect": {
+        "routeKind": "exec",
+        "package": "@angular/cli",
+        "version": "21.2.24",
+        "template": "ng-new",
+        "argv": [
+          "dlx",
+          "@angular/cli@21.2.24",
+          "new",
+          "demo",
+          "--defaults",
+          "--skip-git",
+          "--package-manager",
+          "yarn",
+          "--skip-install"
+        ]
+      }
+    },
+    {
       "name": "electron angular has no template",
       "input": {
         "wrapper": "electron",

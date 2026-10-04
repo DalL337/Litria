@@ -1258,7 +1258,7 @@ fn post_step(step: &serde_json::Value, pm: &ResolvedPM, project_dir: &Path) -> P
     let source = step_str(step, "source").to_string();
     let op = step_str(step, "op");
     match op {
-        "install" | "exec" => {
+        "install" | "installAll" | "exec" => {
             let argv: Vec<String> = step
                 .get("argv")
                 .and_then(|v| v.as_array())
@@ -1266,10 +1266,12 @@ fn post_step(step: &serde_json::Value, pm: &ResolvedPM, project_dir: &Path) -> P
                 .unwrap_or_default();
             let mut args = pm.prefix_args.clone();
             args.extend(argv.iter().cloned());
-            let label = if op == "install" {
-                format!("{source}: install {}", argv.iter().skip_while(|a| a.starts_with('-') || *a == "install" || *a == "add").cloned().collect::<Vec<_>>().join(" "))
-            } else {
-                format!("{source}: run {}", step_str(step, "spec"))
+            let label = match op {
+                "install" => format!("{source}: install {}", argv.iter().skip_while(|a| a.starts_with('-') || *a == "install" || *a == "add").cloned().collect::<Vec<_>>().join(" ")),
+                // The install a create CLI skipped (Yarn + `ng new`).
+                "installAll" if argv.iter().any(|a| a == "--mode=skip-build") => format!("{source}: install (build scripts skipped)"),
+                "installAll" => format!("{source}: install"),
+                _ => format!("{source}: run {}", step_str(step, "spec")),
             };
             PostStep {
                 label,
@@ -1935,6 +1937,27 @@ mod tests {
         let mut extra = config.clone();
         extra.plan.steps.push(serde_json::json!({"source": "addon:evil", "op": "install", "argv": ["install", "evil@1.0.0"]}));
         assert_eq!(validate_plan(&extra, "test").unwrap_err().code(), "scaffold.plan_mismatch");
+    }
+
+    #[test]
+    fn a_deferred_install_runs_through_the_resolved_manager_in_the_project() {
+        // Yarn + Angular: the CLI skipped its install, so the runner runs it
+        // once the yarn.lock marker and .yarnrc.yml exist (2026-10-04).
+        let pm = ResolvedPM {
+            executable: "C:/node/node.exe".into(),
+            prefix_args: vec!["C:/corepack/yarn.js".into()],
+        };
+        let step = serde_json::json!({ "source": "manager:yarn", "op": "installAll", "argv": ["install", "--mode=skip-build"] });
+        let post = post_step(&step, &pm, Path::new("/tmp/p"));
+        assert_eq!(post.label, "manager:yarn: install (build scripts skipped)");
+        match &post.action {
+            PostAction::Command(cmd) => {
+                assert_eq!(cmd.executable, "C:/node/node.exe");
+                assert_eq!(cmd.args, ["C:/corepack/yarn.js", "install", "--mode=skip-build"]);
+                assert_eq!(cmd.cwd, Path::new("/tmp/p"));
+            }
+            PostAction::File(_) => panic!("a deferred install is a command, not a file step"),
+        }
     }
 
     #[test]
