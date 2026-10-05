@@ -12,8 +12,9 @@ Litria gives your project structure a shape. **Files are nodes. Folders are real
 groups on disk. Imports are routed wires drawn from the code itself.**
 
 Structure and relationships are first-class here — the canvas is a living
-architecture view, not a side-panel graph generated after the fact. Drag a node
-into a folder group and the file moves on disk. And the code inside each node is
+architecture view, not a side-panel graph generated after the fact. In edit mode
+(`E`), drag a node into a folder group and the file moves on disk; a plain drag
+only rearranges the canvas. And the code inside each node is
 exactly what it looks like: ordinary, exportable, editable source.
 
 This isn't a no-code tool or a diagram maker. It's a native desktop IDE built 
