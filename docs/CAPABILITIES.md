@@ -97,7 +97,8 @@ the scaffold tree in sync with each one. Refusals happen before state
 changes (reserved names, locked files, cross-device moves with rollback).
 
 **Features**
-- Drag a node between groups → the file moves on disk
+- In edit mode (`E`), drag a node onto another group → the file moves on
+  disk; a default-mode drag is spatial only and never touches disk (ADR-013)
 - Rename nodes/groups → files and folders rename, with reserved-name
   refusals surfaced before anything changes
 - Batch delete with tab closure, connection cleanup, and syntax-index and

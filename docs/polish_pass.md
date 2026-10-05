@@ -96,7 +96,7 @@ Goal: align README + website with what the product actually is — real files, r
 
 ### Idea page
 - Keep repo-sourced framing
-- Reinforce: canvas derived from code and writes back; folders are groups; imports are wires; moving a node moves a file
+- Reinforce: canvas derived from code and writes back; folders are groups; imports are wires; in edit mode, dragging a node into another group moves its file (a plain drag is spatial only — corrected 2026-10-05; the earlier "moving a node moves a file" was wrong per ADR-013)
 
 ### Global site copy pass
 - Search/replace pass for: `puzzle`, `pieces` (when meaning canvas files), any toy/diagram-adjacent phrasing
