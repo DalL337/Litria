@@ -12,6 +12,7 @@
     "coverage": "c8 node --test test/domains/*.test.mjs",
     "measure:drag-latency": "node scripts/measure-drag-latency.mjs docs/plans/interaction-latency-samples.json",
     "check": "npm run check:architecture && npm run build",
+    "labels:sync": "node scripts/sync-labels.mjs",
     "bundle:servers": "node scripts/bundle-servers.mjs",
     "bundle:node": "node scripts/bundle-node.mjs",
     "bundle:conpty": "node scripts/bundle-conpty.mjs",

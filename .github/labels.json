@@ -1,0 +1,22 @@
+[
+  { "name": "area: canvas", "color": "78909c", "description": "Konva canvas, nodes, groups, wires, HUD, minimap" },
+  { "name": "area: editor", "color": "78909c", "description": "Monaco editor, tabs, split panes, save system" },
+  { "name": "area: lsp", "color": "78909c", "description": "Language servers, diagnostics, hover, completions" },
+  { "name": "area: terminal", "color": "78909c", "description": "Embedded terminal, PTY, ConPTY host" },
+  { "name": "area: theme", "color": "78909c", "description": "Theme tokens, presets, materials, Live/Calm" },
+  { "name": "area: shell", "color": "78909c", "description": "Drawers, menubar, window chrome, launcher (mechanics and UX)" },
+  { "name": "area: scaffold", "color": "78909c", "description": "New Project wizard, Blank Project, scaffold tree" },
+  { "name": "area: persistence", "color": "78909c", "description": "SQLite workspace and app databases, migrations" },
+  { "name": "area: website", "color": "78909c", "description": "litria.dev marketing site" },
+  { "name": "area: repo", "color": "78909c", "description": "CI, release builds, installers, repo tooling" },
+  { "name": "type: bug", "color": "ef5350", "description": "It's broken" },
+  { "name": "type: feature", "color": "42a5f5", "description": "It doesn't exist yet" },
+  { "name": "type: ux", "color": "ab47bc", "description": "It works but feels wrong to use" },
+  { "name": "type: docs", "color": "ffca28", "description": "It isn't explained" },
+  { "name": "type: maintenance", "color": "8d6e63", "description": "Refactors, dependencies, chores" },
+  { "name": "os: macos", "color": "5c6bc0", "description": "Only happens on macOS" },
+  { "name": "os: linux", "color": "5c6bc0", "description": "Only happens on Linux" },
+  { "name": "os: windows", "color": "5c6bc0", "description": "Only happens on Windows" },
+  { "name": "good first issue", "color": "66bb6a", "description": "Small, well-scoped, good entry point" },
+  { "name": "help wanted", "color": "26a69a", "description": "Maintainer would welcome outside help" }
+]
