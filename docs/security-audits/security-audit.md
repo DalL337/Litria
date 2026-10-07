@@ -1,7 +1,35 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-01 — **targeted dependency fix (branch `chore/brace-expansion-5.0.12`)**:
+> **Last reviewed**: 2026-10-06 — **targeted dependency fix (branch `chore/source-map-js-1.2.2`)**:
+> - **What changed.** Dependabot alert #10 (GHSA-68fv-2mgg-jv7q, high) opened 2026-10-07 02:50 UTC on `source-map-js` 1.2.1. A crafted indexed source map with huge section offsets ties up the event loop (denial of service). 1.2.2 fixes it.
+> - **Exposure.** Development only, through two paths, both wanting `^1.2.1`:
+>   - `postcss` 8.5.25;
+>   - `@tailwindcss/postcss` 4.2.1 → `@tailwindcss/node` 4.2.1.
+>
+>   The maps it reads and writes come from our own stylesheets at build time, so nothing ships and no untrusted input reaches it.
+> - **The change.** `npm update source-map-js`, a lockfile-only diff of the version, `resolved` URL and integrity of that one package.
+> - **Security policy checks:**
+>   - Release age: 1.2.2 was published 2026-09-30 and is about 6.5 days old, past the ≥24h gate.
+>   - Maintainers: unchanged. The sole maintainer published both versions.
+>   - Contents: the 1.2.1 and 1.2.2 tarballs were diffed. Only four `lib/` files and `package.json` change:
+>     - section offsets must be non-negative safe integers, with lines capped at 10,000,000 including nested sections;
+>     - a gap of skipped lines is written in one `';'.repeat`;
+>     - mapping stops when the generated code runs out;
+>     - each section's `sources` is read once;
+>     - `quick-sort` probes whether `new Function` is allowed and falls back to a sort without it. The `new Function` template already existed in 1.2.1.
+>
+>     There is no new dependency, no I/O and no install-time hook.
+>   - Integrity: both tarballs' SHA-512 equal the registry's, and the lockfile's 1.2.2 integrity equals the reviewed tarball's.
+> - **Dependency policy (exercising the affected tool).**
+>   - The production build emits no CSS source maps, so it barely reaches this package. The repo's PostCSS pipeline from `postcss.config.js` (`@tailwindcss/postcss` + `autoprefixer`) was therefore run on `src/styles/tailwind.css` with an external source map, once per version. The CSS (29,130 bytes) and the map were byte-identical.
+>   - `npm run build` output was byte-identical across versions: 68 `dist/` files and 25 hidden JS sourcemaps.
+>   - Guards 7/7 and 1509 tests passed.
+> - **Scans.** `npm audit` went from 1 high (`source-map-js`) to **0**. `cargo audit` found 0 vulnerabilities and the same 9 allowed warnings. Re-probes of `glib@0.18.5` and `rand@0.7.3` locked 0 packages, so both are still Tauri-blocked.
+> - **Residual.** Exercised on Windows. CI's `guard` job repeats the install, guards, tests and build on Ubuntu. macOS was not exercised.
+>
+> Preceded by:
+> 2026-10-01 — **targeted dependency fix (branch `chore/brace-expansion-5.0.12`)**:
 > - **What changed.** Dependabot alert #9 (GHSA-q2hr-2g5m-vwhr, moderate) opened 2026-09-30 on `brace-expansion` 5.0.9. `npm audit` showed two more advisories on the same package: GHSA-qhr7-859c-m2p7 and GHSA-6j4f-fj2g-mc7p (high, stack exhaustion through recursion). All three are denial-of-service bugs on crafted brace patterns, and 5.0.12 fixes all three.
 > - **Exposure.** Development only, through one path: `c8` → `test-exclude` → `minimatch` 10.2.5, which wants `^5.0.5`. The pattern it expands is our own `c8.include` glob, so nothing ships and no untrusted input reaches it.
 > - **The change.** `npm update brace-expansion`, a lockfile-only diff of the version, `resolved` URL and integrity of that one package.
