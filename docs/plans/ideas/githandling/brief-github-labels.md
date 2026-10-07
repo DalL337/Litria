@@ -1,6 +1,9 @@
 # Brief: GitHub Labels — Taxonomy + Sync Script
 
-> **Status**: Implementation handoff, reviewed, ready to build
+> **Status**: Built in #117 (2026-10-06): labels file, sync script, and test.
+> The owner's renames and `--apply` are still to do. Agent preview before the
+> renames: 18 create, 2 update, 0 keep, 7 not managed.
+> Implementation handoff, reviewed, ready to build (2026-10-06, #116).
 > **Author**: DalL337 + Claude; reviewed by Claude Code and Codex (2026-10-06), owner accepted the merged review
 > **Date**: 2026-10-06
 > **GitHub state** (verified 2026-10-06 with `gh`): the repo has only GitHub's
