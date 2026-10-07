@@ -161,7 +161,7 @@ Every PR is evaluated against five governance pillars. Your PR template will wal
 
 ## PR Process
 
-1. **Check for an existing Issue first.** Features and New Domains should have a prior Issue or Discussion thread before you start coding. Fixes and small Refactors can skip this if the scope is self-evident.
+1. **Check for an existing Issue first.** Features and New Domains should have a prior Issue or Discussion thread before you start coding. Fixes and small Refactors can skip this if the scope is self-evident. **Security problems are the exception:** never file them as an Issue, Discussion, or PR. Report them privately as described in [SECURITY.md](SECURITY.md).
 
 2. **Create a feature branch.** Name it descriptively: `fix/hover-card-dismiss`, `feat/zoom-slider`, `domain/clipboard`.
 
