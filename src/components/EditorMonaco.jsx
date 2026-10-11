@@ -5,6 +5,7 @@ import { setManagedLspProviderContext } from '../lsp/managedLspProviders';
 import {
   releaseClosedTabs,
   recomputeLspUris,
+  setSessionEditMirror,
   subscribeLspEvents,
   subscribeMarkerFeed
 } from '../editor/monacoWorkspace';
@@ -91,6 +92,10 @@ function EditorMonaco({
   useEffect(() => {
     releaseClosedTabs(openTabIds, { projectId, syntaxAdapter });
   }, [openTabIds, projectId, syntaxAdapter]);
+
+  // Edits made to a model no pane shows (the canvas-wire path) reach the
+  // session through the same setter typing uses (build plan W1).
+  useEffect(() => setSessionEditMirror(onChange), [onChange]);
 
   // Server-push events (session restart replay, diagnostics → markers).
   useEffect(() => {

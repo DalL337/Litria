@@ -31,9 +31,14 @@ import { toProjectAbsPath } from '../utils/path';
  * stale 17004 markers on models attached during LSP spawn.)
  *
  * Panes call acquireModel/getModel/notifyChange; the EditorMonaco container
- * owns the lifecycle calls (releaseClosedTabs, subscriptions). Everything
- * here stays behind the EditorMonaco lazy boundary so Monaco never enters
- * the initial bundle.
+ * owns the lifecycle calls (releaseClosedTabs, subscriptions, the session edit
+ * mirror). Everything here stays behind the EditorMonaco lazy boundary so
+ * Monaco never enters the initial bundle.
+ *
+ * A model's URI names its file (`cm://tab/{tabId}/{filename}`), and the LSP
+ * providers, the pane's hover and the marker feed all read the file from it.
+ * A renamed tab therefore gets a NEW model under its new name, and its LSP
+ * documents move with it (Project API build plan W1).
  */
 
 const models = new Map(); // tabId → ITextModel
@@ -47,6 +52,11 @@ const openTsLspTabs = new Map();
 const openManagedLspTabs = new Map();
 // tabId → absolutePath registered with syntaxAdapter (needed for onFileClosed)
 const openSyntaxTabs = new Map();
+// tabId → the filename its model was created for (its URI names it).
+const modelFilenames = new Map();
+// The session's text setter, registered by the container: edits made to a
+// model no editor shows reach the session through it (see trackModel).
+let sessionEditMirror = null;
 let providersRegistered = false;
 
 export function toLspUri(projectRootPath, filename) {
@@ -99,79 +109,160 @@ export function ensureLspProviders() {
 }
 
 /**
+ * The session's text setter, `(tabId, text) => void`, for edits made to a
+ * model while no editor shows it. Returns the unregister function.
+ */
+export function setSessionEditMirror(mirror) {
+  const registered = typeof mirror === 'function' ? mirror : null;
+  sessionEditMirror = registered;
+  return () => {
+    if (sessionEditMirror === registered) sessionEditMirror = null;
+  };
+}
+
+/**
+ * Create a tab's model and keep the session in step with it. An editor
+ * showing the model mirrors typing through its own onChange (the pane); an
+ * edit made while no editor shows it — the canvas-wire path writes open
+ * files' models directly — would otherwise reach neither the session nor the
+ * language servers, and the pane's sync would revert it on the next
+ * activation (reproduced live 2026-10-11, build plan W1).
+ */
+function createTabModel(tabId, filename, text, context) {
+  const uri = monaco.Uri.parse(`cm://tab/${tabId}/${filename}`);
+  const model = monaco.editor.createModel(text, getLanguageFromFilename(filename), uri);
+  models.set(tabId, model);
+  modelFilenames.set(tabId, filename);
+  model.onDidChangeContent(() => {
+    if (model.isDisposed() || model.isAttachedToEditor()) return;
+    const value = model.getValue();
+    sessionEditMirror?.(tabId, value);
+    notifyChange(tabId, value, context);
+  });
+  return model;
+}
+
+/** Track a tab's document with its language server and send didOpen. */
+function trackLsp(tabId, filename, text, { projectId, projectRootPath }) {
+  const tabLang = getLanguageFromFilename(filename);
+  const lspUri = toLspUri(projectRootPath, filename);
+  if (!lspUri) return;
+  if (tabLang === 'python') {
+    openLspTabs.set(tabId, { uri: lspUri, filename });
+    if (projectId) lspDidOpen('python', projectId, lspUri, 'python', text);
+  } else if (tabLang === 'typescript' || tabLang === 'javascript') {
+    // The LSP textDocument.languageId needs the JSX-aware value
+    // ('typescriptreact'/'javascriptreact') for .tsx/.jsx files —
+    // otherwise typescript-language-server emits error 17004 and
+    // refuses to parse JSX.
+    const tabLspLang = getLspLanguageIdFromFilename(filename);
+    openTsLspTabs.set(tabId, { uri: lspUri, filename, languageId: tabLspLang });
+    if (projectId) lspDidOpen('typescript', projectId, lspUri, tabLspLang, text);
+  } else {
+    // Managed registry languages (rust, cpp). Tracked even while no
+    // session exists — the onSessionStarted handler replays didOpen once
+    // the server is installed/started, so a file opened pre-install
+    // lights up without reopening.
+    const managedLang = getManagedSessionLanguageFromFilename(filename);
+    if (!managedLang) return;
+    const tabLspLang = getLspLanguageIdFromFilename(filename);
+    openManagedLspTabs.set(tabId, {
+      uri: lspUri,
+      filename,
+      sessionLanguageId: managedLang,
+      lspLanguageId: tabLspLang
+    });
+    if (projectId) lspDidOpen(managedLang, projectId, lspUri, tabLspLang, text);
+  }
+}
+
+/** Close a tab's language-server documents and clear what they published. */
+function untrackLsp(tabId, model, projectId) {
+  if (!model.isDisposed()) {
+    monaco.editor.setModelMarkers(model, 'python-lsp', []);
+    monaco.editor.setModelMarkers(model, 'typescript-lsp', []);
+  }
+  const lspEntry = openLspTabs.get(tabId);
+  if (lspEntry && projectId) {
+    lspDidClose('python', projectId, lspEntry.uri);
+    clearFileDiagnostics(lspEntry.uri);
+  }
+  openLspTabs.delete(tabId);
+  const tsEntry = openTsLspTabs.get(tabId);
+  if (tsEntry && projectId) {
+    lspDidClose('typescript', projectId, tsEntry.uri);
+    clearFileDiagnostics(tsEntry.uri);
+  }
+  openTsLspTabs.delete(tabId);
+  const managedEntry = openManagedLspTabs.get(tabId);
+  if (managedEntry) {
+    if (!model.isDisposed()) {
+      monaco.editor.setModelMarkers(model, `${managedEntry.sessionLanguageId}-lsp`, []);
+    }
+    if (projectId) {
+      lspDidClose(managedEntry.sessionLanguageId, projectId, managedEntry.uri);
+      clearFileDiagnostics(managedEntry.uri);
+    }
+  }
+  openManagedLspTabs.delete(tabId);
+}
+
+/**
+ * A renamed tab: a new model under the new name, holding the same text; the
+ * old name's LSP documents closed and the new name's opened; the syntax
+ * adapter moved to the new path and handed the new model. The old model is
+ * disposed, and the pane's attach effect shows the new one. Undo history
+ * does not cross a rename (the engine cannot move it between models).
+ */
+function renameModel(tab, model, context) {
+  const { projectId, projectRootPath, syntaxAdapter } = context;
+  const text = model.getValue();
+  untrackLsp(tab.id, model, projectId);
+  const next = createTabModel(tab.id, tab.filename, text, context);
+  trackLsp(tab.id, tab.filename, text, context);
+  const oldPath = openSyntaxTabs.get(tab.id);
+  const newPath = toProjectAbsPath(projectRootPath, tab.filename);
+  if (syntaxAdapter && newPath) {
+    if (oldPath) {
+      syntaxAdapter.onFileRenamed(oldPath, newPath, next);
+    } else {
+      syntaxAdapter.onFileOpened(newPath, text, next);
+    }
+    openSyntaxTabs.set(tab.id, newPath);
+  }
+  model.dispose();
+  return next;
+}
+
+/**
  * Get-or-create the model for a tab (idempotent — either pane may call it,
  * including mid-MOVE). Creation registers the file with the syntax adapter
- * and sends the LSP didOpen; re-acquire handles language changes and
- * rename/move detection.
+ * and sends the LSP didOpen; a tab whose filename changed gets a new model
+ * under the new name (renameModel).
  */
-export function acquireModel(tab, { projectId, projectRootPath, syntaxAdapter }) {
+export function acquireModel(tab, context) {
+  const { projectRootPath, syntaxAdapter } = context;
   let model = getLiveModel(tab.id);
   if (!model) {
-    const uri = monaco.Uri.parse(`cm://tab/${tab.id}/${tab.filename}`);
-    model = monaco.editor.createModel(
-      tab.workingCode ?? '',
-      getLanguageFromFilename(tab.filename),
-      uri
-    );
-    models.set(tab.id, model);
+    const text = tab.workingCode ?? '';
+    model = createTabModel(tab.id, tab.filename, text, context);
     // Register with syntaxAdapter for export parsing + patch plan application.
     const absPath = toProjectAbsPath(projectRootPath, tab.filename);
     if (syntaxAdapter && absPath) {
       openSyntaxTabs.set(tab.id, absPath);
-      syntaxAdapter.onFileOpened(absPath, tab.workingCode ?? '', model);
+      syntaxAdapter.onFileOpened(absPath, text, model);
     }
-    // Register with LSP server (fire-and-forget; session may not be active yet —
-    // the onSessionStarted handler will re-send didOpen when the session is ready).
-    const tabLang = getLanguageFromFilename(tab.filename);
-    if (tabLang === 'python') {
-      const lspUri = toLspUri(projectRootPath, tab.filename);
-      if (lspUri) {
-        openLspTabs.set(tab.id, { uri: lspUri, filename: tab.filename });
-        if (projectId) {
-          lspDidOpen('python', projectId, lspUri, 'python', tab.workingCode ?? '');
-        }
-      }
-    } else if (tabLang === 'typescript' || tabLang === 'javascript') {
-      const lspUri = toLspUri(projectRootPath, tab.filename);
-      if (lspUri) {
-        // The LSP textDocument.languageId needs the JSX-aware value
-        // ('typescriptreact'/'javascriptreact') for .tsx/.jsx files —
-        // otherwise typescript-language-server emits error 17004 and
-        // refuses to parse JSX.
-        const tabLspLang = getLspLanguageIdFromFilename(tab.filename);
-        openTsLspTabs.set(tab.id, { uri: lspUri, filename: tab.filename, languageId: tabLspLang });
-        if (projectId) {
-          lspDidOpen('typescript', projectId, lspUri, tabLspLang, tab.workingCode ?? '');
-        }
-      }
-    } else {
-      // Managed registry languages (rust, cpp). Tracked even while no
-      // session exists — the onSessionStarted handler replays didOpen once
-      // the server is installed/started, so a file opened pre-install
-      // lights up without reopening.
-      const managedLang = getManagedSessionLanguageFromFilename(tab.filename);
-      if (managedLang) {
-        const lspUri = toLspUri(projectRootPath, tab.filename);
-        if (lspUri) {
-          const tabLspLang = getLspLanguageIdFromFilename(tab.filename);
-          openManagedLspTabs.set(tab.id, {
-            uri: lspUri,
-            filename: tab.filename,
-            sessionLanguageId: managedLang,
-            lspLanguageId: tabLspLang
-          });
-          if (projectId) {
-            lspDidOpen(managedLang, projectId, lspUri, tabLspLang, tab.workingCode ?? '');
-          }
-        }
-      }
-    }
+    // Register with the LSP server (fire-and-forget; the session may not be
+    // active yet — onSessionStarted re-sends didOpen when it is ready).
+    trackLsp(tab.id, tab.filename, text, context);
+  } else if (modelFilenames.get(tab.id) !== tab.filename) {
+    model = renameModel(tab, model, context);
   } else {
     const nextLanguage = getLanguageFromFilename(tab.filename);
     if (model.getLanguageId() !== nextLanguage) {
       monaco.editor.setModelLanguage(model, nextLanguage);
     }
-    // Detect file rename/move: stored path differs from current filename.
+    // The same file under another absolute path (the project root moved).
     const absPath = toProjectAbsPath(projectRootPath, tab.filename);
     const storedPath = openSyntaxTabs.get(tab.id);
     if (syntaxAdapter && absPath && storedPath && storedPath !== absPath) {
@@ -187,33 +278,7 @@ export function releaseClosedTabs(openTabIds, { projectId, syntaxAdapter }) {
   const openSet = new Set(openTabIds);
   models.forEach((model, tabId) => {
     if (openSet.has(tabId)) return;
-    if (!model.isDisposed()) {
-      monaco.editor.setModelMarkers(model, 'python-lsp', []);
-      monaco.editor.setModelMarkers(model, 'typescript-lsp', []);
-    }
-    const lspEntry = openLspTabs.get(tabId);
-    if (lspEntry && projectId) {
-      lspDidClose('python', projectId, lspEntry.uri);
-      clearFileDiagnostics(lspEntry.uri);
-    }
-    openLspTabs.delete(tabId);
-    const tsEntry = openTsLspTabs.get(tabId);
-    if (tsEntry && projectId) {
-      lspDidClose('typescript', projectId, tsEntry.uri);
-      clearFileDiagnostics(tsEntry.uri);
-    }
-    openTsLspTabs.delete(tabId);
-    const managedEntry = openManagedLspTabs.get(tabId);
-    if (managedEntry) {
-      if (!model.isDisposed()) {
-        monaco.editor.setModelMarkers(model, `${managedEntry.sessionLanguageId}-lsp`, []);
-      }
-      if (projectId) {
-        lspDidClose(managedEntry.sessionLanguageId, projectId, managedEntry.uri);
-        clearFileDiagnostics(managedEntry.uri);
-      }
-    }
-    openManagedLspTabs.delete(tabId);
+    untrackLsp(tabId, model, projectId);
     // Notify syntaxAdapter that the file is closed.
     const syntaxPath = openSyntaxTabs.get(tabId);
     if (syntaxAdapter && syntaxPath) {
@@ -222,6 +287,7 @@ export function releaseClosedTabs(openTabIds, { projectId, syntaxAdapter }) {
     openSyntaxTabs.delete(tabId);
     if (!model.isDisposed()) model.dispose();
     models.delete(tabId);
+    modelFilenames.delete(tabId);
   });
 }
 
