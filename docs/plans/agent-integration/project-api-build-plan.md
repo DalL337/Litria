@@ -41,7 +41,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)). Codex review: five findings, all fixed (see [P5 review record](#p5-review-record)) |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
-| W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
+| W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | In progress: W2a propose built (see [W2a record](#w2a-record)); W2b review and apply next |
 | W3 | Native conditional disk operations (create-if-absent, replace-if-expected-revision) | P1 | Outline |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
@@ -1246,12 +1246,163 @@ All tests and standard checks pass, plus a live pass for each part.
 >     when shown.
 >   - No console errors.
 
+## W2. Buffer edits
+
+### Goal
+
+An agent proposes exact-text edits to open documents, a person reviews them, and Litria applies the approved ones to the editor buffers through W1's compare-and-apply. Buffer effects only: saving stays the user's (disk is W3, durable receipts W4).
+
+### Owner rulings (2026-10-11)
+
+- **Approve applies it now.** One decision; the edit lands as an unsaved, undoable buffer change; the agent learns it applied. Saving stays the user's.
+- **Every agent edit needs review.** Reads never ask. A "trust this agent" switch may come later; until then no edit applies without a decision.
+- **An unanswered proposal expires after 10 minutes**, and goes out of date the moment a file changes under it.
+- **Where the review appears is decided with the agent surface (track T).**
+  - **Why:** agent clients already ask permission in their own thread, in the terminal or an IDE panel. Claude Code asks before each MCP tool by default, but does not promise a diff for one. The user can also switch those prompts off.
+  - **So:** Litria's own review is the only gate Litria controls and can show a real diff in. Its place follows wherever the conversation lives: a Litria panel, or an outside agent's thread through MCP elicitation.
+  - **Until then,** the review is a seam that tests and a debug-only command drive.
+
+### Tasks
+
+**W2a: propose** (`litria_changes_prepare`, capability `project.changes.propose`, not read-only).
+
+- **Request:** `{ changes: [{ kind: "text.edit", path, expectedRevision, edits: [{ oldText, newText }] }] }`.
+  - `kind` is a tagged union, so `file.create` can join later.
+  - Bounds: up to 16 changes per plan and 64 edits per change. `oldText` is not empty. The 64 KiB request budget bounds the rest.
+- **Check, never apply.**
+  - Paths are judged first, as reads judge them (`denied`, `invalidPath`).
+  - Then a new bridge operation, `editor.checkChanges`, plans every change against the latest session text in one turn, with W1's `planBufferEdit`.
+- **A plan is created only if every change is `ready`.**
+  - Otherwise the result lists each change's outcome: `ready`, `conflict` (with the current revision), `noMatch` / `ambiguous` (with the edit index), `notInSession`, `denied` or `invalidPath`. Nothing awaits review.
+- **The plan store (Rust, in memory).**
+  - A plan's id is unguessable (`plan-` plus 128 random bits). It is bound to the requester and the workspace epoch.
+  - The plan is immutable: its changes, and a hash of them.
+  - It starts in state `pendingReview` and expires 10 minutes after preparation.
+  - **Deduplicated:** the same requester proposing the same changes while a plan is pending gets that plan back, not a second review request.
+  - **Bounded:** 16 pending plans per requester. More are refused with `busy` ("proposals await review"), never by silently expiring older ones.
+- **Not in a read-only workspace.** When the workspace database is read-only (safety mode), proposing is refused with `notReady` and a reason.
+
+**W2b: review and apply.**
+
+- **The review seam.** `changes::review(planId, approve | reject)` drives the plan's state.
+  - Approving is an atomic claim, `pendingReview` → `applying`; only the winner executes.
+  - It applies through `editor.applyChanges`, a bridge operation that re-checks every change and applies all of them, or none, in one turn. Buffers are in memory and the turn is single-threaded, so this is all or nothing across files.
+  - It records `applied` with the new revisions, or `conflict` if a file changed while the plan waited.
+  - Rejecting records `rejected`. An expired plan cannot be approved.
+- **The callers of the seam:** tests, and a debug-only command for live passes. The track T surface will call it too.
+- **`litria_changes_apply`** (capability `project.changes.apply`): `{ planId }`.
+  - It returns the plan's state and, once applied, each change's new revision. Effects are reported as `buffer`: not saved.
+  - Under the every-edit-needs-review ruling it never executes a pending plan itself; it answers `pendingReview` until a person decides. A future trust switch would let it claim the plan, through the same single claim.
+  - **Idempotent:** asking again returns the same outcome.
+  - A plan of another requester or workspace, or an unknown id, is `unknown`. That reveals nothing about whether it exists.
+- **Terminal states:** `applied`, `rejected`, `expired`, `conflict`, `failed`. There is no replay.
+
+### Tests
+
+- **Plan store:**
+  - every transition;
+  - deduplication;
+  - the pending bound;
+  - expiry, both checked when a plan is used and swept;
+  - an approve racing an approve executes once;
+  - approving after expiry or rejection does nothing;
+  - another requester's plan is `unknown`.
+- **Handlers** (scripted bridge):
+  - path judging before any bridge call;
+  - every outcome;
+  - nothing is stored unless every change is ready;
+  - read-only refusal.
+- **Bridge operations** against the real session domain: check and apply in one turn; all or nothing across files; a file typed into while the plan waited conflicts.
+- **Contract:** artifacts, request fixtures through P6's real-catalog MCP suite, and the annotations.
+- **Live pass:**
+  - propose through the dev call, then approve, and the buffer changes (unsaved, undoable);
+  - reject;
+  - type into a file, then approve: conflict;
+  - expiry.
+
+### Acceptance
+
+All tests and standard checks pass, plus the live pass. No transport, listener or external process is added (track T).
+
+### W2a record
+
+> **Built 2026-10-11, as specified above.**
+>
+> **Contract.** `litria_changes_prepare` (`contracts/project_api/changes_prepare.rs`):
+>
+> - It is the first operation that is not read-only. Its `readOnlyHint` is
+>   false (P6's catalog flag).
+> - Every change has a `kind` field, only `text.edit` for now. A plain field
+>   rather than a tagged union keeps unknown fields rejected.
+> - Duplicate documents are rejected at the boundary. JSON Schema cannot say
+>   that one field is unique across items, so the fixture is marked as one
+>   the boundary alone rejects.
+> - Bridge operation `editor.checkChanges`.
+> - Artifacts, 11 request fixtures, 2 result fixtures, and the bridge's
+>   request and 7 reply fixtures. The bridge sample carries real buffer
+>   revisions of the texts the JavaScript tests hold, so the committed
+>   request gets the committed reply field for field.
+>
+> **Service.** `project_api/changes.rs`:
+>
+> - Paths are judged first, as reads judge them. Two spellings of one
+>   document (through a link) are rejected.
+> - Only allowed paths reach `editor.checkChanges`, and a reply that answers
+>   other paths is malformed.
+> - **The plan store:**
+>   - `plan-` plus 128 bits from `rand` (an existing dependency);
+>   - bound to the requester and the epoch;
+>   - a SHA-256 of the canonical changes;
+>   - 10-minute expiry, with an injectable clock;
+>   - deduplication of the same pending proposal;
+>   - 16 pending per requester, then `busy`;
+>   - expired plans remembered for an hour, then forgotten.
+> - `db::workspace_read_only` asks the connection itself. A read-only (safety
+>   mode) workspace refuses proposals with `notReady`.
+>
+> **Editor.** The session's `checkBufferEdit` is W1's planning against the
+> latest state, applying nothing. `answerCheckChanges` maps its outcomes;
+> `useProjectApiBridge` provides the port.
+>
+> **Evidence:**
+>
+> - **Rust tests:** 12 new for the store and the handler.
+>   - The handler runs in a bound workspace against a scripted editor that
+>     records what it is asked. A withheld or invalid path is proven never to
+>     reach it.
+>   - The link test ran, it did not skip.
+> - **MCP proof:** a new real-catalog test produces a pending plan through
+>   the production dispatcher, conforming to the published schema; the
+>   repeat returns the same plan, and `.env` is denied. All 67 request
+>   fixtures pass the real-catalog suite.
+> - **JavaScript tests:** 4 new.
+>   - The committed request gets the committed reply.
+>   - Every outcome, and the check changes nothing.
+>   - A malformed request is refused.
+>   - Through the real provider, a check sees same-turn typing and applies
+>     nothing.
+> - **Checks:**
+>   - `cargo test`: 638 passed, zero warnings.
+>   - `test:domains`: 1538 passed.
+>   - All seven guards pass, and the build passes.
+> - **Live pass** (`tauri dev`, throwaway project, the dev call;
+>   `.research/2026-10-11-w2-live/w2a-live.mjs`):
+>   - **Ready:** two open documents became one plan, `pendingReview`, with
+>     600 seconds to live.
+>   - **The same proposal again** returned the same plan id.
+>   - **Refused:** `.env` was `denied`, `../outside.ts` was `invalidPath`,
+>     and an unopened `README.md` was `notInSession`, with no plan made.
+>   - **After typing,** the old revision was a `conflict` naming exactly the
+>     revision a fresh read reports.
+>   - **No proposal changed a buffer.**
+>   - No console errors.
+
 ## W-track outline
 
 The brief §13 holds the direction. Slices are detailed when the write contract is written.
 
 - **W1: compare-and-apply.** Detailed in [W1](#w1-compare-and-apply).
-- **W2: buffer edits.** `text.edit` as exact-text replacement, through `litria_changes_prepare` and `litria_changes_apply`. Plan identity, expiry and one execution claim. Buffer effects only. An approval surface is designed with the owner.
+- **W2: buffer edits.** Detailed in [W2](#w2-buffer-edits).
 - **W3: native conditional operations.** Create-if-absent and replace-if-the-disk-revision-matches. These are the remainder of R2, with fault-injection proofs from the [Project API proposal](../ideas/brief-project-api-mcp.md) R2.
 - **W4: durable operations.** Per-effect receipts, `litria_operations_get`, and recovery without replay (R5).
 
