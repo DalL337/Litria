@@ -41,7 +41,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)). Codex review: five findings, all fixed (see [P5 review record](#p5-review-record)) |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
-| W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | In progress: W2a propose built (see [W2a record](#w2a-record)); W2b review and apply next |
+| W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b review and apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The review surface waits for track T (owner) |
 | W3 | Native conditional disk operations (create-if-absent, replace-if-expected-revision) | P1 | Outline |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
@@ -1396,6 +1396,96 @@ All tests and standard checks pass, plus the live pass. No transport, listener o
 >     revision a fresh read reports.
 >   - **No proposal changed a buffer.**
 >   - No console errors.
+
+### W2b record
+
+> **Built 2026-10-11, as specified above.**
+>
+> **Contract.**
+>
+> - `litria_changes_apply` (`contracts/project_api/changes_apply.rs`;
+>   capability `project.changes.apply`; not read-only).
+> - The plan states grew into one shared enum: `pendingReview`,
+>   `applying`, `applied`, `rejected`, `expired`, `conflict`, `failed`,
+>   `needsReview` and `unknown`.
+> - Bridge operation `editor.applyChanges`. Its request is the plan's
+>   changes, as `editor.checkChanges` takes them; its reply is
+>   `{ applied, changes }`.
+> - JSON Schema cannot tie the `applied` flag to every entry, so the two
+>   all-or-none reply fixtures are marked as ones the boundary alone rejects.
+>
+> **Service.** `project_api/changes.rs`:
+>
+> - **The review seam,** `review(planId, approve | reject, epoch)`.
+>   - **Approving is an atomic claim,** `pendingReview` → `applying`, under
+>     the store's lock. The lock is released while the editor works.
+>   - **A plan whose outcome cannot be known is never `failed`.** The bridge
+>     gained `call_reporting`, which says whether a request was delivered
+>     before it failed.
+>     - Never delivered, or refused by the editor before it acted (the
+>       workspace moved on): `failed`, since nothing applied.
+>     - Delivered and then lost (no answer in time, an answer about other
+>       documents, an internal failure): `needsReview`. The editor may have
+>       applied it, and it is never retried (R5).
+>   - A reviewer of another workspace finds nothing.
+> - **The apply tool** answers the requester's plan state, its effect
+>   (`buffer`) and the outcome per document. It never applies a plan that
+>   awaits review.
+> - **Deduplication and the pending bound** count only plans still awaiting
+>   review.
+> - **The debug-only command `project_api_dev_review`** is the seam's
+>   caller for live passes. It is listed in `docs/rust-command-contracts.md`.
+>
+> **Editor.** `answerApplyChanges` checks every change and, only if all are
+> ready, applies all of them with the session's `applyBufferEdit`, in one
+> synchronous turn. An apply that somehow fails after its check is reported
+> as an internal failure, which Rust records as `needsReview`.
+>
+> **Found by the tests: a deadlock.** The double-approval test hung. The
+> store's guard, created in a `match` scrutinee, lived through the
+> already-decided arm, which locked again. The claim is now bound first.
+>
+> **Evidence:**
+>
+> - **Rust:** 10 new tests.
+>   - Approving applies once, and approving again asks the editor nothing.
+>   - Four simultaneous approvals: exactly one application.
+>   - Rejection; expiry; a conflict.
+>   - Each case of uncertainty is `needsReview` and never retried.
+>   - "Never delivered" and "workspace moved on" are `failed`.
+>   - Another workspace's reviewer finds nothing.
+>   - A reviewed plan no longer counts as pending.
+>   - The apply tool reports and never applies.
+> - **MCP proof:** a real-catalog test runs the whole loop. The proposal
+>   leads to `pendingReview` with nothing applied, a person approves through
+>   the seam, and the agent then sees `applied` and `buffer` with the new
+>   revision. Every answer conforms to the schema.
+> - **JavaScript:** 4 new tests.
+>   - The committed request gets the committed reply, and nothing applies.
+>   - All ready, so all apply with real revisions.
+>   - One not ready, so none apply, the ready document included.
+>   - A malformed request is refused.
+> - **Checks:**
+>   - `cargo test`: 649 passed, zero warnings, and `cargo check --release`
+>     is clean.
+>   - `test:domains`: 1542 passed.
+>   - All seven guards pass, and the build passes.
+> - **Live pass** (`tauri dev`, throwaway project, the dev call and the
+>   review command; `.research/2026-10-11-w2-live/w2b-live.mjs`):
+>   - **Before review:** `pendingReview`, with both buffers unchanged.
+>   - **After approval:** both documents changed together and are dirty. The
+>     agent sees `applied` and `buffer`, and the revisions it is given equal
+>     fresh reads.
+>   - **A second approval** applied nothing more.
+>   - **Rejecting:** `rejected`, for the reviewer and the agent alike, and
+>     nothing changed.
+>   - **After typing in one of two documents,** approving gives a `conflict`:
+>     that document is in conflict, the other was ready, and neither
+>     changed.
+>   - No console errors.
+>
+> **Not covered live:** expiry, since ten minutes is long for a live pass. It
+> is covered by tests with an injected clock.
 
 ## W-track outline
 

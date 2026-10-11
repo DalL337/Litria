@@ -6,7 +6,7 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
 
 ## Command inventory
 
-88 commands are registered; 5 of them exist only in debug builds.
+89 commands are registered; 6 of them exist only in debug builds.
 
 **Every release-build command has a frontend caller.**
 - Any registered command can be invoked from the webview, so a command with no caller is surface with no purpose.
@@ -15,7 +15,7 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
   - `greet`, the Tauri template's sample command, was removed.
 - Keep it that way: a new command lands with its caller.
 
-The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand, from devtools or CDP.
+The debug-only `crash_test_panic`, `project_api_dev_call` and `project_api_dev_review` are driven by hand, from devtools or CDP.
 
 ### Project files and dialogs
 
@@ -151,6 +151,7 @@ The debug-only `crash_test_panic` and `project_api_dev_call` are driven by hand,
 | Command | Defined in | Frontend caller | Notes |
 |---|---|---|---|
 | `project_api_dev_call` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller** |
+| `project_api_dev_review` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. A person's decision on an agent's plan through the review seam (Project API build plan W2b), until track T gives the review a surface; approving applies the plan to the editor (unsaved), never to disk. |
 | `project_api_bridge_attach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
 | `project_api_bridge_detach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
 | `project_api_bridge_reply` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
