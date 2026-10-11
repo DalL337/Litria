@@ -65,6 +65,15 @@
       "request": "litria_changes_apply.request.schema.json",
       "resultIn": "litria_changes_apply.result.in.schema.json",
       "resultOut": "litria_changes_apply.result.out.schema.json"
+    },
+    {
+      "capability": "project.operations.read",
+      "description": "Where an operation stands, and what each of its changes did, without applying anything: safe after a lost response or a restart. The operation id is the plan id from litria_changes_prepare. Receipts are kept 30 days. An operation that a restart of Litria interrupted says so (interrupted), and its unsaved editor edits did not survive it; one whose outcome cannot be known is needsReview and is never retried.",
+      "name": "litria_operations_get",
+      "readOnly": true,
+      "request": "litria_operations_get.request.schema.json",
+      "resultIn": "litria_operations_get.result.in.schema.json",
+      "resultOut": "litria_operations_get.result.out.schema.json"
     }
   ],
   "status": "draft"

@@ -354,6 +354,10 @@ mod outbound {
             "changes_prepare.result.json",
             &samples::changes_prepare_result(),
         );
+        check::<crate::contracts::project_api::operations_get::OperationsGetResult>(
+            "operations_get.result.json",
+            &samples::operations_get_result(),
+        );
         check::<crate::contracts::project_api::changes_apply::ChangesApplyResult>(
             "changes_apply.result.json",
             &samples::changes_apply_result(),

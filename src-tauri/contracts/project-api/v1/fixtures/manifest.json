@@ -740,6 +740,48 @@
       "expect": "reject",
       "note": "Unknown fields are rejected: a request cannot approve its own plan.",
       "errorCode": "invalidParams"
+    },
+    {
+      "file": "operations_get.result.json",
+      "operation": "litria_operations_get",
+      "message": "result",
+      "expect": "accept",
+      "note": "An operation a restart interrupted: the edit it had applied, and needsReview for the new file whose outcome is unknown, exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "operations_get.result.unknown.json",
+      "operation": "litria_operations_get",
+      "message": "result",
+      "expect": "accept",
+      "note": "Not this requester's operation, or past the 30-day retention: unknown, nothing else."
+    },
+    {
+      "file": "operations_get.result.unknown-state.json",
+      "operation": "litria_operations_get",
+      "message": "result",
+      "expect": "reject",
+      "note": "An unfamiliar state must never read as a known one."
+    },
+    {
+      "file": "operations_get.request.minimal.json",
+      "operation": "litria_operations_get",
+      "message": "request",
+      "expect": "accept",
+      "note": "The plan id litria_changes_prepare returned."
+    },
+    {
+      "file": "operations_get.request.empty-id.json",
+      "operation": "litria_operations_get",
+      "message": "request",
+      "expect": "reject",
+      "note": "operationId is not empty."
+    },
+    {
+      "file": "operations_get.request.unknown-field.json",
+      "operation": "litria_operations_get",
+      "message": "request",
+      "expect": "reject",
+      "note": "Unknown fields are rejected: reading an operation never applies it."
     }
   ]
 }

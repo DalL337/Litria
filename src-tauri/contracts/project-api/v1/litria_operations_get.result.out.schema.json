@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OperationsGetResult",
+  "type": "object",
+  "properties": {
+    "changes": {
+      "description": "Per change, as far as Litria knows. A change whose outcome is unknown is\nleft out, and the operation is then `needsReview`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChangeOutcome"
+      }
+    },
+    "effects": {
+      "description": "Where the changes that landed went: `buffer` (edits, in the editor,\nunsaved), then `disk` (new files).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Effect"
+      }
+    },
+    "interrupted": {
+      "description": "A restart of Litria interrupted the operation while it was being\napplied. Its unsaved editor edits did not survive the restart; new files\nit created may be on disk.",
+      "type": "boolean"
+    },
+    "operationId": {
+      "type": "string"
+    },
+    "state": {
+      "description": "`unknown` for an id that is not this requester's, or is older than the\nretention period.",
+      "$ref": "#/$defs/PlanState"
+    }
+  },
+  "required": [
+    "operationId",
+    "state"
+  ],
+  "$defs": {
+    "ChangeOutcome": {
+      "description": "One change of a plan that ran. A reader that meets an unfamiliar\n`outcome` must not assume anything changed.",
+      "oneOf": [
+        {
+          "description": "Changed in the editor, unsaved; the document's revision now. A document\nthat was not open was opened beside the open tabs.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "applied"
+            },
+            "path": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "revision"
+          ]
+        },
+        {
+          "description": "Would have applied, but another document of the plan did not: nothing\nwas applied.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "ready"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "The editor holds another revision now.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "conflict"
+            },
+            "path": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "revision"
+          ]
+        },
+        {
+          "description": "The edit at this index matches nowhere any more.",
+          "type": "object",
+          "properties": {
+            "edit": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "outcome": {
+              "type": "string",
+              "const": "noMatch"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "edit"
+          ]
+        },
+        {
+          "description": "The edit at this index matches more than once now.",
+          "type": "object",
+          "properties": {
+            "edit": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "outcome": {
+              "type": "string",
+              "const": "ambiguous"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "edit"
+          ]
+        },
+        {
+          "description": "Neither the editor nor the disk has the document now.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "notInSession"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "The document could not be opened into the editor (its canvas piece could\nnot be made). Nothing was applied.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "unavailable"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "The new file was created on disk; its revision as created.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "created"
+            },
+            "path": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "revision"
+          ]
+        },
+        {
+          "description": "Not created: something has the new file's name now, on disk or open in\nthe editor. Nothing was replaced.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "exists"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "Not created: the file could not be written, or the workspace changed\nwhile creating.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "failed"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "Not created: the path is withheld now (it passes through a link that\nappeared since the proposal). Nothing was written.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "denied"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        }
+      ]
+    },
+    "Effect": {
+      "oneOf": [
+        {
+          "description": "Edits applied to the editor's copy of documents; not saved to disk.",
+          "type": "string",
+          "const": "buffer"
+        },
+        {
+          "description": "New files created on disk.",
+          "type": "string",
+          "const": "disk"
+        }
+      ]
+    },
+    "PlanState": {
+      "description": "Where a plan stands. A reader that meets an unfamiliar value must not\nassume the plan was applied.",
+      "oneOf": [
+        {
+          "description": "Ready: `litria_changes_apply` applies it.",
+          "type": "string",
+          "const": "prepared"
+        },
+        {
+          "description": "Waiting for a person to approve or reject it. Only when Litria is set\nto review agent edits itself (off by default).",
+          "type": "string",
+          "const": "pendingReview"
+        },
+        {
+          "description": "Approved, and being applied now.",
+          "type": "string",
+          "const": "applying"
+        },
+        {
+          "description": "Every change landed: edits in the editor (unsaved), new files on disk.",
+          "type": "string",
+          "const": "applied"
+        },
+        {
+          "description": "Some changes landed and some did not; each change's outcome says which.\nNever retried: propose the rest again.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "A person rejected it. Nothing was applied.",
+          "type": "string",
+          "const": "rejected"
+        },
+        {
+          "description": "Nobody answered within ten minutes. Nothing was applied.",
+          "type": "string",
+          "const": "expired"
+        },
+        {
+          "description": "A document changed after the plan was prepared, so nothing was applied.\nPropose again against the current text.",
+          "type": "string",
+          "const": "conflict"
+        },
+        {
+          "description": "Applying could not reach the editor. Nothing was applied.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Applying reached the editor but its outcome is unknown (it did not\nanswer in time). Check the documents; the plan is never retried.",
+          "type": "string",
+          "const": "needsReview"
+        },
+        {
+          "description": "Not a plan of this connection and workspace, or one long expired.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    }
+  }
+}

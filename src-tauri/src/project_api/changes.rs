@@ -14,6 +14,12 @@
 //! preparation if it is not applied. Plans live in memory (durable operations
 //! are W4).
 //!
+//! Every applied plan is a durable operation (W4a, `operations`): its intent
+//! is recorded before anything is done, each change is marked started before
+//! its owner is asked, and the outcome is recorded when known. An operation
+//! read after a restart is told apart by what the record proves; an unknown
+//! outcome is `needsReview`, never replayed. `litria_operations_get` reads it.
+//!
 //! Applying runs in a fixed order: every new file's name is checked again
 //! (one taken means nothing lands); the edits apply all or none; then the
 //! files are created through the frontend's filesystem write manager
@@ -42,12 +48,14 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use super::bridge::{self, Bridge, CallFailure};
+use super::operations::{self, ChangeKind as RecordedKind, Phase, RecordedChange, Record, Standing};
 use super::reader::{disk_revision, identity, read_disk, DiskRead, Identity};
 use super::workspace;
 use crate::contracts::boundary::invalid;
 use crate::contracts::context::{CallContext, Principal};
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::changes_apply::{ChangeOutcome, ChangesApplyRequest, ChangesApplyResult, Effect};
+use crate::contracts::project_api::operations_get::{OperationsGetRequest, OperationsGetResult};
 use crate::contracts::project_api::changes_prepare::{
     ChangeCheck, ChangesPrepareRequest, ChangesPrepareResult, PlanState, PreparedPlan, ProposedChange,
     MAX_OPEN_FILE_BYTES, PLAN_ID_LENGTH, PLAN_TTL_SECONDS,
@@ -218,7 +226,10 @@ pub(crate) fn handle_apply_with(
                 let applied = execute(&request.plan_id, changes, &context.epoch, bridge, store);
                 (applied.state, applied.changes)
             }
-            Err(_) => lock(store).status(&request.plan_id, context.principal, &context.epoch, now),
+            Err(_) => {
+                let standing = standing_of(&request.plan_id, context.principal, &context.epoch, store, now);
+                (standing.state, standing.changes)
+            }
         };
         Ok(ChangesApplyResult {
             plan_id: request.plan_id.clone(),
@@ -227,6 +238,49 @@ pub(crate) fn handle_apply_with(
             changes,
         })
     })
+}
+
+// ---------------------------------------------------------------------------
+// litria_operations_get: an operation's standing, durable (W4a)
+// ---------------------------------------------------------------------------
+
+pub(crate) fn handle_operations_get(
+    context: &CallContext,
+    request: OperationsGetRequest,
+) -> Result<OperationsGetResult, ContractError> {
+    handle_operations_get_with(context, request, plans(), Instant::now())
+}
+
+pub(crate) fn handle_operations_get_with(
+    context: &CallContext,
+    request: OperationsGetRequest,
+    store: &Mutex<PlanStore>,
+    now: Instant,
+) -> Result<OperationsGetResult, ContractError> {
+    workspace::fenced(context, |_root| {
+        let standing = standing_of(&request.operation_id, context.principal, &context.epoch, store, now);
+        Ok(OperationsGetResult {
+            operation_id: request.operation_id.clone(),
+            state: standing.state,
+            effects: effects_of(&standing.changes),
+            changes: standing.changes,
+            interrupted: standing.interrupted,
+        })
+    })
+}
+
+/// Where the requester's operation `id` stands: the plan this open still
+/// holds, else its durable record (an earlier open's, or one this open no
+/// longer remembers), else `unknown`. Reading never applies anything.
+fn standing_of(id: &str, principal: Principal, epoch: &str, store: &Mutex<PlanStore>, now: Instant) -> Standing {
+    let (state, changes) = lock(store).status(id, principal, epoch, now);
+    if state != PlanState::Unknown {
+        return Standing { state, changes, interrupted: false };
+    }
+    match operations::load(epoch, id, principal) {
+        Ok(Some(record)) => operations::standing(&record, epoch),
+        _ => Standing { state: PlanState::Unknown, changes: Vec::new(), interrupted: false },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -283,15 +337,124 @@ pub(crate) fn review_with(
 /// Apply a claimed plan and record the outcome. The store is not locked while
 /// the owners work.
 fn execute(plan_id: &str, changes: Vec<PlannedChange>, epoch: &str, bridge: &Bridge, store: &Mutex<PlanStore>) -> Reviewed {
-    let (state, outcomes) = carry_out(&changes, epoch, bridge);
+    let principal = lock(store).journaled(plan_id);
+    let mut journal = Journal::new(plan_id, principal, epoch, &changes);
+    // Intent first: nothing is done that the record does not show.
+    let (state, outcomes) = if journal.intend() {
+        carry_out(&changes, epoch, bridge, &mut journal)
+    } else {
+        (PlanState::Failed, Vec::new())
+    };
+    journal.finish(state, &outcomes);
     lock(store).finish(plan_id, state, outcomes.clone());
     Reviewed { state, changes: outcomes }
+}
+
+/// An operation's durable record as it advances (W4a). Off for a store
+/// without a journal (tests of the bare store): every write then succeeds and
+/// nothing is kept.
+struct Journal {
+    record: Option<Record>,
+}
+
+impl Journal {
+    fn new(id: &str, principal: Option<Principal>, epoch: &str, changes: &[PlannedChange]) -> Self {
+        let record = principal.map(|principal| Record {
+            id: id.to_string(),
+            principal,
+            epoch: epoch.to_string(),
+            state: PlanState::Applying,
+            changes: changes
+                .iter()
+                .map(|change| RecordedChange {
+                    path: change.path().to_string(),
+                    kind: match change {
+                        PlannedChange::Edit(_) => RecordedKind::Edit,
+                        PlannedChange::Open(_) => RecordedKind::Open,
+                        PlannedChange::Create(_) => RecordedKind::Create,
+                    },
+                    phase: Phase::Intended,
+                    outcome: None,
+                })
+                .collect(),
+        });
+        Self { record }
+    }
+
+    fn write(&self) -> bool {
+        match &self.record {
+            None => true,
+            Some(record) => operations::save(&record.epoch, record, operations::now()).is_ok(),
+        }
+    }
+
+    /// Record the operation before anything is done.
+    fn intend(&mut self) -> bool {
+        self.write()
+    }
+
+    /// Record the changes of `kinds` as started, before their owner is asked.
+    /// False when the record cannot be written: the caller then does not ask.
+    fn start(&mut self, kinds: &[RecordedKind]) -> bool {
+        if let Some(record) = &mut self.record {
+            for change in record.changes.iter_mut().filter(|change| kinds.contains(&change.kind)) {
+                change.phase = Phase::Started;
+            }
+        }
+        self.write()
+    }
+
+    /// Record the outcomes known so far (by plan index) as confirmed; written
+    /// with the next `start`, so a later crash still shows them.
+    fn confirm_known(&mut self, outcomes: &[Option<ChangeOutcome>]) {
+        if let Some(record) = &mut self.record {
+            for (change, outcome) in record.changes.iter_mut().zip(outcomes) {
+                if let Some(outcome) = outcome {
+                    change.phase = Phase::Confirmed;
+                    change.outcome = Some(outcome.clone());
+                }
+            }
+        }
+    }
+
+    /// Record the outcome: each known one confirmed (paths are unique within a
+    /// plan); an unknown one stays as far as it got.
+    fn finish(&mut self, state: PlanState, outcomes: &[ChangeOutcome]) {
+        if let Some(record) = &mut self.record {
+            record.state = state;
+            for outcome in outcomes {
+                if let Some(change) = record.changes.iter_mut().find(|change| change.path == outcome_path(outcome)) {
+                    change.phase = Phase::Confirmed;
+                    change.outcome = Some(outcome.clone());
+                }
+            }
+        }
+        // A finish the database refuses (the project closed meanwhile) leaves
+        // the record as far as it got: the next open reads it as interrupted.
+        let _ = self.write();
+    }
+}
+
+fn outcome_path(outcome: &ChangeOutcome) -> &str {
+    match outcome {
+        ChangeOutcome::Applied { path, .. }
+        | ChangeOutcome::Ready { path }
+        | ChangeOutcome::Conflict { path, .. }
+        | ChangeOutcome::NoMatch { path, .. }
+        | ChangeOutcome::Ambiguous { path, .. }
+        | ChangeOutcome::NotInSession { path }
+        | ChangeOutcome::Unavailable { path }
+        | ChangeOutcome::Created { path, .. }
+        | ChangeOutcome::Exists { path }
+        | ChangeOutcome::Failed { path }
+        | ChangeOutcome::Denied { path } => path,
+    }
 }
 
 /// The plan's changes, in order: new files' names checked again, the edits
 /// all or none, then the new files. Each change's outcome is in plan order;
 /// one Litria cannot know is left out, and the plan is then `needsReview`.
-fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanState, Vec<ChangeOutcome>) {
+fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge, journal: &mut Journal) -> (PlanState, Vec<ChangeOutcome>) {
     let mut outcomes: Vec<Option<ChangeOutcome>> = vec![None; changes.len()];
     let edits: Vec<(usize, &ChangeToCheck)> = changes
         .iter()
@@ -406,6 +569,10 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
     }
 
     // 3. The edits and the opened documents, all or none.
+    if (!edits.is_empty() || !to_open.is_empty()) && !journal.start(&[RecordedKind::Edit, RecordedKind::Open]) {
+        // Not recorded as started, so not asked: nothing was applied.
+        return (PlanState::Failed, Vec::new());
+    }
     if !edits.is_empty() || !to_open.is_empty() {
         let request = CheckChangesRequest {
             changes: edits.iter().map(|(_, edit)| (*edit).clone()).collect(),
@@ -445,8 +612,12 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
         }
     }
 
-    // 4. The new files, through the filesystem write manager.
-    if !creates.is_empty() {
+    // 4. The new files, through the filesystem write manager. Not recorded as
+    // started, so not asked: none was created.
+    journal.confirm_known(&outcomes);
+    if !creates.is_empty() && !journal.start(&[RecordedKind::Create]) {
+        fail_creates(&mut outcomes, &creates);
+    } else if !creates.is_empty() {
         let request = CreateFilesRequest { files: creates.iter().map(|(_, file)| (*file).clone()).collect() };
         match bridge.call_reporting::<CreateFilesOp>(epoch, &request) {
             Ok(result) if result.files.iter().map(CreatedFile::path).eq(creates.iter().map(|(_, file)| file.path.as_str())) => {
@@ -475,27 +646,13 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
     }
 
     let outcomes: Vec<ChangeOutcome> = outcomes.into_iter().map(|outcome| outcome.expect("every change has an outcome")).collect();
-    let landed = outcomes.iter().filter(|outcome| landed(outcome)).count();
-    let state = if landed == outcomes.len() {
-        PlanState::Applied
-    } else if landed > 0 {
-        PlanState::Partial
-    } else if outcomes.iter().any(|outcome| matches!(outcome, ChangeOutcome::Exists { .. })) {
-        PlanState::Conflict
-    } else {
-        PlanState::Failed
-    };
-    (state, outcomes)
+    (operations::settled_state(&outcomes), outcomes)
 }
 
 fn fail_creates(outcomes: &mut [Option<ChangeOutcome>], creates: &[(usize, &FileToCreate)]) {
     for (index, file) in creates {
         outcomes[*index] = Some(ChangeOutcome::Failed { path: file.path.clone() });
     }
-}
-
-fn landed(outcome: &ChangeOutcome) -> bool {
-    matches!(outcome, ChangeOutcome::Applied { .. } | ChangeOutcome::Created { .. })
 }
 
 /// Where the changes that landed went: `buffer` for edits, then `disk` for
@@ -728,16 +885,38 @@ impl Plan {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PlanStore {
     plans: HashMap<String, Plan>,
     policy: ReviewPolicy,
+    /// Applied plans are durable operations (W4a). Off only for tests of the
+    /// bare store, whose workspaces are not open.
+    journal: bool,
+}
+
+impl Default for PlanStore {
+    fn default() -> Self {
+        Self { plans: HashMap::new(), policy: ReviewPolicy::default(), journal: true }
+    }
 }
 
 impl PlanStore {
     #[cfg(test)]
     pub(crate) fn with_policy(policy: ReviewPolicy) -> Self {
-        Self { plans: HashMap::new(), policy }
+        Self { policy, ..Self::default() }
+    }
+
+    /// A store that keeps no durable record: for tests whose epochs name no
+    /// open workspace.
+    #[cfg(test)]
+    pub(crate) fn without_journal() -> Self {
+        Self { journal: false, ..Self::default() }
+    }
+
+    /// The principal a claimed plan's durable record belongs to, or None when
+    /// the store keeps no record.
+    fn journaled(&self, id: &str) -> Option<Principal> {
+        self.journal.then(|| self.plans.get(id).map(|plan| plan.principal)).flatten()
     }
 
     /// Store a proposal as a plan awaiting review, or return the pending plan

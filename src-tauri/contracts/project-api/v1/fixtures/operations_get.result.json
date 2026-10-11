@@ -1,0 +1,15 @@
+{
+  "changes": [
+    {
+      "outcome": "applied",
+      "path": "src/auth.ts",
+      "revision": "b1-30e217dafba8bae4b210e802479fb377"
+    }
+  ],
+  "effects": [
+    "buffer"
+  ],
+  "interrupted": true,
+  "operationId": "plan-e810c8cf2fc667011ff17e280098bdb6",
+  "state": "needsReview"
+}
