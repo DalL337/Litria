@@ -7,6 +7,7 @@ import {
   BRIDGE_REQUEST_EVENT,
   MAX_REPLY_BYTES,
   answerBufferIndex,
+  answerCreateFiles,
   answerDocuments,
   answerSelection,
   bufferRevision,
@@ -153,7 +154,13 @@ async function readyBridge({ session = fixtureSession(), epoch = 'ws-7', workspa
     workspace: fixtureWorkspace(),
     active: getActiveSessionDocument(fixtureActiveSession(), 5),
     languages: [],
-    applied: []
+    applied: [],
+    // The project's disk and canvas, for files.create (W3b): names that exist,
+    // files created (in order), files shown on the canvas.
+    disk: new Set(['notes.md']),
+    created: [],
+    canvas: [],
+    createFile: null
   };
   const bridge = createProjectApiBridge({
     ports: {
@@ -168,7 +175,18 @@ async function readyBridge({ session = fixtureSession(), epoch = 'ws-7', workspa
         if (plan.outcome !== 'applied') return plan;
         holder.session = reduce(holder.session, { type: 'UPDATE_WORKING_CODE', tabId: plan.tabId, workingCode: plan.text });
         return { outcome: 'applied', revision: plan.revision };
-      }
+      },
+      // What the write manager's createFile does: never over a taken name.
+      fileOwners: () => ({
+        createFile: holder.createFile ?? (async (path, text) => {
+          if (holder.disk.has(path)) return { success: false, code: 'fs.exists' };
+          holder.disk.add(path);
+          holder.created.push({ path, text });
+          return { success: true };
+        }),
+        holds: (path) => getSessionDocumentsByPath(holder.session).has(path),
+        showOnCanvas: async (path) => { holder.canvas.push(path); }
+      })
     },
     transport,
     getWorkspaceEpoch: () => current,
@@ -848,3 +866,113 @@ test('editor.applyChanges: a malformed request is refused and applies nothing', 
   assert.deepEqual(transport.replies.map((entry) => entry.reply.code), ['invalidRequest', 'invalidRequest', 'invalidRequest']);
   assert.deepEqual(holder.applied, []);
 });
+
+// ─── files.create (build plan W3b) ───────────────────────────────────────────
+
+/** files.create answers once its disk work settles. */
+async function repliesSettle(transport, count) {
+  for (let turn = 0; turn < 50 && transport.replies.length < count; turn += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(transport.replies.length, count, 'every request was answered');
+}
+
+const createRequest = (requestId, files) => ({
+  requestId, epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.createFiles, request: { files }
+});
+
+test('files.create: the committed request gets the committed reply, and nothing is replaced', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  assert.equal(bridge.handleRequest(acceptedFixture('files.create.request.json')), true);
+  await repliesSettle(transport, 1);
+  const [{ requestId, generation, reply }] = transport.replies;
+  assert.equal(requestId, 'r1');
+  assert.equal(generation, 'g3');
+  assert.deepEqual(reply, acceptedFixture('files.create.reply.json'));
+  assertDeclared(BRIDGE_OPS.createFiles, reply);
+  assert.deepEqual(holder.created, [{ path: 'src/util/format.ts', text: 'export const format = String;\n' }]);
+  assert.deepEqual(holder.canvas, ['src/util/format.ts'], 'only the created file is shown on the canvas');
+});
+
+test('files.create: a name the editor session holds is taken, and never created', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  const held = [...getSessionDocumentsByPath(holder.session).keys()][0];
+  bridge.handleRequest(createRequest('rc1', [{ path: held, text: 'X' }, { path: 'src/fresh.ts', text: '' }]));
+  await repliesSettle(transport, 1);
+  assert.deepEqual(transport.replies[0].reply.result.files, [
+    { outcome: 'exists', path: held },
+    { outcome: 'created', path: 'src/fresh.ts' }
+  ]);
+  assert.deepEqual(holder.created.map((entry) => entry.path), ['src/fresh.ts']);
+});
+
+test('files.create: once the project switches, nothing more is created or placed', async () => {
+  const context = await readyBridge();
+  const { bridge, transport, holder } = context;
+  holder.createFile = async (path, text) => {
+    holder.created.push({ path, text });
+    context.setWorkspaceEpoch('ws-8'); // the user opens another project meanwhile
+    return { success: true };
+  };
+  bridge.handleRequest(createRequest('rc2', [{ path: 'src/one.ts', text: '1' }, { path: 'src/two.ts', text: '2' }]));
+  await repliesSettle(transport, 1);
+  assert.deepEqual(transport.replies[0].reply.result.files, [
+    { outcome: 'created', path: 'src/one.ts' },
+    { outcome: 'failed', path: 'src/two.ts' }
+  ]);
+  assert.deepEqual(holder.created.map((entry) => entry.path), ['src/one.ts'], 'the second file was never created');
+  assert.deepEqual(holder.canvas, [], 'nothing was placed on the new project\'s canvas');
+});
+
+test('files.create: a failed or refused create is answered, and the rest go on', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  holder.createFile = async (path) => {
+    if (path === 'src/broken.ts') throw new Error('disk full');
+    if (path === 'con.ts') return { success: false, code: 'fs.reserved_name' };
+    holder.created.push({ path });
+    return { success: true };
+  };
+  bridge.handleRequest(createRequest('rc3', [
+    { path: 'src/broken.ts', text: '' }, { path: 'con.ts', text: '' }, { path: 'src/fine.ts', text: '' }
+  ]));
+  await repliesSettle(transport, 1);
+  assert.deepEqual(transport.replies[0].reply.result.files, [
+    { outcome: 'failed', path: 'src/broken.ts' },
+    { outcome: 'failed', path: 'con.ts' },
+    { outcome: 'created', path: 'src/fine.ts' }
+  ]);
+});
+
+test('files.create: a file the canvas cannot show is still created', async () => {
+  const reply = await answerCreateFiles(
+    { files: [{ path: 'src/shown.ts', text: '' }] },
+    {
+      createFile: async () => ({ success: true }),
+      holds: () => false,
+      showOnCanvas: async () => { throw new Error('no piece'); },
+      stillCurrent: () => true
+    }
+  );
+  assert.deepEqual(reply.result.files, [{ outcome: 'created', path: 'src/shown.ts' }]);
+});
+
+test('files.create: a malformed request is refused and creates nothing', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  const tooMany = Array.from({ length: 17 }, (_, index) => ({ path: `f${index}.ts`, text: '' }));
+  for (const request of [{}, { files: [] }, { files: [{ path: 'a.ts' }] }, { files: tooMany }]) {
+    bridge.handleRequest({ requestId: `rm-${transport.replies.length}`, epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.createFiles, request });
+    await repliesSettle(transport, transport.replies.length + 1);
+  }
+  assert.deepEqual(transport.replies.map((entry) => entry.reply.code), ['invalidRequest', 'invalidRequest', 'invalidRequest', 'invalidRequest']);
+  assert.deepEqual(holder.created, []);
+});
+
+test('files.create: an answer that fails after it began is internal, never "nothing done"', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  holder.session = null; // the session's names can no longer be read
+  bridge.handleRequest(createRequest('rc4', [{ path: 'src/x.ts', text: '' }]));
+  await repliesSettle(transport, 1);
+  assert.equal(transport.replies[0].reply.kind, 'error');
+  assert.equal(transport.replies[0].reply.code, 'internal');
+});
+

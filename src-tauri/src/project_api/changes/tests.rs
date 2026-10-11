@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::contracts::context::Grant;
-use crate::contracts::project_api::changes_prepare::{ChangeKind, ProposedChange, TextEdit};
+use crate::contracts::project_api::changes_prepare::{ProposedChange, TextEdit};
 use crate::contracts::project_api_bridge::BridgeRequestEvent;
 use crate::project_api::bridge::testing::answering;
 use serde_json::{json, Value};
@@ -21,15 +21,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // --- The store ---------------------------------------------------------------
 
-fn planned(path: &str, revision: &str) -> Vec<ChangeToCheck> {
-    vec![ChangeToCheck {
+fn planned(path: &str, revision: &str) -> Vec<PlannedChange> {
+    vec![PlannedChange::Edit(ChangeToCheck {
         path: path.into(),
         expected_revision: revision.into(),
         edits: vec![EditToCheck {
             old_text: "a".into(),
             new_text: "b".into(),
         }],
-    }]
+    })]
 }
 
 #[test]
@@ -132,8 +132,7 @@ fn temp_root(tag: &str) -> PathBuf {
 }
 
 fn change(path: &str) -> ProposedChange {
-    ProposedChange {
-        kind: ChangeKind::TextEdit,
+    ProposedChange::TextEdit {
         path: path.into(),
         expected_revision: "b1-x".into(),
         edits: vec![TextEdit {
@@ -239,7 +238,8 @@ fn ready_changes_become_one_plan_and_the_editor_is_asked_once() {
     let stored = store.lock().unwrap();
     let stored = stored.get(&plan.plan_id, Principal::Test, &session.epoch).unwrap();
     assert_eq!(stored.changes.len(), 2);
-    assert_eq!(stored.changes[0].edits[0].new_text, "10");
+    let PlannedChange::Edit(first) = &stored.changes[0] else { panic!("an edit") };
+    assert_eq!(first.edits[0].new_text, "10");
 }
 
 #[test]
@@ -581,7 +581,7 @@ fn the_agents_apply_applies_its_prepared_plan_once() {
 
     let applied = ask(&prepared.plan_id, Principal::Test);
     assert_eq!(applied.state, PlanState::Applied);
-    assert_eq!(applied.effect, Some(Effect::Buffer));
+    assert_eq!(applied.effects, [Effect::Buffer]);
     assert_eq!(
         applied.changes,
         [ChangeOutcome::Applied { path: "src/a.ts".into(), revision: "b1-new-src/a.ts".into() }]
@@ -606,7 +606,7 @@ fn with_litria_review_on_the_agents_apply_waits_for_a_person() {
     };
     let waiting = ask();
     assert_eq!(waiting.state, PlanState::PendingReview);
-    assert!(waiting.effect.is_none() && waiting.changes.is_empty());
+    assert!(waiting.effects.is_empty() && waiting.changes.is_empty());
     assert_eq!(calls.load(Ordering::SeqCst), 0, "never applied without the person");
     review_with(&prepared.plan_id, Decision::Approve, &session.epoch, editor, &store, Instant::now());
     let applied = ask();
@@ -641,4 +641,330 @@ fn an_agents_apply_racing_a_persons_approval_applies_once() {
     let person = person.join().unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one claim won: {agent:?} / {person:?}");
     assert_eq!(lock(store).status(&id, Principal::Test, "ws-1", now).0, PlanState::Applied);
+}
+
+// --- W3b: new files ---------------------------------------------------------------
+
+use crate::contracts::project_api_bridge::files::FileToCreate as PlannedFile;
+
+fn create(path: &str, text: &str) -> ProposedChange {
+    ProposedChange::FileCreate { path: path.into(), text: text.into() }
+}
+
+/// The policy answers first, then the disk: a withheld file that exists reads
+/// as `denied`, never `exists` (no oracle). New files never reach the editor.
+#[test]
+fn a_new_file_is_judged_by_the_policy_then_the_disk() {
+    let session = Session::new("create-prepare", ready);
+    let store = Mutex::new(PlanStore::default());
+    let request = ChangesPrepareRequest {
+        changes: vec![create("src/new.ts", ""), create("src/a.ts", ""), create(".env", ""), create("../out.ts", "")],
+    };
+    let result = session.prepare(request, &store).unwrap();
+    assert!(result.plan.is_none());
+    assert_eq!(
+        result.changes,
+        [
+            ChangeCheck::Ready { path: "src/new.ts".into() },
+            ChangeCheck::Exists { path: "src/a.ts".into() },
+            ChangeCheck::Denied { path: ".env".into() },
+            ChangeCheck::InvalidPath { path: "../out.ts".into() },
+        ]
+    );
+    assert!(session.asked_paths().is_empty(), "the editor is never asked about new files");
+
+    // With an edit beside it: one plan, in request order; only the edit was
+    // checked with the editor.
+    let request = ChangesPrepareRequest { changes: vec![create("src/new.ts", "N\n"), change("src/b.ts")] };
+    let plan = session.prepare(request, &store).unwrap().plan.expect("both are ready");
+    assert_eq!(session.asked_paths(), [vec!["src/b.ts".to_string()]]);
+    let stored = store.lock().unwrap();
+    let stored = stored.get(&plan.plan_id, Principal::Test, &session.epoch).unwrap();
+    assert_eq!(stored.changes[0], PlannedChange::Create(PlannedFile { path: "src/new.ts".into(), text: "N\n".into() }));
+    assert!(matches!(&stored.changes[1], PlannedChange::Edit(edit) if edit.path == "src/b.ts"));
+}
+
+/// A plan never both edits a document and creates it.
+#[test]
+fn an_edit_and_a_create_of_one_document_are_refused() {
+    let session = Session::new("create-twice", ready);
+    let store = Mutex::new(PlanStore::default());
+    let request = ChangesPrepareRequest { changes: vec![change("src/a.ts"), create("src/a.ts", "")] };
+    assert_eq!(session.prepare(request, &store).unwrap_err().code, ErrorCode::InvalidParams);
+}
+
+/// What the scripted frontend did, in order: `apply` or `create`.
+type Calls = Arc<Mutex<Vec<&'static str>>>;
+
+/// A frontend for the session's workspace: `editor.applyChanges` answered by
+/// `apply(paths)`, `files.create` by `create(files)` — each `None` never
+/// answers — recording the order of the requests.
+fn frontend(
+    session: &Session,
+    deadline: Duration,
+    apply: fn(&[String]) -> Option<Value>,
+    create: fn(&[Value]) -> Option<Value>,
+) -> (&'static Bridge, Calls) {
+    let bridge: &'static Bridge = Box::leak(Box::new(Bridge::new(deadline)));
+    let calls: Calls = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&calls);
+    answering(bridge, move |event: &BridgeRequestEvent| {
+        let reply = match event.op.as_str() {
+            "editor.applyChanges" => {
+                record.lock().unwrap().push("apply");
+                let paths: Vec<String> = event.request["changes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|change| change["path"].as_str().unwrap().to_string())
+                    .collect();
+                apply(&paths)
+            }
+            "files.create" => {
+                record.lock().unwrap().push("create");
+                create(event.request["files"].as_array().unwrap())
+            }
+            other => panic!("unexpected {other}"),
+        };
+        reply.map(|value| value.to_string())
+    });
+    bridge.attach(&session.epoch, Some(&session.epoch)).unwrap();
+    (bridge, calls)
+}
+
+/// The filesystem write manager, for real: the native create-if-absent.
+fn create_for_real(files: &[Value]) -> Option<Value> {
+    let (_, root) = db::workspace_binding().unwrap();
+    let root = root.unwrap();
+    let files: Vec<Value> = files
+        .iter()
+        .map(|file| {
+            let path = file["path"].as_str().unwrap();
+            let outcome = match crate::project_ops::create_project_file(root.to_str().unwrap(), path, file["text"].as_str().unwrap()) {
+                Ok(crate::project_ops::CreateFileOutcome::Created) => "created",
+                Ok(crate::project_ops::CreateFileOutcome::Exists) => "exists",
+                Err(_) => "failed",
+            };
+            json!({ "outcome": outcome, "path": path })
+        })
+        .collect();
+    Some(json!({ "kind": "result", "result": { "files": files } }))
+}
+
+/// Something took every name after Rust's own last check.
+fn all_taken(files: &[Value]) -> Option<Value> {
+    let files: Vec<Value> = files.iter().map(|file| json!({ "outcome": "exists", "path": file["path"] })).collect();
+    Some(json!({ "kind": "result", "result": { "files": files } }))
+}
+
+fn never(_: &[Value]) -> Option<Value> {
+    None
+}
+
+fn nothing_applied(paths: &[String]) -> Option<Value> {
+    let changes: Vec<Value> =
+        paths.iter().map(|path| json!({ "outcome": "conflict", "path": path, "revision": "b1-now" })).collect();
+    Some(json!({ "kind": "result", "result": { "applied": false, "changes": changes } }))
+}
+
+impl Session {
+    fn plan(&self, changes: Vec<ProposedChange>, store: &Mutex<PlanStore>) -> String {
+        self.prepare(ChangesPrepareRequest { changes }, store).unwrap().plan.expect("ready").plan_id
+    }
+
+    fn apply(&self, plan_id: &str, bridge: &Bridge, store: &Mutex<PlanStore>) -> ChangesApplyResult {
+        handle_apply_with(&self.context(), ChangesApplyRequest { plan_id: plan_id.into() }, bridge, store, Instant::now())
+            .unwrap()
+    }
+}
+
+#[test]
+fn a_new_file_is_created_with_its_revision() {
+    let session = Session::new("create-apply", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![create("src/util/new.ts", "N\n")], &store);
+    assert!(!session.root.join("src/util").exists(), "nothing is created before the apply");
+    let (bridge, calls) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+    let applied = session.apply(&id, bridge, &store);
+    assert_eq!(applied.state, PlanState::Applied);
+    assert_eq!(applied.effects, [Effect::Disk]);
+    assert_eq!(
+        applied.changes,
+        [ChangeOutcome::Created { path: "src/util/new.ts".into(), revision: disk_revision(b"N\n") }]
+    );
+    assert_eq!(fs::read_to_string(session.root.join("src/util/new.ts")).unwrap(), "N\n");
+    assert_eq!(*calls.lock().unwrap(), ["create"], "a plan without edits never asks the editor");
+}
+
+/// Edits land first, all or none; a name taken after Rust's last check is
+/// answered by the manager, and the plan is partial.
+#[test]
+fn edits_land_before_new_files_and_a_name_taken_in_between_is_partial() {
+    let session = Session::new("create-partial", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![create("src/new.ts", "N\n"), change("src/a.ts")], &store);
+    let (bridge, calls) = frontend(&session, Duration::from_secs(5), all_applied, all_taken);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Partial);
+    assert_eq!(result.effects, [Effect::Buffer]);
+    assert_eq!(
+        result.changes,
+        [
+            ChangeOutcome::Exists { path: "src/new.ts".into() },
+            ChangeOutcome::Applied { path: "src/a.ts".into(), revision: "b1-new-src/a.ts".into() },
+        ]
+    );
+    assert_eq!(*calls.lock().unwrap(), ["apply", "create"]);
+    assert_eq!(session.apply(&id, bridge, &store), result, "never retried");
+    assert_eq!(calls.lock().unwrap().len(), 2);
+}
+
+/// A name taken between the proposal and the apply: nothing lands.
+#[test]
+fn a_name_taken_after_the_proposal_means_nothing_lands() {
+    let session = Session::new("create-taken", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts"), create("src/new.ts", "N\n")], &store);
+    fs::write(session.root.join("src/new.ts"), "MINE").unwrap();
+    let (bridge, calls) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Conflict);
+    assert!(result.effects.is_empty());
+    assert_eq!(
+        result.changes,
+        [ChangeOutcome::Ready { path: "src/a.ts".into() }, ChangeOutcome::Exists { path: "src/new.ts".into() }]
+    );
+    assert!(calls.lock().unwrap().is_empty(), "neither owner was asked");
+    assert_eq!(fs::read_to_string(session.root.join("src/new.ts")).unwrap(), "MINE");
+}
+
+/// Edits that no longer apply: the new files are not created either.
+#[test]
+fn edits_in_conflict_leave_new_files_uncreated() {
+    let session = Session::new("create-after-conflict", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts"), create("src/new.ts", "N\n")], &store);
+    let (bridge, calls) = frontend(&session, Duration::from_secs(5), nothing_applied, create_for_real);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Conflict);
+    assert_eq!(result.changes[1], ChangeOutcome::Ready { path: "src/new.ts".into() });
+    assert_eq!(*calls.lock().unwrap(), ["apply"]);
+    assert!(!session.root.join("src/new.ts").exists());
+}
+
+/// The manager got the request and never answered: files may exist. The
+/// edits that are known stay reported; the plan is never retried.
+#[test]
+fn a_create_answer_lost_after_delivery_needs_review() {
+    let session = Session::new("create-lost", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts"), create("src/new.ts", "N\n")], &store);
+    let (bridge, calls) = frontend(&session, Duration::from_millis(40), all_applied, never);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::NeedsReview);
+    assert_eq!(result.changes, [ChangeOutcome::Applied { path: "src/a.ts".into(), revision: "b1-new-src/a.ts".into() }]);
+    assert_eq!(result.effects, [Effect::Buffer], "the edits that landed are still reported");
+    assert_eq!(session.apply(&id, bridge, &store).state, PlanState::NeedsReview);
+    assert_eq!(calls.lock().unwrap().len(), 2, "never retried");
+}
+
+/// The request never reached the manager: no file was created.
+#[test]
+fn a_create_that_never_reached_the_manager_failed() {
+    let session = Session::new("create-undelivered", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![create("src/new.ts", "N\n")], &store);
+    let unreachable: &'static Bridge = Box::leak(Box::new(Bridge::new(Duration::from_secs(5))));
+    let result = session.apply(&id, unreachable, &store);
+    assert_eq!(result.state, PlanState::Failed);
+    assert_eq!(result.changes, [ChangeOutcome::Failed { path: "src/new.ts".into() }]);
+    assert!(!session.root.join("src/new.ts").exists());
+}
+
+/// Creating files may take five times the bridge's usual wait; edits may not.
+#[test]
+fn creating_files_may_take_longer_than_the_usual_wait() {
+    fn slow_create(files: &[Value]) -> Option<Value> {
+        std::thread::sleep(Duration::from_millis(250));
+        create_for_real(files)
+    }
+    fn slow_apply(paths: &[String]) -> Option<Value> {
+        std::thread::sleep(Duration::from_millis(250));
+        all_applied(paths)
+    }
+    let session = Session::new("create-slow", ready);
+    let store = Mutex::new(PlanStore::default());
+    let created = session.plan(vec![create("src/new.ts", "N\n")], &store);
+    let (bridge, _) = frontend(&session, Duration::from_millis(100), slow_apply, slow_create);
+    assert_eq!(session.apply(&created, bridge, &store).state, PlanState::Applied, "within five times 100 ms");
+    let edited = session.plan(vec![change("src/a.ts")], &store);
+    assert_eq!(session.apply(&edited, bridge, &store).state, PlanState::NeedsReview, "edits wait 100 ms");
+}
+
+/// A folder swapped for a link after the proposal, pointing into a withheld
+/// folder inside the project: the create must never write through it
+/// (withheld paths are never written; adversarial check, W3b).
+#[test]
+fn a_folder_swapped_for_a_link_after_the_proposal_is_never_written_through() {
+    let session = Session::new("create-swap", ready);
+    fs::create_dir_all(session.root.join(".git")).unwrap();
+    fs::create_dir_all(session.root.join("sub")).unwrap();
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![create("sub/new.ts", "N\n")], &store);
+    fs::rename(session.root.join("sub"), session.root.join("sub-old")).unwrap();
+    if !make_dir_link(&session.root.join("sub"), &session.root.join(".git")) {
+        eprintln!("skipping: cannot create a directory link here");
+        return;
+    }
+    let (bridge, calls) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+    let result = session.apply(&id, bridge, &store);
+    let wrote_through = session.root.join(".git/new.ts").exists();
+    remove_dir_link(&session.root.join("sub"));
+    assert!(!wrote_through, "the new file was written into the withheld .git folder: {result:?}");
+    assert_eq!(result.state, PlanState::Conflict);
+    assert_eq!(result.changes, [ChangeOutcome::Denied { path: "sub/new.ts".into() }]);
+    assert!(calls.lock().unwrap().is_empty(), "the manager was never asked");
+}
+
+/// A new file named through a folder link is withheld at the proposal: a
+/// link can lead anywhere, so it is never written through.
+#[test]
+fn a_new_file_through_a_folder_link_is_denied() {
+    let session = Session::new("create-link", ready);
+    if !make_dir_link(&session.root.join("lnk"), &session.root.join("src")) {
+        eprintln!("skipping: cannot create a directory link here");
+        return;
+    }
+    let store = Mutex::new(PlanStore::default());
+    let result = session.prepare(ChangesPrepareRequest { changes: vec![create("lnk/new.ts", "")] }, &store);
+    remove_dir_link(&session.root.join("lnk"));
+    assert_eq!(result.unwrap().changes, [ChangeCheck::Denied { path: "lnk/new.ts".into() }]);
+    assert!(!session.root.join("src/new.ts").exists());
+}
+
+/// On a case-insensitive volume another spelling of a withheld file is that
+/// file: denied, never `exists`.
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn another_spelling_of_a_withheld_file_is_denied() {
+    let session = Session::new("create-case", ready);
+    let store = Mutex::new(PlanStore::default());
+    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(".ENV", "")] }, &store).unwrap();
+    assert_eq!(result.changes, [ChangeCheck::Denied { path: ".ENV".into() }]);
+}
+
+/// An answer about other files than the ones asked: what the manager did is
+/// unknown, so the plan needs review and is never retried.
+#[test]
+fn a_create_answer_about_other_files_needs_review() {
+    fn elsewhere(_: &[Value]) -> Option<Value> {
+        Some(json!({ "kind": "result", "result": { "files": [{ "outcome": "created", "path": "src/other.ts" }] } }))
+    }
+    let session = Session::new("create-elsewhere", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![create("src/new.ts", "N\n")], &store);
+    let (bridge, _) = frontend(&session, Duration::from_secs(5), all_applied, elsewhere);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::NeedsReview);
+    assert!(result.changes.is_empty() && result.effects.is_empty());
 }

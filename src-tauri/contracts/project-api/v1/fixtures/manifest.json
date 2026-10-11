@@ -559,6 +559,20 @@
       "note": "Several documents, ordered edits, and an edit that deletes (empty newText)."
     },
     {
+      "file": "changes_prepare.request.create.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "accept",
+      "note": "A new file in a folder that does not exist yet, and an edit that imports it."
+    },
+    {
+      "file": "changes_prepare.request.create-empty.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "accept",
+      "note": "A new file may be empty."
+    },
+    {
       "file": "changes_prepare.request.no-changes.json",
       "operation": "litria_changes_prepare",
       "message": "request",
@@ -603,7 +617,7 @@
       "operation": "litria_changes_prepare",
       "message": "request",
       "expect": "reject",
-      "note": "text.edit is the only kind of change.",
+      "note": "text.edit and file.create are the only kinds of change.",
       "errorCode": "invalidParams"
     },
     {
@@ -632,11 +646,32 @@
       "errorCode": "invalidParams"
     },
     {
+      "file": "changes_prepare.request.create-with-revision.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "A new file has no revision to be proposed against."
+    },
+    {
+      "file": "changes_prepare.request.create-without-text.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "A new file carries its whole text (empty is allowed, missing is not)."
+    },
+    {
+      "file": "changes_prepare.request.edit-with-text.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "An edit never carries a whole text: that would replace the file."
+    },
+    {
       "file": "changes_apply.result.json",
       "operation": "litria_changes_apply",
       "message": "result",
       "expect": "accept",
-      "note": "An applied plan: each document with its new revision, in the editor (effect: buffer), exactly as Rust emits it (asserted in fixtures.rs)."
+      "note": "An applied plan: each document with its new revision, in the editor, and the new file with its revision on disk (effects: buffer, disk), exactly as Rust emits it (asserted in fixtures.rs)."
     },
     {
       "file": "changes_apply.result.unknown-state.json",
@@ -651,7 +686,14 @@
       "operation": "litria_changes_apply",
       "message": "result",
       "expect": "accept",
-      "note": "A plan awaiting review: no effect and no changes (both omitted)."
+      "note": "A plan awaiting review: no effects and no changes (both omitted)."
+    },
+    {
+      "file": "changes_apply.result.partial.json",
+      "operation": "litria_changes_apply",
+      "message": "result",
+      "expect": "accept",
+      "note": "Only some changes landed: the edit is in the editor (effects: buffer) and the new file was not created because something had its name. Each change says what happened."
     },
     {
       "file": "changes_apply.request.minimal.json",

@@ -18,50 +18,72 @@
     "changes"
   ],
   "$defs": {
-    "ChangeKind": {
-      "description": "The kind of change. Only `text.edit` exists; file creation joins later.",
+    "ProposedChange": {
+      "description": "One proposed change, by `kind`. Paths are project-relative with forward\nslashes; a path the API cannot accept is answered as `invalidPath`, not as\na request error.",
       "oneOf": [
         {
           "description": "Exact-text replacement in the editor's copy of a document (its buffer;\nnot saved to disk).",
-          "type": "string",
-          "const": "text.edit"
-        }
-      ]
-    },
-    "ProposedChange": {
-      "type": "object",
-      "properties": {
-        "edits": {
-          "description": "Applied in order; each `oldText` must occur exactly once in the text as\nthe earlier edits leave it.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TextEdit"
+          "type": "object",
+          "properties": {
+            "edits": {
+              "description": "Applied in order; each `oldText` must occur exactly once in the text\nas the earlier edits leave it.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TextEdit"
+              },
+              "maxItems": 64,
+              "minItems": 1
+            },
+            "expectedRevision": {
+              "description": "The revision `litria_files_read` reported for this document. The\nchange is ready only while the editor still holds exactly that text.",
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "const": "text.edit"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
           },
-          "maxItems": 64,
-          "minItems": 1
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path",
+            "expectedRevision",
+            "edits"
+          ]
         },
-        "expectedRevision": {
-          "description": "The revision `litria_files_read` reported for this document. The change\nis ready only while the editor still holds exactly that text.",
-          "type": "string",
-          "maxLength": 128,
-          "minLength": 1
-        },
-        "kind": {
-          "$ref": "#/$defs/ChangeKind"
-        },
-        "path": {
-          "description": "Project-relative path with forward slashes. A path the API cannot\naccept is answered as `invalidPath`, not as a request error.",
-          "type": "string",
-          "maxLength": 1024,
-          "minLength": 1
+        {
+          "description": "A new file on disk holding `text`, created only if nothing has its name\n(never an overwrite), and shown on the canvas. Missing folders are\ncreated.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "file.create"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            },
+            "text": {
+              "description": "The whole file; may be empty.",
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path",
+            "text"
+          ]
         }
-      },
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "path",
-        "expectedRevision",
-        "edits"
       ]
     },
     "TextEdit": {

@@ -131,6 +131,23 @@
           ]
         },
         {
+          "description": "A new file's name is taken on disk (by a file, a folder or a link): a\ncreate never replaces anything. Choose another name, or edit the file.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "exists"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
           "description": "The disclosure policy withholds the path; it is never written.",
           "type": "object",
           "properties": {
@@ -185,9 +202,14 @@
           "const": "applying"
         },
         {
-          "description": "Applied to the editor: the documents hold the changes, unsaved.",
+          "description": "Every change landed: edits in the editor (unsaved), new files on disk.",
           "type": "string",
           "const": "applied"
+        },
+        {
+          "description": "Some changes landed and some did not; each change's outcome says which.\nNever retried: propose the rest again.",
+          "type": "string",
+          "const": "partial"
         },
         {
           "description": "A person rejected it. Nothing was applied.",

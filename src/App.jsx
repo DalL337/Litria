@@ -496,6 +496,9 @@ function App() {
   // discovery-in-flight signal) are created below this call; the bridge reads
   // them through this ref at request time (populated after those hooks run).
   const graphOwnersRef = useRef({});
+  // Likewise the write manager and createPieceFromFile, for an agent's new
+  // files (`files.create`, Project API build plan W3b).
+  const fileOwnersRef = useRef({});
   useProjectApiBridge({
     projectInstance,
     sessionReadyFor,
@@ -504,7 +507,8 @@ function App() {
     selectedGroupId,
     groups,
     languageSupportDomain,
-    graphOwnersRef
+    graphOwnersRef,
+    fileOwnersRef
   });
 
   useTerminalLifecycle({
@@ -796,6 +800,7 @@ function App() {
     piecesById, piecesByFilename, pieces, groups, groupByPieceId,
     updateTabFilename, closeTab, bumpScaffoldRefresh, projectInstance,
   });
+  fileOwnersRef.current = { fsManager, createPieceFromFile };
 
   // Demotion (owner-ratified 2026-07-18, wire-arc E): remove selected pieces
   // from the canvas without touching their files. Reversal = re-placement

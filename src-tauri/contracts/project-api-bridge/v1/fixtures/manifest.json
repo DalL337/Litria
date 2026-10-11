@@ -455,6 +455,56 @@
       "message": "reply",
       "expect": "reject",
       "note": "A reply answers at least one change."
+    },
+    {
+      "file": "files.create.request.json",
+      "operation": "files.create",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits (asserted in fixtures.rs): two new files, one in a folder that does not exist yet, one empty.",
+      "sample": "createFiles"
+    },
+    {
+      "file": "files.create.reply.json",
+      "operation": "files.create",
+      "message": "reply",
+      "expect": "accept",
+      "note": "What the JavaScript bridge answers to files.create.request.json when notes.md already exists: the first file created, the second never replaced."
+    },
+    {
+      "file": "files.create.reply.every-outcome.json",
+      "operation": "files.create",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Every outcome: created, exists, failed."
+    },
+    {
+      "file": "files.create.reply.workspace-changed.json",
+      "operation": "files.create",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Refused before any file was created: the workspace changed."
+    },
+    {
+      "file": "files.create.reply.unknown-outcome.json",
+      "operation": "files.create",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An unfamiliar outcome is rejected: a create never replaces anything."
+    },
+    {
+      "file": "files.create.reply.no-files.json",
+      "operation": "files.create",
+      "message": "reply",
+      "expect": "reject",
+      "note": "A reply answers at least one file."
+    },
+    {
+      "file": "files.create.reply.unknown-field.json",
+      "operation": "files.create",
+      "message": "reply",
+      "expect": "reject",
+      "note": "Unknown fields are rejected: the manager never sends file text back."
     }
   ]
 }

@@ -417,18 +417,20 @@ pub(crate) mod samples {
                 ChangeCheck::NotInSession { path: "src/closed.ts".into() },
                 ChangeCheck::Denied { path: ".env".into() },
                 ChangeCheck::InvalidPath { path: "../outside.ts".into() },
+                ChangeCheck::Exists { path: "src/index.ts".into() },
             ],
         }
     }
 
-    /// An applied plan: every document's new revision, in the editor (unsaved).
+    /// An applied plan: every document's new revision, in the editor (unsaved),
+    /// and the new file's revision as created on disk.
     pub(crate) fn changes_apply_result() -> super::changes_apply::ChangesApplyResult {
         use super::changes_apply::{ChangeOutcome, ChangesApplyResult, Effect};
         use super::changes_prepare::PlanState;
         ChangesApplyResult {
             plan_id: "plan-e810c8cf2fc667011ff17e280098bdb6".into(),
             state: PlanState::Applied,
-            effect: Some(Effect::Buffer),
+            effects: vec![Effect::Buffer, Effect::Disk],
             changes: vec![
                 ChangeOutcome::Applied {
                     path: "src/auth.ts".into(),
@@ -437,6 +439,10 @@ pub(crate) mod samples {
                 ChangeOutcome::Applied {
                     path: "src/session.ts".into(),
                     revision: "b1-0983cd5a83f4775828da1580184f0f92".into(),
+                },
+                ChangeOutcome::Created {
+                    path: "src/util/format.ts".into(),
+                    revision: "d1-43fc694b464e7896c039039bd204030e".into(),
                 },
             ],
         }

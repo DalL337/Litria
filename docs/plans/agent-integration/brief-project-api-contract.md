@@ -598,7 +598,7 @@ The write contract is written after the reads land. Today's inspection found the
   1. After a rename, the model URI and the LSP tab maps keep the old filename (`monacoWorkspace.js` re-acquire path).
   2. A programmatic edit to an open model that is not attached to a pane is not mirrored into `workingCode`. The pane's sync effect would undo it on the next activation (inferred from code, not reproduced).
 - **Edits are exact-text replacements** (`oldText` → `newText`, where `oldText` must match exactly once), not line and column ranges. This avoids column-unit disagreements (code points, UTF-16, bytes) and is the form agent runtimes already use.
-- **Disk writes need native conditional operations.** Create-if-absent, and replace-if-the-disk-revision-matches, are the remainder of R2. Saves overwrite unconditionally today, and there is no watcher.
+- **Disk writes need native conditional operations.** Create-if-absent, and replace-if-the-disk-revision-matches, are the remainder of R2. Saves overwrite unconditionally today, and there is no watcher. *(2026-10-11, build plan W3. Create-if-absent was built in W3a (PR #132). Agents' new files (`file.create`) came in W3b: created after the plan's edits, each only if nothing has its name, with an outcome per change and a `partial` plan state. Replace-if-the-disk-revision-matches is deferred: under the owner's rulings, agents never overwrite a file on disk.)*
 - **Plans and operations follow R5:** one operation identity per plan, a durable claim to execution, and per-effect receipts. An approval surface is an owner-facing UI and needs its own design.
 
 ## 14. Alternatives considered

@@ -52,6 +52,10 @@ const transport = serializeAttachments({
  *   The graph owners (SyntaxDomain, the off-canvas pending-edge set, the
  *   discovery-in-flight signal). A ref because they are created after this hook
  *   in App.jsx; the port reads `.current` at request time.
+ * @param {{current: {fsManager?: object, createPieceFromFile?: (path: string) => Promise<object|null>}}} [owners.fileOwnersRef]
+ *   The filesystem write manager and the canvas's createPieceFromFile, for an
+ *   agent's new files (`files.create`, build plan W3b). A ref for the same
+ *   reason.
  */
 export function useProjectApiBridge({
   projectInstance,
@@ -61,10 +65,12 @@ export function useProjectApiBridge({
   selectedGroupId,
   groups,
   languageSupportDomain,
-  graphOwnersRef
+  graphOwnersRef,
+  fileOwnersRef
 }) {
   const { tabsById, openTabIds, activeTabId, checkBufferEdit, applyBufferEdit } = useEditorSession();
   const fallbackGraphRef = useRef({});
+  const fallbackFilesRef = useRef({});
   const ownersRef = useRef(null);
   ownersRef.current = {
     session: { tabsById, openTabIds },
@@ -73,7 +79,8 @@ export function useProjectApiBridge({
     activeTabId,
     workspace: { selectedIds, piecesById, selectedGroupId, groups },
     languageSupportDomain,
-    graph: graphOwnersRef ?? fallbackGraphRef
+    graph: graphOwnersRef ?? fallbackGraphRef,
+    files: fileOwnersRef ?? fallbackFilesRef
   };
   const bridgeRef = useRef(null);
 
@@ -91,6 +98,19 @@ export function useProjectApiBridge({
         checkBufferEdit: (request) => ownersRef.current.checkBufferEdit(request),
         // An approved plan, applied through W1's compare-and-apply (W2b).
         applyBufferEdit: (request) => ownersRef.current.applyBufferEdit(request),
+        // An approved plan's new files (W3b), taken once per request so the
+        // whole batch goes to that request's project: the manager's
+        // create-if-absent, the session's names, the canvas.
+        fileOwners: () => {
+          const { files, session } = ownersRef.current;
+          const { fsManager, createPieceFromFile } = files.current ?? {};
+          const held = getSessionDocumentsByPath(session);
+          return {
+            createFile: fsManager ? (path, text) => fsManager.createFile(path, text) : null,
+            holds: (path) => held.has(path),
+            showOnCanvas: createPieceFromFile ? (path) => createPieceFromFile(path) : null
+          };
+        },
         graph: () => {
           const { workspace, graph } = ownersRef.current;
           const owners = graph.current ?? {};

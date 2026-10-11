@@ -1,13 +1,22 @@
-//! Agent-proposed changes (Project API build plan W2; contract brief §13).
-//! W2a: proposing — `litria_changes_prepare`. W2b: applying —
-//! `litria_changes_apply` — and the review seam.
+//! Agent-proposed changes (Project API build plan W2, W3b; contract brief
+//! §13). W2a: proposing — `litria_changes_prepare`. W2b: applying —
+//! `litria_changes_apply` — and the review seam. W3b: new files.
 //!
-//! A proposal is checked against the editor's latest text (the bridge's
-//! `editor.checkChanges`, W1's planning). Only when every change is ready does
-//! it become a plan: immutable (its canonical changes and their hash), bound
-//! to the requester and the workspace epoch, and expiring ten minutes after
+//! A proposal's edits are checked against the editor's latest text (the
+//! bridge's `editor.checkChanges`, W1's planning), its new files' names
+//! against the disk, after the disclosure policy (so a withheld path answers
+//! `denied`, never `exists`). Only when every change is ready does it become
+//! a plan: immutable (its canonical changes and their hash), bound to the
+//! requester and the workspace epoch, and expiring ten minutes after
 //! preparation if it is not applied. Plans live in memory (durable operations
 //! are W4).
+//!
+//! Applying runs in a fixed order: every new file's name is checked again
+//! (one taken means nothing lands); the edits apply all or none; then the
+//! files are created through the frontend's filesystem write manager
+//! (`files.create`), each only if nothing has its name, and shown on the
+//! canvas. A disk change and a buffer change never happen together, so a
+//! plan can end `partial`; every change reports its own outcome.
 //!
 //! Who must agree (owner rulings, 2026-10-11): the agent's own approval is
 //! enough — its client already asked the person, and Litria never stacks a
@@ -20,7 +29,9 @@
 //! sure of is recorded as `needsReview` and never retried (R5).
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -28,18 +39,20 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use super::bridge::{self, Bridge, CallFailure};
-use super::reader::{identity, Identity};
+use super::reader::{disk_revision, identity, Identity};
 use super::workspace;
 use crate::contracts::boundary::invalid;
 use crate::contracts::context::{CallContext, Principal};
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::changes_apply::{ChangeOutcome, ChangesApplyRequest, ChangesApplyResult, Effect};
 use crate::contracts::project_api::changes_prepare::{
-    ChangeCheck, ChangesPrepareRequest, ChangesPrepareResult, PlanState, PreparedPlan, PLAN_ID_LENGTH, PLAN_TTL_SECONDS,
+    ChangeCheck, ChangesPrepareRequest, ChangesPrepareResult, PlanState, PreparedPlan, ProposedChange, PLAN_ID_LENGTH,
+    PLAN_TTL_SECONDS,
 };
 use crate::contracts::project_api_bridge::editor::{
     ApplyChangesOp, ApplyEntry, ChangeToCheck, CheckChangesOp, CheckChangesRequest, CheckedChange, EditToCheck,
 };
+use crate::contracts::project_api_bridge::files::{CreateFilesOp, CreateFilesRequest, CreatedFile, FileToCreate};
 use crate::db;
 
 /// Plans one requester may have waiting (prepared or pending review) at once.
@@ -82,36 +95,47 @@ fn prepare(
     now: Instant,
 ) -> Result<ChangesPrepareResult, ContractError> {
     // Paths first, exactly as reads judge them: a denied or invalid path never
-    // reaches the editor and is never written.
-    let mut checks: Vec<Option<ChangeCheck>> = vec![None; request.changes.len()];
+    // reaches the editor, is never written, and is never checked for
+    // existence (so `exists` reveals nothing the policy withholds).
+    let count = request.changes.len();
+    let mut checks: Vec<Option<ChangeCheck>> = vec![None; count];
+    let mut planned: Vec<Option<PlannedChange>> = vec![None; count];
     let mut to_check: Vec<(usize, ChangeToCheck)> = Vec::new();
     let mut documents = HashSet::new();
     for (index, change) in request.changes.iter().enumerate() {
-        let path = change.path.clone();
-        match identity(root, &change.path) {
+        let path = change.path().to_string();
+        match identity(root, change.path()) {
             Identity::InvalidPath => checks[index] = Some(ChangeCheck::InvalidPath { path }),
             Identity::Denied => checks[index] = Some(ChangeCheck::Denied { path }),
             Identity::Key(key) => {
-                // Two spellings of one document would make one plan edit it
-                // twice against one revision.
+                // Two spellings of one document would make one plan change it
+                // twice.
                 if !documents.insert(key.clone()) {
                     return Err(invalid(format!("changes: entry {index} names a document an earlier entry names")));
                 }
-                to_check.push((
-                    index,
-                    ChangeToCheck {
-                        path: key,
-                        expected_revision: change.expected_revision.clone(),
-                        edits: change
-                            .edits
-                            .iter()
-                            .map(|edit| EditToCheck {
-                                old_text: edit.old_text.clone(),
-                                new_text: edit.new_text.clone(),
-                            })
-                            .collect(),
-                    },
-                ));
+                match change {
+                    ProposedChange::TextEdit { expected_revision, edits, .. } => to_check.push((
+                        index,
+                        ChangeToCheck {
+                            path: key,
+                            expected_revision: expected_revision.clone(),
+                            edits: edits
+                                .iter()
+                                .map(|edit| EditToCheck {
+                                    old_text: edit.old_text.clone(),
+                                    new_text: edit.new_text.clone(),
+                                })
+                                .collect(),
+                        },
+                    )),
+                    ProposedChange::FileCreate { .. } if name_is_taken(root, &key) => {
+                        checks[index] = Some(ChangeCheck::Exists { path });
+                    }
+                    ProposedChange::FileCreate { text, .. } => {
+                        checks[index] = Some(ChangeCheck::Ready { path });
+                        planned[index] = Some(PlannedChange::Create(FileToCreate { path: key, text: text.clone() }));
+                    }
+                }
             }
         }
     }
@@ -131,7 +155,7 @@ fn prepare(
             return Err(bridge::malformed());
         }
         for (checked, (index, _)) in reply.changes.into_iter().zip(&to_check) {
-            let path = request.changes[*index].path.clone();
+            let path = request.changes[*index].path().to_string();
             checks[*index] = Some(match checked {
                 CheckedChange::Ready { .. } => ChangeCheck::Ready { path },
                 CheckedChange::Conflict { revision, .. } => ChangeCheck::Conflict { path, revision },
@@ -146,7 +170,11 @@ fn prepare(
     if !changes.iter().all(ChangeCheck::is_ready) {
         return Ok(ChangesPrepareResult { plan: None, changes });
     }
-    let planned: Vec<ChangeToCheck> = to_check.into_iter().map(|(_, change)| change).collect();
+    for (index, change) in to_check {
+        planned[index] = Some(PlannedChange::Edit(change));
+    }
+    let planned: Vec<PlannedChange> =
+        planned.into_iter().map(|change| change.expect("every ready change was planned")).collect();
     let plan = store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -188,7 +216,7 @@ pub(crate) fn handle_apply_with(
         Ok(ChangesApplyResult {
             plan_id: request.plan_id.clone(),
             state,
-            effect: (state == PlanState::Applied).then_some(Effect::Buffer),
+            effects: effects_of(&changes),
             changes,
         })
     })
@@ -245,27 +273,180 @@ pub(crate) fn review_with(
     }
 }
 
-/// Apply a claimed plan through the editor and record the outcome. The store
-/// is not locked while the editor works.
-fn execute(plan_id: &str, changes: Vec<ChangeToCheck>, epoch: &str, bridge: &Bridge, store: &Mutex<PlanStore>) -> Reviewed {
-    let sent: Vec<String> = changes.iter().map(|change| change.path.clone()).collect();
-    let (state, outcomes) = match bridge.call_reporting::<ApplyChangesOp>(epoch, &CheckChangesRequest { changes }) {
-        Ok(result) if result.changes.iter().map(ApplyEntry::path).eq(sent.iter().map(String::as_str)) => {
-            let outcomes: Vec<ChangeOutcome> = result.changes.into_iter().map(outcome_of).collect();
-            (if result.applied { PlanState::Applied } else { PlanState::Conflict }, outcomes)
-        }
-        // An answer about other documents: the editor acted on something, but
-        // what is unknown.
-        Ok(_) => (PlanState::NeedsReview, Vec::new()),
-        // Never delivered, or refused before the editor acted: nothing applied.
-        Err(CallFailure { delivered: false, .. }) => (PlanState::Failed, Vec::new()),
-        Err(CallFailure { error, .. }) if error.code == ErrorCode::WorkspaceChanged => (PlanState::Failed, Vec::new()),
-        // Delivered, then lost (no answer in time, a broken answer): the
-        // editor may have applied it. Unknown — and never retried.
-        Err(_) => (PlanState::NeedsReview, Vec::new()),
-    };
+/// Apply a claimed plan and record the outcome. The store is not locked while
+/// the owners work.
+fn execute(plan_id: &str, changes: Vec<PlannedChange>, epoch: &str, bridge: &Bridge, store: &Mutex<PlanStore>) -> Reviewed {
+    let (state, outcomes) = carry_out(&changes, epoch, bridge);
     lock(store).finish(plan_id, state, outcomes.clone());
     Reviewed { state, changes: outcomes }
+}
+
+/// The plan's changes, in order: new files' names checked again, the edits
+/// all or none, then the new files. Each change's outcome is in plan order;
+/// one Litria cannot know is left out, and the plan is then `needsReview`.
+fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanState, Vec<ChangeOutcome>) {
+    let mut outcomes: Vec<Option<ChangeOutcome>> = vec![None; changes.len()];
+    let edits: Vec<(usize, &ChangeToCheck)> = changes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, change)| match change {
+            PlannedChange::Edit(edit) => Some((index, edit)),
+            PlannedChange::Create(_) => None,
+        })
+        .collect();
+    let creates: Vec<(usize, &FileToCreate)> = changes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, change)| match change {
+            PlannedChange::Create(file) => Some((index, file)),
+            PlannedChange::Edit(_) => None,
+        })
+        .collect();
+    let unknown = |outcomes: Vec<Option<ChangeOutcome>>| (PlanState::NeedsReview, outcomes.into_iter().flatten().collect());
+
+    // 1. Every new file, judged again as at the proposal — the policy, then
+    // the name: a folder swapped for a link since could otherwise lead the
+    // create into a withheld folder (W3b adversarial check, reproduced). One
+    // that is not free now means nothing lands.
+    if !creates.is_empty() {
+        let Some(root) = bound_root(epoch) else {
+            return (PlanState::Failed, Vec::new());
+        };
+        let blocked: Vec<(usize, ChangeOutcome)> = creates
+            .iter()
+            .filter_map(|(index, file)| {
+                let path = file.path.clone();
+                match identity(&root, &file.path) {
+                    Identity::Key(key) if !name_is_taken(&root, &key) => None,
+                    Identity::Key(_) => Some((*index, ChangeOutcome::Exists { path })),
+                    Identity::Denied | Identity::InvalidPath => Some((*index, ChangeOutcome::Denied { path })),
+                }
+            })
+            .collect();
+        if !blocked.is_empty() {
+            let outcomes = changes
+                .iter()
+                .enumerate()
+                .map(|(index, change)| match blocked.iter().find(|(blocked, _)| *blocked == index) {
+                    Some((_, outcome)) => outcome.clone(),
+                    None => ChangeOutcome::Ready { path: change.path().to_string() },
+                })
+                .collect();
+            return (PlanState::Conflict, outcomes);
+        }
+    }
+
+    // 2. The edits, all or none.
+    if !edits.is_empty() {
+        let request = CheckChangesRequest { changes: edits.iter().map(|(_, edit)| (*edit).clone()).collect() };
+        match bridge.call_reporting::<ApplyChangesOp>(epoch, &request) {
+            Ok(result) if result.changes.iter().map(ApplyEntry::path).eq(edits.iter().map(|(_, edit)| edit.path.as_str())) => {
+                for ((index, _), entry) in edits.iter().zip(result.changes) {
+                    outcomes[*index] = Some(outcome_of(entry));
+                }
+                if !result.applied {
+                    // Nothing landed; the new files would have been created
+                    // after the edits.
+                    for (index, file) in &creates {
+                        outcomes[*index] = Some(ChangeOutcome::Ready { path: file.path.clone() });
+                    }
+                    return (PlanState::Conflict, outcomes.into_iter().flatten().collect());
+                }
+            }
+            // An answer about other documents: the editor acted on something,
+            // but what is unknown.
+            Ok(_) => return unknown(outcomes),
+            // Never delivered, or refused before the editor acted: nothing
+            // applied.
+            Err(CallFailure { delivered: false, .. }) => return (PlanState::Failed, Vec::new()),
+            Err(CallFailure { error, .. }) if error.code == ErrorCode::WorkspaceChanged => {
+                return (PlanState::Failed, Vec::new())
+            }
+            // Delivered, then lost (no answer in time, a broken answer): the
+            // editor may have applied it. Unknown — and never retried.
+            Err(_) => return unknown(outcomes),
+        }
+    }
+
+    // 3. The new files, through the filesystem write manager.
+    if !creates.is_empty() {
+        let request = CreateFilesRequest { files: creates.iter().map(|(_, file)| (*file).clone()).collect() };
+        match bridge.call_reporting::<CreateFilesOp>(epoch, &request) {
+            Ok(result) if result.files.iter().map(CreatedFile::path).eq(creates.iter().map(|(_, file)| file.path.as_str())) => {
+                for ((index, file), created) in creates.iter().zip(result.files) {
+                    outcomes[*index] = Some(match created {
+                        // Rust mints every disk revision (brief §4.5): the
+                        // file holds exactly the bytes of the plan's text.
+                        CreatedFile::Created { path } => {
+                            ChangeOutcome::Created { path, revision: disk_revision(file.text.as_bytes()) }
+                        }
+                        CreatedFile::Exists { path } => ChangeOutcome::Exists { path },
+                        CreatedFile::Failed { path } => ChangeOutcome::Failed { path },
+                    });
+                }
+            }
+            Ok(_) => return unknown(outcomes),
+            // Never delivered, or refused before the manager acted: no file
+            // was created.
+            Err(CallFailure { delivered: false, .. }) => fail_creates(&mut outcomes, &creates),
+            Err(CallFailure { error, .. }) if error.code == ErrorCode::WorkspaceChanged => {
+                fail_creates(&mut outcomes, &creates)
+            }
+            // Delivered, then lost: files may have been created.
+            Err(_) => return unknown(outcomes),
+        }
+    }
+
+    let outcomes: Vec<ChangeOutcome> = outcomes.into_iter().map(|outcome| outcome.expect("every change has an outcome")).collect();
+    let landed = outcomes.iter().filter(|outcome| landed(outcome)).count();
+    let state = if landed == outcomes.len() {
+        PlanState::Applied
+    } else if landed > 0 {
+        PlanState::Partial
+    } else if outcomes.iter().any(|outcome| matches!(outcome, ChangeOutcome::Exists { .. })) {
+        PlanState::Conflict
+    } else {
+        PlanState::Failed
+    };
+    (state, outcomes)
+}
+
+fn fail_creates(outcomes: &mut [Option<ChangeOutcome>], creates: &[(usize, &FileToCreate)]) {
+    for (index, file) in creates {
+        outcomes[*index] = Some(ChangeOutcome::Failed { path: file.path.clone() });
+    }
+}
+
+fn landed(outcome: &ChangeOutcome) -> bool {
+    matches!(outcome, ChangeOutcome::Applied { .. } | ChangeOutcome::Created { .. })
+}
+
+/// Where the changes that landed went: `buffer` for edits, then `disk` for
+/// new files.
+fn effects_of(outcomes: &[ChangeOutcome]) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if outcomes.iter().any(|outcome| matches!(outcome, ChangeOutcome::Applied { .. })) {
+        effects.push(Effect::Buffer);
+    }
+    if outcomes.iter().any(|outcome| matches!(outcome, ChangeOutcome::Created { .. })) {
+        effects.push(Effect::Disk);
+    }
+    effects
+}
+
+/// Whether anything has a new file's name now: a file, a folder or a link
+/// (never followed). Anything but "not found" counts as taken, so a name
+/// that cannot be inspected is never created over.
+fn name_is_taken(root: &Path, path: &str) -> bool {
+    !matches!(fs::symlink_metadata(root.join(path)), Err(error) if error.kind() == ErrorKind::NotFound)
+}
+
+/// The project root bound to `epoch`, if it is still the open workspace.
+fn bound_root(epoch: &str) -> Option<PathBuf> {
+    match db::workspace_binding() {
+        Some((bound, Some(root))) if bound == epoch => Some(root),
+        _ => None,
+    }
 }
 
 fn outcome_of(entry: ApplyEntry) -> ChangeOutcome {
@@ -293,14 +474,31 @@ pub(crate) fn plans() -> &'static Mutex<PlanStore> {
     PLANS.get_or_init(|| Mutex::new(PlanStore::default()))
 }
 
+/// One change of a plan, as Litria carries it out: an edit for the editor,
+/// or a new file for the filesystem write manager.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub(crate) enum PlannedChange {
+    Edit(ChangeToCheck),
+    Create(FileToCreate),
+}
+
+impl PlannedChange {
+    pub(crate) fn path(&self) -> &str {
+        match self {
+            PlannedChange::Edit(edit) => &edit.path,
+            PlannedChange::Create(file) => &file.path,
+        }
+    }
+}
+
 /// One immutable plan and where it stands. `changes` hold canonical
-/// session paths.
+/// session paths (a new file's, as named).
 #[derive(Debug)]
 pub(crate) struct Plan {
     pub principal: Principal,
     pub epoch: String,
     pub hash: [u8; 32],
-    pub changes: Vec<ChangeToCheck>,
+    pub changes: Vec<PlannedChange>,
     pub prepared_at: Instant,
     /// `PendingReview` reads as `Expired` once its time is up.
     state: PlanState,
@@ -382,7 +580,7 @@ impl PlanStore {
         &mut self,
         principal: Principal,
         epoch: &str,
-        changes: Vec<ChangeToCheck>,
+        changes: Vec<PlannedChange>,
         now: Instant,
     ) -> Result<PreparedPlan, ContractError> {
         self.forget_old(now);
@@ -443,7 +641,7 @@ impl PlanStore {
         epoch: &str,
         now: Instant,
         claimant: Claimant,
-    ) -> Result<Vec<ChangeToCheck>, PlanState> {
+    ) -> Result<Vec<PlannedChange>, PlanState> {
         let Some(plan) = self.plans.get_mut(id).filter(|plan| plan.epoch == epoch) else {
             return Err(PlanState::Unknown);
         };
@@ -510,7 +708,7 @@ fn new_plan_id() -> String {
 }
 
 /// The plan's identity of content: its canonical changes, hashed.
-fn plan_hash(changes: &[ChangeToCheck]) -> [u8; 32] {
+fn plan_hash(changes: &[PlannedChange]) -> [u8; 32] {
     let encoded = serde_json::to_vec(changes).expect("planned changes serialize");
     Sha256::digest(encoded).into()
 }

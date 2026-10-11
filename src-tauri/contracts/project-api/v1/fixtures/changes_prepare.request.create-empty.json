@@ -1,0 +1,9 @@
+{
+  "changes": [
+    {
+      "kind": "file.create",
+      "path": "notes.md",
+      "text": ""
+    }
+  ]
+}

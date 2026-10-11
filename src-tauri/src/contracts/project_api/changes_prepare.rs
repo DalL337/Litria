@@ -1,9 +1,10 @@
-//! `litria_changes_prepare` (Project API build plan W2a; contract brief §13):
-//! propose exact-text edits to documents the editor holds. Nothing is applied
-//! here. Every change is checked against the current editor text; when all
-//! are ready they become one plan, which `litria_changes_apply` applies (W2b).
-//! The agent's own approval is enough: its client already asked the person
-//! (owner ruling, 2026-10-11). Litria's own review is off unless enabled.
+//! `litria_changes_prepare` (Project API build plan W2a, W3b; contract brief
+//! §13): propose exact-text edits to documents the editor holds, and new files.
+//! Nothing is applied here. Every edit is checked against the current editor
+//! text and every new file's name against the disk; when all are ready they
+//! become one plan, which `litria_changes_apply` applies (W2b). The agent's own
+//! approval is enough: its client already asked the person (owner ruling,
+//! 2026-10-11). Litria's own review is off unless enabled.
 
 #[cfg(test)]
 use schemars::JsonSchema;
@@ -20,6 +21,9 @@ pub(crate) const MAX_EDITS_PER_CHANGE: usize = 64;
 /// Characters in one `oldText` or `newText`. The 64 KiB request budget binds
 /// first; the bound keeps every string bounded in the schema too.
 pub(crate) const MAX_EDIT_TEXT_LENGTH: usize = 65_536;
+/// Characters in a created file's `text`; the request budget binds first here
+/// too (build plan W3b).
+pub(crate) const MAX_CREATE_TEXT_LENGTH: usize = 65_536;
 /// An unanswered plan expires this long after preparation (owner ruling,
 /// 2026-10-11).
 pub(crate) const PLAN_TTL_SECONDS: u32 = 600;
@@ -30,10 +34,12 @@ pub(crate) struct ChangesPrepareOp;
 
 impl Operation for ChangesPrepareOp {
     const NAME: &'static str = "litria_changes_prepare";
-    const DESCRIPTION: &'static str = "Propose exact-text edits to documents the editor holds; nothing is applied \
-         yet. Each edit replaces oldText, which must occur exactly once in the document, with newText; \
-         expectedRevision is the revision litria_files_read reported. When every change is ready they become one \
-         plan: apply it with litria_changes_apply. A plan that is not applied expires after ten minutes.";
+    const DESCRIPTION: &'static str = "Propose changes; nothing is applied yet. A text.edit changes a document the \
+         editor holds: each edit replaces oldText, which must occur exactly once in the document, with newText, and \
+         expectedRevision is the revision litria_files_read reported. A file.create makes a new file holding text, \
+         only if nothing has its name (never an overwrite), and shows it on the canvas. When every change is ready \
+         they become one plan: apply it with litria_changes_apply. A plan that is not applied expires after ten \
+         minutes.";
     const CAPABILITY: &'static str = "project.changes.propose";
     const READ_ONLY: bool = false;
     type Request = ChangesPrepareRequest;
@@ -50,33 +56,47 @@ pub(crate) struct ChangesPrepareRequest {
     pub changes: Vec<ProposedChange>,
 }
 
+/// One proposed change, by `kind`. Paths are project-relative with forward
+/// slashes; a path the API cannot accept is answered as `invalidPath`, not as
+/// a request error.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(test, derive(JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProposedChange {
-    pub kind: ChangeKind,
-    /// Project-relative path with forward slashes. A path the API cannot
-    /// accept is answered as `invalidPath`, not as a request error.
-    #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
-    pub path: String,
-    /// The revision `litria_files_read` reported for this document. The change
-    /// is ready only while the editor still holds exactly that text.
-    #[cfg_attr(test, schemars(length(min = 1, max = MAX_REVISION_LENGTH)))]
-    pub expected_revision: String,
-    /// Applied in order; each `oldText` must occur exactly once in the text as
-    /// the earlier edits leave it.
-    #[cfg_attr(test, schemars(length(min = 1, max = MAX_EDITS_PER_CHANGE)))]
-    pub edits: Vec<TextEdit>,
-}
-
-/// The kind of change. Only `text.edit` exists; file creation joins later.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[cfg_attr(test, derive(JsonSchema))]
-pub(crate) enum ChangeKind {
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub(crate) enum ProposedChange {
     /// Exact-text replacement in the editor's copy of a document (its buffer;
     /// not saved to disk).
     #[serde(rename = "text.edit")]
-    TextEdit,
+    TextEdit {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        /// The revision `litria_files_read` reported for this document. The
+        /// change is ready only while the editor still holds exactly that text.
+        #[cfg_attr(test, schemars(length(min = 1, max = MAX_REVISION_LENGTH)))]
+        expected_revision: String,
+        /// Applied in order; each `oldText` must occur exactly once in the text
+        /// as the earlier edits leave it.
+        #[cfg_attr(test, schemars(length(min = 1, max = MAX_EDITS_PER_CHANGE)))]
+        edits: Vec<TextEdit>,
+    },
+    /// A new file on disk holding `text`, created only if nothing has its name
+    /// (never an overwrite), and shown on the canvas. Missing folders are
+    /// created.
+    #[serde(rename = "file.create")]
+    FileCreate {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        /// The whole file; may be empty.
+        #[cfg_attr(test, schemars(length(max = MAX_CREATE_TEXT_LENGTH)))]
+        text: String,
+    },
+}
+
+impl ProposedChange {
+    pub(crate) fn path(&self) -> &str {
+        match self {
+            ProposedChange::TextEdit { path, .. } | ProposedChange::FileCreate { path, .. } => path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -98,31 +118,40 @@ impl Validate for ChangesPrepareRequest {
             return Err(invalid(format!("changes: expected 1 to {MAX_CHANGES} entries, got {count}")));
         }
         for (index, change) in self.changes.iter().enumerate() {
-            let length = schema_length(&change.path);
+            let length = schema_length(change.path());
             if !(MIN_PATH_LENGTH..=MAX_PATH_LENGTH).contains(&length) {
                 return Err(invalid(format!(
                     "path: each must be {MIN_PATH_LENGTH} to {MAX_PATH_LENGTH} characters, got {length}"
                 )));
             }
-            if !(1..=MAX_REVISION_LENGTH).contains(&schema_length(&change.expected_revision)) {
-                return Err(invalid(format!("expectedRevision: 1 to {MAX_REVISION_LENGTH} characters")));
-            }
-            let edits = change.edits.len();
-            if !(1..=MAX_EDITS_PER_CHANGE).contains(&edits) {
-                return Err(invalid(format!(
-                    "edits: expected 1 to {MAX_EDITS_PER_CHANGE} entries, got {edits}"
-                )));
-            }
-            for edit in &change.edits {
-                if !(1..=MAX_EDIT_TEXT_LENGTH).contains(&schema_length(&edit.old_text)) {
-                    return Err(invalid(format!("oldText: 1 to {MAX_EDIT_TEXT_LENGTH} characters")));
+            match change {
+                ProposedChange::TextEdit { expected_revision, edits, .. } => {
+                    if !(1..=MAX_REVISION_LENGTH).contains(&schema_length(expected_revision)) {
+                        return Err(invalid(format!("expectedRevision: 1 to {MAX_REVISION_LENGTH} characters")));
+                    }
+                    let count = edits.len();
+                    if !(1..=MAX_EDITS_PER_CHANGE).contains(&count) {
+                        return Err(invalid(format!(
+                            "edits: expected 1 to {MAX_EDITS_PER_CHANGE} entries, got {count}"
+                        )));
+                    }
+                    for edit in edits {
+                        if !(1..=MAX_EDIT_TEXT_LENGTH).contains(&schema_length(&edit.old_text)) {
+                            return Err(invalid(format!("oldText: 1 to {MAX_EDIT_TEXT_LENGTH} characters")));
+                        }
+                        if schema_length(&edit.new_text) > MAX_EDIT_TEXT_LENGTH {
+                            return Err(invalid(format!("newText: at most {MAX_EDIT_TEXT_LENGTH} characters")));
+                        }
+                    }
                 }
-                if schema_length(&edit.new_text) > MAX_EDIT_TEXT_LENGTH {
-                    return Err(invalid(format!("newText: at most {MAX_EDIT_TEXT_LENGTH} characters")));
+                ProposedChange::FileCreate { text, .. } => {
+                    if schema_length(text) > MAX_CREATE_TEXT_LENGTH {
+                        return Err(invalid(format!("text: at most {MAX_CREATE_TEXT_LENGTH} characters")));
+                    }
                 }
             }
             // The message names the position, never the caller's path.
-            if self.changes[..index].iter().any(|earlier| earlier.path == change.path) {
+            if self.changes[..index].iter().any(|earlier| earlier.path() == change.path()) {
                 return Err(invalid(format!("changes: entry {index} names a document an earlier entry names")));
             }
         }
@@ -167,8 +196,11 @@ pub(crate) enum PlanState {
     PendingReview,
     /// Approved, and being applied now.
     Applying,
-    /// Applied to the editor: the documents hold the changes, unsaved.
+    /// Every change landed: edits in the editor (unsaved), new files on disk.
     Applied,
+    /// Some changes landed and some did not; each change's outcome says which.
+    /// Never retried: propose the rest again.
+    Partial,
     /// A person rejected it. Nothing was applied.
     Rejected,
     /// Nobody answered within ten minutes. Nothing was applied.
@@ -202,6 +234,9 @@ pub(crate) enum ChangeCheck {
     /// The editor does not hold this document; open it first (disk edits come
     /// later).
     NotInSession { path: String },
+    /// A new file's name is taken on disk (by a file, a folder or a link): a
+    /// create never replaces anything. Choose another name, or edit the file.
+    Exists { path: String },
     /// The disclosure policy withholds the path; it is never written.
     Denied { path: String },
     /// Not a path the API accepts (contract brief §6).

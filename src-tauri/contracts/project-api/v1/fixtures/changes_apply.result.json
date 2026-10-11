@@ -9,9 +9,17 @@
       "outcome": "applied",
       "path": "src/session.ts",
       "revision": "b1-0983cd5a83f4775828da1580184f0f92"
+    },
+    {
+      "outcome": "created",
+      "path": "src/util/format.ts",
+      "revision": "d1-43fc694b464e7896c039039bd204030e"
     }
   ],
-  "effect": "buffer",
+  "effects": [
+    "buffer",
+    "disk"
+  ],
   "planId": "plan-e810c8cf2fc667011ff17e280098bdb6",
   "state": "applied"
 }

@@ -1,0 +1,12 @@
+{
+  "kind": "result",
+  "result": {
+    "files": [
+      {
+        "outcome": "created",
+        "path": "src/a.ts",
+        "text": "export {}"
+      }
+    ]
+  }
+}

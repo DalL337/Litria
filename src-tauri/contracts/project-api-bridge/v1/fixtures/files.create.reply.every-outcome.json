@@ -1,0 +1,19 @@
+{
+  "kind": "result",
+  "result": {
+    "files": [
+      {
+        "outcome": "created",
+        "path": "src/a.ts"
+      },
+      {
+        "outcome": "exists",
+        "path": "src/b.ts"
+      },
+      {
+        "outcome": "failed",
+        "path": "src/c.ts"
+      }
+    ]
+  }
+}

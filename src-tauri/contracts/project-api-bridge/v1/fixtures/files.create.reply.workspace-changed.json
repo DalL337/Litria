@@ -1,0 +1,5 @@
+{
+  "kind": "error",
+  "code": "workspaceChanged",
+  "message": "the workspace changed before any file was created"
+}

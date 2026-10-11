@@ -1,0 +1,20 @@
+{
+  "changes": [
+    {
+      "kind": "file.create",
+      "path": "src/util/format.ts",
+      "text": "export const format = String;\n"
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/auth.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "import { login } from './login';",
+          "newText": "import { login } from './login';\nimport { format } from './util/format';"
+        }
+      ]
+    }
+  ]
+}
