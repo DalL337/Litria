@@ -189,7 +189,7 @@ are adopted when present.
   and Monaco's TypeScript worker for open TypeScript/JavaScript models. The
   generic LSP `textDocument/definition` bridge is deferred
 - Bundled runtimes in the installer: Node.js 24.14.0, pyright 1.1.414,
-  typescript-language-server 6.0.0, TypeScript 6.0.3
+  typescript-language-server 6.0.2, TypeScript 6.0.3
 - **Managed server directory** (ADR-005): rust-analyzer and clangd install
   from a registry of pinned downloads with per-event consent pills, checksum
   verification, install progress with Cancel (a cancel installs nothing), and
@@ -528,7 +528,7 @@ The capability layer itself is held together by enforced architecture:
 | Tauri commands | 84 in release builds, 89 in debug builds (registry of record: `src-tauri/src/lib.rs`) |
 | Workspace DB schema | v4 (3 migrations) |
 | Theme tokens | 47 (v3) |
-| Bundled runtimes | Node 24.14.0, pyright 1.1.414, ts-ls 6.0.0, ts 6.0.3 |
+| Bundled runtimes | Node 24.14.0, pyright 1.1.414, ts-ls 6.0.2, ts 6.0.3 |
 
 Guards are the enforcement of record; when this document and a guard
 disagree, the guard wins and this document gets fixed.
