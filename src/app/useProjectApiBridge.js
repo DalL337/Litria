@@ -16,7 +16,7 @@ import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEditorSession } from '../editor/EditorSessionContext';
-import { getActiveSessionDocument, getSessionDocumentsByPath } from '../editor/editorSessionDomain.js';
+import { getActiveSessionDocument, getSessionDocumentsByPath, sessionPathOf } from '../editor/editorSessionDomain.js';
 import { getWorkspaceEpoch } from '../project/dbStorage.js';
 import { buildCapabilityMatrix } from './languageCapabilities.js';
 import { isDiscoverableFilename } from './useDiscoveryLifecycle.js';
@@ -30,6 +30,8 @@ import {
 } from './projectApiBridge.js';
 
 const ENABLED = import.meta.env?.DEV === true;
+
+const normalizeSessionPath = (path) => sessionPathOf({ filename: typeof path === 'string' ? path : '' });
 
 // One transport per realm, so attach/detach from every bridge instance (a
 // StrictMode remount, a hot reload) reach Rust strictly in order.
@@ -68,7 +70,8 @@ export function useProjectApiBridge({
   graphOwnersRef,
   fileOwnersRef
 }) {
-  const { tabsById, openTabIds, activeTabId, checkBufferEdit, applyBufferEdit } = useEditorSession();
+  const { tabsById, openTabIds, activeTabId, checkBufferEdit, applyBufferEdit, heldRevision, openInBackground } =
+    useEditorSession();
   const fallbackGraphRef = useRef({});
   const fallbackFilesRef = useRef({});
   const ownersRef = useRef(null);
@@ -76,6 +79,8 @@ export function useProjectApiBridge({
     session: { tabsById, openTabIds },
     checkBufferEdit,
     applyBufferEdit,
+    heldRevision,
+    openInBackground,
     activeTabId,
     workspace: { selectedIds, piecesById, selectedGroupId, groups },
     languageSupportDomain,
@@ -98,6 +103,17 @@ export function useProjectApiBridge({
         checkBufferEdit: (request) => ownersRef.current.checkBufferEdit(request),
         // An approved plan, applied through W1's compare-and-apply (W2b).
         applyBufferEdit: (request) => ownersRef.current.applyBufferEdit(request),
+        // Documents an agent's edits open (W3c): what the session holds, the
+        // file's canvas piece, and a background tab.
+        heldRevision: (path) => ownersRef.current.heldRevision(path),
+        pieceFor: (path) => {
+          const wanted = normalizeSessionPath(path);
+          for (const piece of ownersRef.current.workspace.piecesById?.values?.() ?? []) {
+            if (normalizeSessionPath(piece?.filename) === wanted) return piece;
+          }
+          return null;
+        },
+        openInBackground: (piece, texts) => ownersRef.current.openInBackground(piece, texts),
         // An approved plan's new files (W3b), taken once per request so the
         // whole batch goes to that request's project: the manager's
         // create-if-absent, the session's names, the canvas.

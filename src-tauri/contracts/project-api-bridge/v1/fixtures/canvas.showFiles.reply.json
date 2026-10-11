@@ -1,0 +1,15 @@
+{
+  "kind": "result",
+  "result": {
+    "files": [
+      {
+        "outcome": "shown",
+        "path": "src/closed.ts"
+      },
+      {
+        "outcome": "shown",
+        "path": "README.md"
+      }
+    ]
+  }
+}

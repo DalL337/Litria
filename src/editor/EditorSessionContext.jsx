@@ -15,7 +15,9 @@ import {
   MAX_OPEN_TABS,
   MAIN_PANE,
   SIDE_PANE,
-  planBufferEdit
+  planBufferEdit,
+  getSessionDocumentsByPath,
+  sessionPathOf
 } from './editorSessionDomain.js';
 import { saveOneTab, saveTabsFromBatch, saveTabsSequentially } from './saveCoordinator.js';
 import { applyBufferText } from './engineCapabilities.js';
@@ -134,6 +136,37 @@ export function EditorSessionProvider({ children }) {
     (request) => planBufferEdit(latestRef.current, request, bufferRevision),
     []
   );
+
+  /**
+   * An agent's edit to a file that was not open (Project API build plan W3c;
+   * owner ruling: a background tab): the file's piece joins the session with
+   * `code` (the disk text the edit was planned on) as its saved baseline and
+   * `text` as its unsaved text, in a tab beside the open ones. The active
+   * tab, the focused pane and the drawer stay as they are. Only if the session
+   * does not hold the file with text of its own (open, or unsaved): then the
+   * answer is `conflict` with the revision it holds. Discard reverts the
+   * edit; the tab has no editor model to undo into until it is shown.
+   */
+  /**
+   * The revision of the text the session holds for `path` with text of its
+   * own — open, or unsaved — or null (build plan W3c: such a document is the
+   * user's, and an agent's disk edit must not replace it). Latest state.
+   */
+  const heldRevision = useCallback((path) => {
+    const held = getSessionDocumentsByPath(latestRef.current).get(sessionPathOf({ filename: path }));
+    return held && held.state !== 'closedClean' ? bufferRevision(held.text) : null;
+  }, []);
+
+  const openInBackground = useCallback((piece, { code, text }) => {
+    const held = getSessionDocumentsByPath(latestRef.current).get(sessionPathOf(piece));
+    if (held && held.state !== 'closedClean') {
+      return { outcome: 'conflict', revision: bufferRevision(held.text) };
+    }
+    dispatch({ type: 'OPEN_IN_BACKGROUND', piece, code, workingCode: text });
+    const tab = latestRef.current.tabsById[piece.id];
+    persistenceRef.current?.onWorkingCodeChange?.(tab, tab.workingCode);
+    return { outcome: 'applied', revision: bufferRevision(tab.workingCode) };
+  }, [dispatch]);
 
   const closeTab = useCallback((tabId) => {
     dispatch({ type: 'CLOSE_TAB', tabId });
@@ -290,6 +323,8 @@ export function EditorSessionProvider({ children }) {
     updateWorkingCode,
     applyBufferEdit,
     checkBufferEdit,
+    heldRevision,
+    openInBackground,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,
@@ -324,6 +359,8 @@ export function EditorSessionProvider({ children }) {
     updateWorkingCode,
     applyBufferEdit,
     checkBufferEdit,
+    heldRevision,
+    openInBackground,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,

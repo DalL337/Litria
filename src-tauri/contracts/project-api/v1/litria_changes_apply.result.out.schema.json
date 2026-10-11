@@ -33,7 +33,7 @@
       "description": "One change of a plan that ran. A reader that meets an unfamiliar\n`outcome` must not assume anything changed.",
       "oneOf": [
         {
-          "description": "Changed; the document's revision now.",
+          "description": "Changed in the editor, unsaved; the document's revision now. A document\nthat was not open was opened beside the open tabs.",
           "type": "object",
           "properties": {
             "outcome": {
@@ -138,12 +138,29 @@
           ]
         },
         {
-          "description": "The editor no longer holds the document.",
+          "description": "Neither the editor nor the disk has the document now.",
           "type": "object",
           "properties": {
             "outcome": {
               "type": "string",
               "const": "notInSession"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "The document could not be opened into the editor (its canvas piece could\nnot be made). Nothing was applied.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "unavailable"
             },
             "path": {
               "type": "string"

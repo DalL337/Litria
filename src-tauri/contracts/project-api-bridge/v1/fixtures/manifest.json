@@ -406,6 +406,14 @@
       "sample": "applyChanges"
     },
     {
+      "file": "editor.applyChanges.request.with-open.json",
+      "operation": "editor.applyChanges",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits (asserted in fixtures.rs) for a plan with an edit and a document to open from disk (W3c): the opens follow the changes.",
+      "sample": "applyChangesWithOpen"
+    },
+    {
       "file": "editor.applyChanges.reply.json",
       "operation": "editor.applyChanges",
       "message": "reply",
@@ -418,6 +426,20 @@
       "message": "reply",
       "expect": "accept",
       "note": "Every change applied, each with its new revision."
+    },
+    {
+      "file": "editor.applyChanges.reply.with-open.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "accept",
+      "note": "What the JavaScript bridge answers to editor.applyChanges.request.with-open.json: the edit applied, then the document opened beside the open tabs, each with its new revision."
+    },
+    {
+      "file": "editor.applyChanges.reply.unavailable.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "accept",
+      "note": "A document to open has no canvas piece: nothing applied."
     },
     {
       "file": "editor.applyChanges.reply.applied-with-a-conflict.json",
@@ -505,6 +527,49 @@
       "message": "reply",
       "expect": "reject",
       "note": "Unknown fields are rejected: the manager never sends file text back."
+    },
+    {
+      "file": "canvas.showFiles.request.json",
+      "operation": "canvas.showFiles",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits (asserted in fixtures.rs): two existing files an agent's edits open.",
+      "sample": "showFiles"
+    },
+    {
+      "file": "canvas.showFiles.reply.json",
+      "operation": "canvas.showFiles",
+      "message": "reply",
+      "expect": "accept",
+      "note": "What the JavaScript bridge answers to canvas.showFiles.request.json: README.md already had a piece, src/closed.ts got one."
+    },
+    {
+      "file": "canvas.showFiles.reply.every-outcome.json",
+      "operation": "canvas.showFiles",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Every outcome: shown, failed."
+    },
+    {
+      "file": "canvas.showFiles.reply.unknown-outcome.json",
+      "operation": "canvas.showFiles",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An unfamiliar outcome is rejected: showing a file never opens or edits it."
+    },
+    {
+      "file": "canvas.showFiles.reply.no-files.json",
+      "operation": "canvas.showFiles",
+      "message": "reply",
+      "expect": "reject",
+      "note": "A reply answers at least one file."
+    },
+    {
+      "file": "canvas.showFiles.reply.unknown-field.json",
+      "operation": "canvas.showFiles",
+      "message": "reply",
+      "expect": "reject",
+      "note": "Unknown fields are rejected: piece ids stay in the frontend."
     }
   ]
 }

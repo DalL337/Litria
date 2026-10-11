@@ -308,6 +308,7 @@ mod outbound {
         assert!(prepare.get("plan").is_none(), "an absent plan is omitted");
         assert_eq!(prepare["changes"][1]["outcome"], "conflict");
         assert_eq!(prepare["changes"][7]["outcome"], "exists");
+        assert_eq!(prepare["changes"][8]["outcome"], "notEditable");
         let diagnostics = assert_conforms("diagnostics list", &samples::diagnostics_list_result());
         assert_eq!(diagnostics["files"][0]["state"], "available");
         assert_eq!(diagnostics["files"][0]["freshnessReason"], "producerOmitsVersion");
@@ -466,6 +467,8 @@ mod bridge_family {
                 Some("checkChanges") => samples::check_changes_event(),
                 Some("applyChanges") => samples::apply_changes_event(),
                 Some("createFiles") => samples::create_files_event(),
+                Some("showFiles") => samples::show_files_event(),
+                Some("applyChangesWithOpen") => samples::apply_changes_with_open_event(),
                 other => panic!("{file}: unknown sample {other:?}"),
             };
             assert_eq!(sample.op, fixture.operation, "{file}: the sample is for another operation");

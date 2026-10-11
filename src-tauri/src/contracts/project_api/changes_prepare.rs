@@ -24,6 +24,8 @@ pub(crate) const MAX_EDIT_TEXT_LENGTH: usize = 65_536;
 /// Characters in a created file's `text`; the request budget binds first here
 /// too (build plan W3b).
 pub(crate) const MAX_CREATE_TEXT_LENGTH: usize = 65_536;
+/// Largest file an edit opens from disk into the editor (build plan W3c).
+pub(crate) const MAX_OPEN_FILE_BYTES: usize = 1024 * 1024;
 /// An unanswered plan expires this long after preparation (owner ruling,
 /// 2026-10-11).
 pub(crate) const PLAN_TTL_SECONDS: u32 = 600;
@@ -34,12 +36,13 @@ pub(crate) struct ChangesPrepareOp;
 
 impl Operation for ChangesPrepareOp {
     const NAME: &'static str = "litria_changes_prepare";
-    const DESCRIPTION: &'static str = "Propose changes; nothing is applied yet. A text.edit changes a document the \
-         editor holds: each edit replaces oldText, which must occur exactly once in the document, with newText, and \
-         expectedRevision is the revision litria_files_read reported. A file.create makes a new file holding text, \
-         only if nothing has its name (never an overwrite), and shows it on the canvas. When every change is ready \
-         they become one plan: apply it with litria_changes_apply. A plan that is not applied expires after ten \
-         minutes.";
+    const DESCRIPTION: &'static str = "Propose changes; nothing is applied yet. A text.edit changes a document: each \
+         edit replaces oldText, which must occur exactly once in the document, with newText, and expectedRevision is \
+         the revision litria_files_read reported. A document the editor does not hold is opened into it with the \
+         edit, unsaved, beside the open tabs; nothing is written to disk until the user saves. A file.create makes a \
+         new file holding text, only if nothing has its name (never an overwrite), and shows it on the canvas. When \
+         every change is ready they become one plan: apply it with litria_changes_apply. A plan that is not applied \
+         expires after ten minutes.";
     const CAPABILITY: &'static str = "project.changes.propose";
     const READ_ONLY: bool = false;
     type Request = ChangesPrepareRequest;
@@ -64,7 +67,8 @@ pub(crate) struct ChangesPrepareRequest {
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub(crate) enum ProposedChange {
     /// Exact-text replacement in the editor's copy of a document (its buffer;
-    /// not saved to disk).
+    /// not saved to disk). A document the editor does not hold is opened into
+    /// it from disk, with the edit (build plan W3c).
     #[serde(rename = "text.edit")]
     TextEdit {
         #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
@@ -231,9 +235,11 @@ pub(crate) enum ChangeCheck {
     NoMatch { path: String, edit: u32 },
     /// The edit at this index matches more than once.
     Ambiguous { path: String, edit: u32 },
-    /// The editor does not hold this document; open it first (disk edits come
-    /// later).
+    /// Neither the editor nor the disk has this document.
     NotInSession { path: String },
+    /// The document is not one Litria opens as text: binary, not a regular
+    /// file, unreadable, or over 1 MiB.
+    NotEditable { path: String },
     /// A new file's name is taken on disk (by a file, a folder or a link): a
     /// create never replaces anything. Choose another name, or edit the file.
     Exists { path: String },

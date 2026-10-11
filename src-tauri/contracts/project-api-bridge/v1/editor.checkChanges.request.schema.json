@@ -9,6 +9,13 @@
       "items": {
         "$ref": "#/$defs/ChangeToCheck"
       }
+    },
+    "opens": {
+      "description": "`editor.applyChanges` only (build plan W3c): documents the session does\nnot hold, to open with their edits. Answered after `changes`, in order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FileToOpen"
+      }
     }
   },
   "required": [
@@ -51,6 +58,29 @@
       "required": [
         "oldText",
         "newText"
+      ]
+    },
+    "FileToOpen": {
+      "description": "A document opened into the session with an edit (build plan W3c): Rust read\n`baseText` from disk at the agent's revision and applied the edits to make\n`text`.",
+      "type": "object",
+      "properties": {
+        "baseText": {
+          "description": "The saved baseline: the disk text the edits were planned on.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The project-relative path; its canvas piece already exists\n(`canvas.showFiles`).",
+          "type": "string"
+        },
+        "text": {
+          "description": "The unsaved text: the baseline with the edits applied.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "baseText",
+        "text"
       ]
     }
   }

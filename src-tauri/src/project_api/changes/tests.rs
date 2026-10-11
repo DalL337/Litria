@@ -968,3 +968,223 @@ fn a_create_answer_about_other_files_needs_review() {
     assert_eq!(result.state, PlanState::NeedsReview);
     assert!(result.changes.is_empty() && result.effects.is_empty());
 }
+
+// --- W3c: edits to documents the editor does not hold ---------------------------
+
+fn edits(pairs: &[(&str, &str)]) -> Vec<EditToCheck> {
+    pairs.iter().map(|(old, new)| EditToCheck { old_text: (*old).into(), new_text: (*new).into() }).collect()
+}
+
+/// The disk planner is the editor's (`planBufferEdit`): in order, each
+/// `oldText` exactly once in the text the earlier edits leave, overlapping
+/// occurrences counting.
+#[test]
+fn disk_edits_plan_exactly_as_the_editor_plans() {
+    assert_eq!(plan_text_edits("let a = 1;\n", &edits(&[("1", "2")])).unwrap(), "let a = 2;\n");
+    assert_eq!(plan_text_edits("ab", &edits(&[("a", "x"), ("xb", "y")])).unwrap(), "y", "the second edit sees the first");
+    assert_eq!(plan_text_edits("x", &edits(&[("x", "")])).unwrap(), "", "a deletion");
+    assert_eq!(plan_text_edits("abc", &edits(&[("z", "y")])), Err(EditMiss::NoMatch(0)));
+    assert_eq!(plan_text_edits("a a", &edits(&[("a", "b")])), Err(EditMiss::Ambiguous(0)));
+    assert_eq!(plan_text_edits("aaa", &edits(&[("aa", "b")])), Err(EditMiss::Ambiguous(0)), "an overlap counts");
+    assert_eq!(plan_text_edits("ok", &edits(&[("o", "0"), ("k", "")])).unwrap(), "0");
+    assert_eq!(plan_text_edits("\u{e9}\u{e9}", &edits(&[("\u{e9}", "e")])), Err(EditMiss::Ambiguous(0)), "multibyte text");
+    assert_eq!(plan_text_edits("caf\u{e9}\n", &edits(&[("\u{e9}", "e")])).unwrap(), "cafe\n");
+    assert_eq!(plan_text_edits("a\r\nb", &edits(&[("a\r\nb", "c")])).unwrap(), "c", "line endings as read");
+}
+
+fn not_in_session(_: &str) -> Value {
+    json!({ "outcome": "notInSession" })
+}
+
+fn disk_edit(path: &str, revision: &str, pairs: &[(&str, &str)]) -> ProposedChange {
+    ProposedChange::TextEdit {
+        path: path.into(),
+        expected_revision: revision.into(),
+        edits: pairs.iter().map(|(old, new)| TextEdit { old_text: (*old).into(), new_text: (*new).into() }).collect(),
+    }
+}
+
+fn revision_of(text: &str) -> String {
+    disk_revision(text.as_bytes())
+}
+
+#[test]
+fn an_edit_the_editor_cannot_take_is_judged_against_the_disk() {
+    let session = Session::new("open-prepare", not_in_session);
+    fs::write(session.root.join("src/logo.png"), [0x89u8, 0x50, 0x4e, 0x47, 0, 0, 1]).unwrap();
+    fs::write(session.root.join("src/big.ts"), "x".repeat(MAX_OPEN_FILE_BYTES + 1)).unwrap();
+    let store = Mutex::new(PlanStore::default());
+    let a = revision_of("export const a = 1;\n");
+    let request = ChangesPrepareRequest {
+        changes: vec![
+            disk_edit("src/a.ts", "d1-stale", &[("1", "2")]),
+            disk_edit("src/b.ts", &revision_of("export const b = 2;\n"), &[("nothing", "x")]),
+            disk_edit("src/logo.png", "d1-x", &[("P", "Q")]),
+            disk_edit("src/big.ts", "d1-x", &[("x", "y")]),
+            disk_edit("src/gone.ts", "d1-x", &[("x", "y")]),
+        ],
+    };
+    let result = session.prepare(request, &store).unwrap();
+    assert!(result.plan.is_none());
+    assert_eq!(
+        result.changes,
+        [
+            ChangeCheck::Conflict { path: "src/a.ts".into(), revision: a.clone() },
+            ChangeCheck::NoMatch { path: "src/b.ts".into(), edit: 0 },
+            ChangeCheck::NotEditable { path: "src/logo.png".into() },
+            ChangeCheck::NotEditable { path: "src/big.ts".into() },
+            ChangeCheck::NotInSession { path: "src/gone.ts".into() },
+        ]
+    );
+
+    // At the revision the agent read: one plan, opened from disk when applied.
+    let plan = session
+        .prepare(ChangesPrepareRequest { changes: vec![disk_edit("src/a.ts", &a, &[("1", "2")])] }, &store)
+        .unwrap()
+        .plan
+        .expect("ready");
+    let stored = store.lock().unwrap();
+    let stored = stored.get(&plan.plan_id, Principal::Test, &session.epoch).unwrap();
+    assert_eq!(
+        stored.changes,
+        [PlannedChange::Open(OpenEdit { path: "src/a.ts".into(), base_revision: a, edits: edits(&[("1", "2")]) })]
+    );
+}
+
+/// A frontend for the opening path: `canvas.showFiles` answered by `show`,
+/// `editor.applyChanges` by `apply(request)`; the requests are recorded.
+fn opener(
+    session: &Session,
+    show: fn(&[Value]) -> Option<Value>,
+    apply: fn(&Value) -> Option<Value>,
+) -> (&'static Bridge, Arc<Mutex<Vec<(String, Value)>>>) {
+    let bridge: &'static Bridge = Box::leak(Box::new(Bridge::new(Duration::from_secs(5))));
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&asked);
+    answering(bridge, move |event: &BridgeRequestEvent| {
+        record.lock().unwrap().push((event.op.clone(), event.request.clone()));
+        let reply = match event.op.as_str() {
+            "canvas.showFiles" => show(event.request["paths"].as_array().unwrap()),
+            "editor.applyChanges" => apply(&event.request),
+            other => panic!("unexpected {other}"),
+        };
+        reply.map(|value| value.to_string())
+    });
+    bridge.attach(&session.epoch, Some(&session.epoch)).unwrap();
+    (bridge, asked)
+}
+
+fn all_shown(paths: &[Value]) -> Option<Value> {
+    let files: Vec<Value> = paths.iter().map(|path| json!({ "outcome": "shown", "path": path })).collect();
+    Some(json!({ "kind": "result", "result": { "files": files } }))
+}
+
+fn opened(request: &Value) -> Option<Value> {
+    let entries: Vec<Value> = request["opens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|open| json!({ "outcome": "applied", "path": open["path"], "revision": "b1-opened" }))
+        .collect();
+    Some(json!({ "kind": "result", "result": { "applied": true, "changes": entries } }))
+}
+
+#[test]
+fn applying_shows_the_file_then_opens_it_with_the_edit_and_writes_nothing() {
+    let session = Session::new("open-apply", not_in_session);
+    let store = Mutex::new(PlanStore::default());
+    let a = revision_of("export const a = 1;\n");
+    let id = session.plan(vec![disk_edit("src/a.ts", &a, &[("1", "2")])], &store);
+    let (bridge, asked) = opener(&session, all_shown, opened);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Applied);
+    assert_eq!(result.effects, [Effect::Buffer]);
+    assert_eq!(result.changes, [ChangeOutcome::Applied { path: "src/a.ts".into(), revision: "b1-opened".into() }]);
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.iter().map(|(op, _)| op.as_str()).collect::<Vec<_>>(), ["canvas.showFiles", "editor.applyChanges"]);
+    assert_eq!(asked[0].1, json!({ "paths": ["src/a.ts"] }));
+    assert_eq!(
+        asked[1].1,
+        json!({ "changes": [], "opens": [{ "path": "src/a.ts", "baseText": "export const a = 1;\n", "text": "export const a = 2;\n" }] })
+    );
+    assert_eq!(fs::read_to_string(session.root.join("src/a.ts")).unwrap(), "export const a = 1;\n", "nothing on disk");
+}
+
+#[test]
+fn a_file_changed_on_disk_after_the_proposal_opens_nothing() {
+    let session = Session::new("open-stale", not_in_session);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![disk_edit("src/a.ts", &revision_of("export const a = 1;\n"), &[("1", "2")])], &store);
+    fs::write(session.root.join("src/a.ts"), "export const a = 5;\n").unwrap();
+    let (bridge, asked) = opener(&session, all_shown, opened);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Conflict);
+    assert_eq!(
+        result.changes,
+        [ChangeOutcome::Conflict { path: "src/a.ts".into(), revision: revision_of("export const a = 5;\n") }]
+    );
+    assert!(asked.lock().unwrap().is_empty(), "neither owner was asked");
+}
+
+#[test]
+fn a_file_the_canvas_cannot_show_is_unavailable_and_nothing_applies() {
+    fn none_shown(paths: &[Value]) -> Option<Value> {
+        let files: Vec<Value> = paths.iter().map(|path| json!({ "outcome": "failed", "path": path })).collect();
+        Some(json!({ "kind": "result", "result": { "files": files } }))
+    }
+    let session = Session::new("open-unshown", not_in_session);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![disk_edit("src/a.ts", &revision_of("export const a = 1;\n"), &[("1", "2")])], &store);
+    let (bridge, asked) = opener(&session, none_shown, opened);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Failed);
+    assert_eq!(result.changes, [ChangeOutcome::Unavailable { path: "src/a.ts".into() }]);
+    assert_eq!(asked.lock().unwrap().len(), 1, "the editor was never asked");
+}
+
+/// The user opened and typed in the file meanwhile: its tab holds text of its
+/// own, so nothing is applied.
+#[test]
+fn a_file_opened_meanwhile_is_a_conflict() {
+    fn typed(request: &Value) -> Option<Value> {
+        let entries: Vec<Value> = request["opens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|open| json!({ "outcome": "conflict", "path": open["path"], "revision": "b1-typed" }))
+            .collect();
+        Some(json!({ "kind": "result", "result": { "applied": false, "changes": entries } }))
+    }
+    let session = Session::new("open-typed", not_in_session);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![disk_edit("src/a.ts", &revision_of("export const a = 1;\n"), &[("1", "2")])], &store);
+    let (bridge, _) = opener(&session, all_shown, typed);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Conflict);
+    assert_eq!(result.changes, [ChangeOutcome::Conflict { path: "src/a.ts".into(), revision: "b1-typed".into() }]);
+}
+
+/// A folder swapped for a link into a withheld folder after the proposal: the
+/// apply's read goes through the reader's policy and refuses, so no withheld
+/// text ever reaches the editor (W3c adversarial check).
+#[test]
+fn a_folder_swapped_for_a_link_after_a_disk_edit_proposal_opens_nothing() {
+    let session = Session::new("open-swap", not_in_session);
+    fs::create_dir_all(session.root.join("sub")).unwrap();
+    fs::create_dir_all(session.root.join(".git")).unwrap();
+    fs::write(session.root.join("sub/x.ts"), "export const x = 1;\n").unwrap();
+    fs::write(session.root.join(".git/x.ts"), "export const x = 1;\n").unwrap();
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![disk_edit("sub/x.ts", &revision_of("export const x = 1;\n"), &[("1", "2")])], &store);
+    fs::rename(session.root.join("sub"), session.root.join("sub-old")).unwrap();
+    if !make_dir_link(&session.root.join("sub"), &session.root.join(".git")) {
+        eprintln!("skipping: cannot create a directory link here");
+        return;
+    }
+    let (bridge, asked) = opener(&session, all_shown, opened);
+    let result = session.apply(&id, bridge, &store);
+    remove_dir_link(&session.root.join("sub"));
+    assert_eq!(result.state, PlanState::Conflict, "{result:?}");
+    assert_eq!(result.changes, [ChangeOutcome::Denied { path: "sub/x.ts".into() }]);
+    assert!(asked.lock().unwrap().is_empty(), "the withheld text never reached the frontend");
+}

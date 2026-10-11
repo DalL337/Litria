@@ -1,0 +1,27 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "editor.applyChanges",
+  "request": {
+    "changes": [
+      {
+        "edits": [
+          {
+            "newText": "login(user, { remember: true })",
+            "oldText": "login(user)"
+          }
+        ],
+        "expectedRevision": "b1-e20f31222078c95a25a7ef6c0d20fcd8",
+        "path": "src/auth.ts"
+      }
+    ],
+    "opens": [
+      {
+        "baseText": "export const closed = 1;\n",
+        "path": "src/closed.ts",
+        "text": "export const closed = 2;\n"
+      }
+    ]
+  },
+  "requestId": "r1"
+}

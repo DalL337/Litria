@@ -18,6 +18,7 @@
 //! are the contract of record; the JavaScript side (`src/app/projectApiBridge.js`)
 //! is tested against the fixtures beside them.
 
+pub(crate) mod canvas;
 pub(crate) mod editor;
 pub(crate) mod files;
 pub(crate) mod languages;
@@ -149,6 +150,7 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
         entry::bridge_entry::<editor::CheckChangesOp>(),
         entry::bridge_entry::<editor::ApplyChangesOp>(),
         entry::bridge_entry::<files::CreateFilesOp>(),
+        entry::bridge_entry::<canvas::ShowFilesOp>(),
     ]
 }
 
@@ -223,6 +225,30 @@ pub(crate) mod samples {
         BridgeRequestEvent { op: ApplyChangesOp::NAME.into(), ..check }
     }
 
+    /// Two existing files an agent's edits open (build plan W3c).
+    pub(crate) fn show_files_event() -> BridgeRequestEvent {
+        use super::canvas::{ShowFilesOp, ShowFilesRequest};
+        event::<ShowFilesOp>(&ShowFilesRequest { paths: vec!["src/closed.ts".into(), "README.md".into()] })
+    }
+
+    /// The plan's edits with one document opened from disk (build plan W3c):
+    /// `src/closed.ts` is not in the session.
+    pub(crate) fn apply_changes_with_open_event() -> BridgeRequestEvent {
+        use super::editor::{ApplyChangesOp, ChangeToCheck, CheckChangesRequest, EditToCheck, FileToOpen};
+        event::<ApplyChangesOp>(&CheckChangesRequest {
+            changes: vec![ChangeToCheck {
+                path: "src/auth.ts".into(),
+                expected_revision: "b1-e20f31222078c95a25a7ef6c0d20fcd8".into(),
+                edits: vec![EditToCheck { old_text: "login(user)".into(), new_text: "login(user, { remember: true })".into() }],
+            }],
+            opens: vec![FileToOpen {
+                path: "src/closed.ts".into(),
+                base_text: "export const closed = 1;\n".into(),
+                text: "export const closed = 2;\n".into(),
+            }],
+        })
+    }
+
     /// Two new files: one in a folder that does not exist yet, one empty.
     pub(crate) fn create_files_event() -> BridgeRequestEvent {
         use super::files::{CreateFilesOp, CreateFilesRequest, FileToCreate};
@@ -256,6 +282,7 @@ pub(crate) mod samples {
                     edits: vec![edit("ttl = 60", "ttl = 600")],
                 },
             ],
+            opens: Vec::new(),
         })
     }
 }

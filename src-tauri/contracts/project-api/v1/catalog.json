@@ -50,7 +50,7 @@
     },
     {
       "capability": "project.changes.propose",
-      "description": "Propose changes; nothing is applied yet. A text.edit changes a document the editor holds: each edit replaces oldText, which must occur exactly once in the document, with newText, and expectedRevision is the revision litria_files_read reported. A file.create makes a new file holding text, only if nothing has its name (never an overwrite), and shows it on the canvas. When every change is ready they become one plan: apply it with litria_changes_apply. A plan that is not applied expires after ten minutes.",
+      "description": "Propose changes; nothing is applied yet. A text.edit changes a document: each edit replaces oldText, which must occur exactly once in the document, with newText, and expectedRevision is the revision litria_files_read reported. A document the editor does not hold is opened into it with the edit, unsaved, beside the open tabs; nothing is written to disk until the user saves. A file.create makes a new file holding text, only if nothing has its name (never an overwrite), and shows it on the canvas. When every change is ready they become one plan: apply it with litria_changes_apply. A plan that is not applied expires after ten minutes.",
       "name": "litria_changes_prepare",
       "readOnly": false,
       "request": "litria_changes_prepare.request.schema.json",
@@ -59,7 +59,7 @@
     },
     {
       "capability": "project.changes.apply",
-      "description": "Apply a plan from litria_changes_prepare. Its text edits apply all or none: every document must still be the revision it was proposed against, otherwise nothing is applied (state conflict; propose again). Applied edits are in the editor, unsaved (effect buffer), each with its new revision. New files are created after the edits, each only if nothing has its name (effect disk; outcome created with the file's revision, or exists); if only some changes land the state is partial and each change says what happened. A plan is applied at most once; asking again returns the same outcome. If Litria is set to have a person review agent edits, the plan waits for that decision (state pendingReview); ask again later.",
+      "description": "Apply a plan from litria_changes_prepare. Its text edits apply all or none: every document must still be the revision it was proposed against, otherwise nothing is applied (state conflict; propose again). Applied edits are in the editor, unsaved (effect buffer), each with its new revision; a document that was not open is opened beside the open tabs. New files are created after the edits, each only if nothing has its name (effect disk; outcome created with the file's revision, or exists); if only some changes land the state is partial and each change says what happened. A plan is applied at most once; asking again returns the same outcome. If Litria is set to have a person review agent edits, the plan waits for that decision (state pendingReview); ask again later.",
       "name": "litria_changes_apply",
       "readOnly": false,
       "request": "litria_changes_apply.request.schema.json",

@@ -1,0 +1,18 @@
+{
+  "kind": "result",
+  "result": {
+    "applied": true,
+    "changes": [
+      {
+        "outcome": "applied",
+        "path": "src/auth.ts",
+        "revision": "b1-67493f9f80f187c023c04437886c06fb"
+      },
+      {
+        "outcome": "applied",
+        "path": "src/closed.ts",
+        "revision": "b1-bd2857dc7da2439e5c996c771f28d0bd"
+      }
+    ]
+  }
+}

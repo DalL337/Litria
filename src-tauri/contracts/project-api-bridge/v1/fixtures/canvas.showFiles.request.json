@@ -1,0 +1,12 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "canvas.showFiles",
+  "request": {
+    "paths": [
+      "src/closed.ts",
+      "README.md"
+    ]
+  },
+  "requestId": "r1"
+}

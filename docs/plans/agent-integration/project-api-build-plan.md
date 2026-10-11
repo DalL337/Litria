@@ -42,7 +42,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The agent's own approval is enough; Litria's review is off by default (owner) |
-| W3 | Native conditional disk operations: create-if-absent, agent-created files, edits to files that are not open | P1, W2 | In progress: W3a create-if-absent (PR #132) and W3b agents' new files (see [W3 section](#w3-agent-files-on-disk), [W3a record](#w3a-record), [W3b record](#w3b-record)); W3c next. Replace-if-the-disk-revision-matches deferred: no consumer (owner rulings) |
+| W3 | Native conditional disk operations: create-if-absent, agent-created files, edits to files that are not open | P1, W2 | Done 2026-10-11: W3a create-if-absent (PR #132), W3b agents' new files (PR #133), W3c edits to files that are not open (see [W3 section](#w3-agent-files-on-disk), [W3a record](#w3a-record), [W3b record](#w3b-record), [W3c record](#w3c-record)). Replace-if-the-disk-revision-matches deferred: no consumer (owner rulings) |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
 
@@ -1578,12 +1578,16 @@ fault-injection proofs.
 
 **W3c: edits to files that are not open.**
 
-- A `text.edit` whose file is not in the session is checked against the disk
-  revision the agent read.
-- At apply it opens into the session with the edit applied: unsaved, dirty,
-  undoable.
-- The design is still open: whether the file gets a canvas piece and a tab,
-  and how a disk read fits the single-turn all-or-none apply.
+- **Owner ruling (2026-10-11): a background tab.** The file gets a canvas
+  piece and a tab beside the open ones, marked unsaved. The user's active
+  tab stays. With every tab slot taken, it is held unsaved without a tab.
+- A `text.edit` whose file the session does not hold with text of its own
+  (not open, and no unsaved text) is checked against the disk revision the
+  agent read, and planned on that text in Rust.
+- **At apply:** the file is read again, it is put on the canvas
+  (`canvas.showFiles`), and it opens with the edit in the same all-or-none
+  turn as the plan's other edits. Discard reverts the edit; nothing reaches
+  the disk until the user saves.
 
 ### Tests
 
@@ -1778,6 +1782,99 @@ disk after the agent read it.
 >   - Applying again returned the same outcome.
 >   - Two files at once: two pieces at different positions.
 >   - A name taken late: `conflict`, and the other file was kept.
+>   - No console errors.
+
+### W3c record
+
+> **Built 2026-10-11. W3 is complete.** An agent's edit to a file the editor
+> does not hold now opens that file as an unsaved edit. Under the owner's
+> ruling it opens in a background tab: the user's active tab stays, and
+> nothing reaches the disk until the user saves.
+>
+> **The rule:** the revision the agent read says what it edited.
+>
+> - A file the session holds with text of its own (open, or unsaved) keeps
+>   W2's buffer path.
+> - Any other file is a disk edit. That includes a closed entry with no
+>   unsaved text, because reads serve such entries from disk.
+> - **This fixed a W2 gap.** An edit to such a closed entry always
+>   conflicted: the agent's disk revision was compared with the entry's
+>   buffer revision, and re-reading gave the disk revision again.
+>
+> **Contract (v1 draft):**
+>
+> - Check `notEditable`: binary, not a regular file, unreadable, or over
+>   1 MiB.
+> - `notInSession` now means neither the editor nor the disk has the file.
+> - Outcome `unavailable`: the file's canvas piece could not be made.
+> - `editor.applyChanges` carries `opens` beside `changes`. They are omitted
+>   when empty, so W2's fixtures are unchanged.
+> - New bridge operation `canvas.showFiles`.
+>
+> **Service:**
+>
+> - **Prepare** reads the file through the P1 reader (policy, typed
+>   resolution, cap) and checks the agent's revision. Rust then plans the
+>   edits on that text with `plan_text_edits`, which mirrors the editor's
+>   planner: in order, each exactly once, overlaps counting. Ten cases were
+>   cross-checked against the JavaScript rule.
+> - **Apply:**
+>   1. Read the file again; nothing lands unless it is still the revision the
+>      edits were planned on.
+>   2. Put it on the canvas with `canvas.showFiles`.
+>   3. Open it in the same synchronous, all-or-none turn as the plan's other
+>      edits. The baseline is the disk text Rust read; the edit is unsaved.
+>
+> **Frontend:**
+>
+> - The session gains `OPEN_IN_BACKGROUND`:
+>   - a tab beside the open ones, without taking the active tab, the focused
+>     pane or the drawer;
+>   - never evicts a tab;
+>   - with every slot taken, the file is held unsaved without a tab.
+> - Also new: `heldRevision` and `openInBackground`.
+> - The bridge remembers the pieces `canvas.showFiles` made, because the apply
+>   can arrive before React has rendered them.
+>
+> **Adversarial check** (journal):
+>
+> - **A folder swapped for a link into `.git` between the proposal and the
+>   apply:** the re-read is `denied`, and no withheld text reaches the
+>   frontend. It inherits the P1 reader's protections, so this confirms them
+>   rather than reproducing a bug.
+> - **Also tested:**
+>   - the file changed on disk, before the proposal and before the apply;
+>   - the user opened and typed in it meanwhile;
+>   - every tab slot taken;
+>   - binary, oversized and missing files;
+>   - CRLF.
+> - **Residual:** the disk changing after the apply's read. The tab's baseline
+>   is then older than the disk, and a save overwrites the newer disk text.
+>   That is the existing rule that saves overwrite unconditionally (contract
+>   brief §13; there is no watcher).
+>
+> **Undo, honestly:** a background tab has no editor model until it is
+> shown, so Discard reverts the agent's edit, and Ctrl+Z does not.
+>
+> **Evidence:**
+>
+> - **Rust:** 8 new tests (7 in the changes suite, 1 in the real catalog).
+>   - `cargo test`: 697 passed, zero warnings.
+>   - `cargo check --release` is clean.
+> - **JavaScript:** 12 new tests (reducer, planner, bridge). `test:domains`:
+>   1567 passed. All seven guards pass, and the build passes.
+> - **Live pass** (`tauri dev`, throwaway project;
+>   `.research/2026-10-11-w3-live/w3c-live.mjs`):
+>   - **A closed file, read from disk, prepared and applied:**
+>     - it opened as a third tab while the user's tab stayed active;
+>     - it shows the edit, unsaved, with the disk unchanged;
+>     - it has a piece on the canvas;
+>     - reading it now comes from the editor, with the revision the apply
+>       reported.
+>   - Changed on disk before the proposal, or before the apply: `conflict`,
+>     and nothing opened.
+>   - Discard reverted an opened edit.
+>   - Save All wrote the edit; nothing reached the disk before it.
 >   - No console errors.
 
 ## W-track outline

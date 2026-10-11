@@ -124,8 +124,10 @@ fn owner(event: &BridgeRequestEvent) -> Option<String> {
                 .collect::<Vec<_>>()
         }),
         // Approved plans for src/auth.ts apply; anything else changed since.
+        // Documents to open (W3c) open beside it.
         "editor.applyChanges" => {
             let changes = paths("changes");
+            let opens = paths("opens");
             let held = changes.iter().all(|change| change["path"] == "src/auth.ts");
             json!({
                 "applied": held,
@@ -136,9 +138,21 @@ fn owner(event: &BridgeRequestEvent) -> Option<String> {
                     } else {
                         json!({ "outcome": "notInSession", "path": change["path"] })
                     })
+                    .chain(opens.iter().map(|open| if held {
+                        json!({ "outcome": "applied", "path": open["path"], "revision": "b1-opened" })
+                    } else {
+                        json!({ "outcome": "ready", "path": open["path"] })
+                    }))
                     .collect::<Vec<_>>()
             })
         }
+        // Every file it is asked to show gets a piece (W3c).
+        "canvas.showFiles" => json!({
+            "files": paths("paths")
+                .iter()
+                .map(|path| json!({ "outcome": "shown", "path": path }))
+                .collect::<Vec<_>>()
+        }),
         "languages.capabilities" => {
             let reply = committed_json_in(&bridge_dir().join(FIXTURES_DIR), "languages.capabilities.reply.json");
             return Some(reply.to_string());
@@ -312,9 +326,14 @@ fn a_ready_proposal_becomes_a_prepared_plan_through_the_real_catalog() {
     let again = tools_call(dispatcher, &context, &propose("src/auth.ts")).unwrap();
     assert_eq!(again["structuredContent"]["plan"]["planId"], plan["planId"], "the same proposal is the same plan");
 
+    // Not held by the editor: judged against the disk (W3c), where the agent's
+    // revision is stale.
     let not_ready = tools_call(dispatcher, &context, &propose("src/b.ts")).unwrap();
     assert!(not_ready["structuredContent"].get("plan").is_none());
-    assert_eq!(not_ready["structuredContent"]["changes"][0]["outcome"], "notInSession");
+    assert_eq!(not_ready["structuredContent"]["changes"][0]["outcome"], "conflict");
+    assert!(not_ready["structuredContent"]["changes"][0]["revision"].as_str().unwrap().starts_with("d1-"));
+    let missing = tools_call(dispatcher, &context, &propose("src/missing.ts")).unwrap();
+    assert_eq!(missing["structuredContent"]["changes"][0]["outcome"], "notInSession");
 
     let withheld = tools_call(dispatcher, &context, &propose(".env")).unwrap();
     assert_eq!(withheld["structuredContent"]["changes"][0]["outcome"], "denied");
@@ -431,4 +450,51 @@ fn new_files_through_the_real_catalog() {
     assert_eq!(conflict["changes"], json!([{ "outcome": "exists", "path": "src/late.ts" }]));
     assert!(conflict.get("effects").is_none());
     assert_eq!(fs::read_to_string(bound.root.join("src/late.ts")).unwrap(), "MINE");
+}
+
+/// An edit to a document the editor does not hold, through the real catalog
+/// (build plan W3c; owner ruling: it opens as an unsaved edit in a background
+/// tab). It is judged against the disk revision the agent read; applying it
+/// opens it with the edit, and nothing is written to disk.
+#[test]
+fn an_edit_to_a_closed_file_opens_it_through_the_real_catalog() {
+    let bound = Bound::new("open");
+    let dispatcher = crate::project_api::dispatcher();
+    let context = bound.context(Grant::of(dispatcher.capabilities()));
+    let list = tools_list();
+    let prepare_output = validator(&tool(&list, "litria_changes_prepare")["outputSchema"]);
+    let apply_output = validator(&tool(&list, "litria_changes_apply")["outputSchema"]);
+    let call = |name: &str, arguments: Value| {
+        let reply = tools_call(dispatcher, &context, &json!({ "name": name, "arguments": arguments })).unwrap();
+        reply["structuredContent"].clone()
+    };
+    let read = call("litria_files_read", json!({ "documents": [{ "path": "src/b.ts" }] }));
+    let revision = read["documents"][0]["revision"].as_str().unwrap().to_string();
+    assert!(revision.starts_with("d1-"), "{read}");
+    let edit = |old: &str, new: &str| json!({ "kind": "text.edit", "path": "src/b.ts", "expectedRevision": revision, "edits": [{ "oldText": old, "newText": new }] });
+
+    let missing = call("litria_changes_prepare", json!({ "changes": [edit("a + 2", "a + 3")] }));
+    assert_eq!(missing["changes"][0], json!({ "outcome": "noMatch", "path": "src/b.ts", "edit": 0 }));
+    let prepared = call("litria_changes_prepare", json!({ "changes": [edit("a + 1", "a + 2")] }));
+    assert!(prepare_output.is_valid(&prepared), "{prepared}");
+    let plan_id = prepared["plan"]["planId"].as_str().unwrap().to_string();
+
+    let applied = call("litria_changes_apply", json!({ "planId": plan_id }));
+    assert!(apply_output.is_valid(&applied), "{applied}");
+    assert_eq!(applied["state"], "applied", "{applied}");
+    assert_eq!(applied["effects"], json!(["buffer"]));
+    assert_eq!(applied["changes"], json!([{ "outcome": "applied", "path": "src/b.ts", "revision": "b1-opened" }]));
+    assert_eq!(
+        fs::read_to_string(bound.root.join("src/b.ts")).unwrap(),
+        "import { a } from './a';\nexport const b = a + 1;\n",
+        "nothing reaches the disk until the user saves"
+    );
+
+    // The file changed on disk after the proposal: nothing is opened.
+    let stale = call("litria_changes_prepare", json!({ "changes": [edit("export const b", "export const bb")] }));
+    put(&bound.root, "src/b.ts", "export const b = 9;\n");
+    let conflict = call("litria_changes_apply", json!({ "planId": stale["plan"]["planId"] }));
+    assert!(apply_output.is_valid(&conflict), "{conflict}");
+    assert_eq!(conflict["state"], "conflict");
+    assert!(conflict["changes"][0]["revision"].as_str().unwrap().starts_with("d1-"));
 }
