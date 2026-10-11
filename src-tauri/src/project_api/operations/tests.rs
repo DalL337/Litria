@@ -13,7 +13,7 @@ fn applied(path: &str) -> ChangeOutcome {
 }
 
 fn record(epoch: &str, state: PlanState, changes: Vec<RecordedChange>) -> Record {
-    Record { id: "plan-1".into(), principal: Principal::Test, epoch: epoch.into(), state, changes }
+    Record { id: "plan-1".into(), principal: Principal::Test, run: run_id().into(), epoch: epoch.into(), state, changes, interrupted: false }
 }
 
 #[test]
@@ -165,4 +165,106 @@ fn a_write_to_a_project_that_is_not_open_fails() {
     let written = record("ws-nowhere", PlanState::Applying, vec![]);
     let _serial = db::serial_guard();
     assert!(save("ws-nowhere", &written, now()).is_err());
+}
+
+// --- W4b: settling interrupted operations when a project opens -------------------
+
+fn created(path: &str) -> ChangeOutcome {
+    ChangeOutcome::Created { path: path.into(), revision: format!("d1-{path}") }
+}
+
+fn stranded(id: &str, epoch: &str, changes: Vec<RecordedChange>) -> Record {
+    Record { id: id.into(), principal: Principal::Test, run: run_id().into(), epoch: epoch.into(), state: PlanState::Applying, changes, interrupted: false }
+}
+
+/// Owner ruling: interrupted work is reported on reopen, once, and never
+/// replayed. What it reports is what can remain: new files (created, or
+/// whose creation was started), and the unsaved edits the restart took.
+#[test]
+fn an_interrupted_operation_is_settled_and_reported_once() {
+    let open = Open::new("take");
+    let crashed = stranded(
+        "plan-crashed",
+        "ws-earlier",
+        vec![
+            change("src/a.ts", ChangeKind::Edit, Phase::Confirmed, Some(applied("src/a.ts"))),
+            change("src/b.ts", ChangeKind::Open, Phase::Started, None),
+            change("src/made.ts", ChangeKind::Create, Phase::Confirmed, Some(created("src/made.ts"))),
+            change("src/maybe.ts", ChangeKind::Create, Phase::Started, None),
+            change("src/never.ts", ChangeKind::Create, Phase::Intended, None),
+        ],
+    );
+    save(&open.epoch, &crashed, now()).unwrap();
+
+    let reports = take_interrupted(&open.epoch, now()).unwrap();
+    assert_eq!(
+        reports,
+        [InterruptedReport { files: vec!["src/made.ts".into(), "src/maybe.ts".into()], unsaved_edits: 2 }]
+    );
+    let settled = load(&open.epoch, "plan-crashed", Principal::Test).unwrap().unwrap();
+    assert_eq!(settled.state, PlanState::NeedsReview, "a started change without an answer");
+    assert!(settled.interrupted);
+    assert_eq!(settled.changes[4].outcome, Some(ChangeOutcome::Ready { path: "src/never.ts".into() }));
+    let read = standing(&settled, &open.epoch);
+    assert!(read.interrupted);
+    assert_eq!(read.state, PlanState::NeedsReview);
+
+    assert!(take_interrupted(&open.epoch, now()).unwrap().is_empty(), "reported once");
+}
+
+#[test]
+fn an_operation_running_in_this_open_is_left_alone() {
+    let open = Open::new("take-running");
+    let running = stranded("plan-running", &open.epoch, vec![change("src/a.ts", ChangeKind::Edit, Phase::Started, None)]);
+    save(&open.epoch, &running, now()).unwrap();
+    assert!(take_interrupted(&open.epoch, now()).unwrap().is_empty());
+    let record = load(&open.epoch, "plan-running", Principal::Test).unwrap().unwrap();
+    assert_eq!((record.state, record.interrupted), (PlanState::Applying, false));
+}
+
+/// Nothing could have changed (the intent alone): settled, never a pill.
+#[test]
+fn an_operation_that_changed_nothing_is_settled_without_a_report() {
+    let open = Open::new("take-nothing");
+    let crashed = stranded("plan-nothing", "ws-earlier", vec![change("src/a.ts", ChangeKind::Edit, Phase::Intended, None)]);
+    save(&open.epoch, &crashed, now()).unwrap();
+    assert!(take_interrupted(&open.epoch, now()).unwrap().is_empty());
+    let settled = load(&open.epoch, "plan-nothing", Principal::Test).unwrap().unwrap();
+    assert_eq!((settled.state, settled.interrupted), (PlanState::Failed, true));
+}
+
+/// Receipts past retention are pruned when the project opens, too.
+#[test]
+fn opening_prunes_receipts_past_retention() {
+    let open = Open::new("take-prune");
+    let day = 24 * 60 * 60 * 1000_i64;
+    let mut old = record(&open.epoch, PlanState::Applied, vec![]);
+    old.id = "plan-old".into();
+    save(&open.epoch, &old, 10 * day).unwrap();
+    take_interrupted(&open.epoch, 41 * day).unwrap();
+    assert_eq!(load(&open.epoch, "plan-old", Principal::Test).unwrap(), None);
+}
+
+/// The W4b live finding: every run of Litria counts epochs from the start, so
+/// a run after a crash can open the project under the very epoch the crashed
+/// operation recorded. It is still another open: interrupted, not running.
+#[test]
+fn an_earlier_run_with_the_same_epoch_is_another_open() {
+    let mut crashed = record("ws-1", PlanState::Applying, vec![change("n.ts", ChangeKind::Create, Phase::Started, None)]);
+    crashed.run = "run-earlier".into();
+    let read = standing(&crashed, "ws-1");
+    assert_eq!((read.state, read.interrupted), (PlanState::NeedsReview, true));
+
+    // And it is settled and reported when the project opens again.
+    let open = Open::new("same-epoch");
+    crashed.epoch = open.epoch.clone();
+    save(&open.epoch, &crashed, now()).unwrap();
+    assert_eq!(take_interrupted(&open.epoch, now()).unwrap(), [InterruptedReport { files: vec!["n.ts".into()], unsaved_edits: 0 }]);
+}
+
+/// A record written before runs were recorded names no run of this process.
+#[test]
+fn a_record_without_a_run_is_from_another_run() {
+    assert_eq!(split_open_key("ws-3"), (String::new(), "ws-3".to_string()));
+    assert_eq!(split_open_key("run-ab/ws-3"), ("run-ab".to_string(), "ws-3".to_string()));
 }

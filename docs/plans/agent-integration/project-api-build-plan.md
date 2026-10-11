@@ -43,7 +43,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The agent's own approval is enough; Litria's review is off by default (owner) |
 | W3 | Native conditional disk operations: create-if-absent, agent-created files, edits to files that are not open | P1, W2 | Done 2026-10-11: W3a create-if-absent (PR #132), W3b agents' new files (PR #133), W3c edits to files that are not open (see [W3 section](#w3-agent-files-on-disk), [W3a record](#w3a-record), [W3b record](#w3b-record), [W3c record](#w3c-record)). Replace-if-the-disk-revision-matches deferred: no consumer (owner rulings) |
-| W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | In progress: W4a durable records, recovery and `litria_operations_get` (see [W4 section](#w4-durable-operations), [W4a record](#w4a-record)); W4b the reopen pill next |
+| W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Done 2026-10-11: W4a durable records, recovery and `litria_operations_get` (PR #135), W4b the reopen pill (see [W4 section](#w4-durable-operations), [W4a record](#w4a-record), [W4b record](#w4b-record)). Re-binding a reconnecting agent to its receipts comes with track T |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
 
 P4 and P5 can run alongside P3 and alongside each other. W-slices get their Tasks, Tests and Acceptance when the write contract is written, after P3 lands (brief §13).
@@ -1996,6 +1996,63 @@ be on disk.
 >     read `applied` from the record, and asking to apply again changed
 >     nothing.
 >   - An unknown id read `unknown`.
+>   - No console errors.
+
+### W4b record
+
+> **Built 2026-10-11. W4 is complete.** When a project opens, an agent change
+> that a restart interrupted is reported in a pill, as the owner ruled. It is
+> never replayed.
+>
+> **Built:**
+>
+> - `operations::take_interrupted` works in one transaction:
+>   1. prunes receipts past 30 days;
+>   2. settles every operation an earlier open left applying, recording the
+>      state its record proves;
+>   3. returns each interrupted operation once: the new files it created or
+>      may have created, and how many unsaved edits the restart took.
+> - An operation that could have changed nothing is settled silently. A
+>   read-only project is left as it is.
+> - Unsaved text is not kept across a restart (the editor reloads every file
+>   from disk), so the pill names only files that can be on disk.
+> - The release-safe command `project_api_interrupted_operations`, the pure
+>   wording in `src/app/interruptedOperations.js` (node-tested), and the hook
+>   `useInterruptedOperationsNotice` (once per project load; an info pill,
+>   which stays until dismissed).
+>
+> **A W4a defect, found and fixed here** (adversarial-check Learned Flaw 12):
+>
+> - **What broke:** a record named its open by the workspace epoch. Epochs
+>   are a per-process counter that every run of Litria starts again, so after
+>   a crash and restart the project opened under the very epoch the record
+>   held, and the interrupted operation read as still `applying`.
+> - **Why W4a missed it:** its tests used different epoch names, and its live
+>   pass reopened within one process.
+> - **Reproduced live:** the app was killed mid-apply and relaunched.
+> - **The fix:** an open is named by a random per-run id and the epoch.
+> - **Verified fixed, live:** on the same stranded record, and with a second
+>   crash on the fixed code.
+>
+> **Evidence:**
+>
+> - **Rust:** 6 new tests (settle and report, once; running left alone;
+>   nothing changed means no report; prune on open; same epoch from an
+>   earlier run; legacy keys).
+>   - `cargo test`: 722 passed, zero warnings.
+>   - `cargo check --release` is clean.
+> - **JavaScript:** 5 new wording tests. `test:domains`: 1572 passed. All
+>   seven guards pass, and the build passes.
+> - **Live pass** (`tauri dev`, throwaway project;
+>   `.research/2026-10-11-w3-live/w4b-live.mjs`). The driver kills
+>   `litria.exe` while Rust waits on `files.create`, then relaunches.
+>   - The pill read "An agent's change was interrupted when Litria closed,
+>     and was not run again. Check src/third.ts: it may have been created."
+>   - The operation read `needsReview` and interrupted.
+>   - The file was not on disk, a retry ran nothing, and it was reported
+>     once.
+>   - An operation that finished just before the kill survived it as
+>     `applied`, and raised no pill.
 >   - No console errors.
 
 ## W-track outline

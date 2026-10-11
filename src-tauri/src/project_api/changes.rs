@@ -362,6 +362,7 @@ impl Journal {
         let record = principal.map(|principal| Record {
             id: id.to_string(),
             principal,
+            run: operations::run_id().to_string(),
             epoch: epoch.to_string(),
             state: PlanState::Applying,
             changes: changes
@@ -377,6 +378,7 @@ impl Journal {
                     outcome: None,
                 })
                 .collect(),
+            interrupted: false,
         });
         Self { record }
     }

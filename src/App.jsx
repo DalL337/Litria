@@ -92,6 +92,7 @@ import { useGroupMenuUi } from './app/useGroupMenuUi';
 import { usePythonLspLifecycle } from './app/usePythonLspLifecycle';
 import { usePythonFirstOpen } from './app/usePythonFirstOpen';
 import { useNpmScriptsFirstOpen } from './app/useNpmScriptsFirstOpen';
+import { useInterruptedOperationsNotice } from './app/useInterruptedOperationsNotice';
 import { useManagedServerOffers } from './app/useManagedServerOffers';
 import { useGoToolchainOffer } from './app/useGoToolchainOffer';
 import { useManagedLspLifecycle } from './app/useManagedLspLifecycle';
@@ -544,6 +545,13 @@ function App() {
   // installs ran with dependency scripts disabled; one visible click runs
   // `npm rebuild` in the terminal for projects that need them.
   useNpmScriptsFirstOpen({
+    projectInstance,
+    pillDomain
+  });
+
+  // Agent changes a restart interrupted (Project API build plan W4b): one
+  // pill each when the project opens; nothing is replayed.
+  useInterruptedOperationsNotice({
     projectInstance,
     pillDomain
   });

@@ -18,6 +18,8 @@ mod diagnostics;
 mod files_read;
 mod graph_query;
 mod operations;
+
+pub(crate) use operations::InterruptedReport;
 mod paths;
 pub(crate) mod policy;
 pub(crate) mod reader;
@@ -87,6 +89,15 @@ pub(crate) fn dev_call(operation: &str, payload: &[u8]) -> Result<Value, Contrac
         epoch,
     };
     dispatcher.dispatch(&context, operation, payload)
+}
+
+/// Interrupted agent changes, for the reopen pill (build plan W4b): settles
+/// every operation an earlier run left applying in the project open as
+/// `epoch`, prunes receipts past retention, and reports each interrupted
+/// operation once. Never replays anything. Release builds too: a project can
+/// carry operations from any build.
+pub(crate) fn interrupted_operations(epoch: &str) -> Result<Vec<operations::InterruptedReport>, crate::db::DbError> {
+    operations::take_interrupted(epoch, operations::now())
 }
 
 /// Debug builds only: a person's decision on an agent's plan, through the

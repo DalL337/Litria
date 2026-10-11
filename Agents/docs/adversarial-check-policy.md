@@ -114,9 +114,10 @@ and for the list of attacks. Each one names the flaw that taught it.
    relying on it. Ask the same of keys a fence relies on: is an "id" unique
    per session, or stored with the data, so that a copy or a reopen
    presents it again — or a per-project counter, so that the next project
-   reuses it? Judge a name by what the OS would open for it (`.env.` is
-   `.env` on Windows), and judge it before counting it. *(Flaws 3, 7, 9
-   and 11.)*
+   reuses it — or a per-process counter, so that the next run of the app
+   reuses it against anything it persisted? Judge a name by what the OS would
+   open for it (`.env.` is `.env` on Windows), and judge it before counting
+   it. *(Flaws 3, 7, 9, 11 and 12.)*
 3. **Bounds on what is consumed.** Is each limit enforced on what is
    actually read, allocated and emitted? That includes encoded size and
    escaping, memory proportional to input (a vector per line, per match or
@@ -322,3 +323,19 @@ Each entry comes from a real finding and records its final status.
     *Status: both reproduced on Windows by tests that failed first
     (verbatim-path odd names; a dangling junction); verified fixed on
     Windows with the same tests. Linux and macOS: CI.*
+12. **A restart reused the id that meant "this open"** (2026-10-11, Project
+    API build plan W4a, found in W4b's live pass, medium: an interrupted
+    agent change read as still running). A durable operation record named
+    the open it ran in by the workspace epoch. Epochs are a per-process
+    counter (`ws-1`, `ws-2`, …) that every run of Litria starts again, so
+    after a crash and restart the project opened under the very epoch the
+    record held. The record read as `applying` in this open, and no
+    interruption was reported. W4a's tests used two different epoch names,
+    and its live pass reopened within one process, where the counter
+    advances; neither ever restarted the process. The fix names an open by
+    a random per-run id and the epoch together; a record without a run id is
+    from another run.
+    *Status: reproduced on Windows in a live pass that killed the app
+    mid-apply and relaunched it; verified fixed on Windows with the same
+    project's stranded record, and with a second crash on the fixed code.
+    Unit test for the same-epoch case. Linux and macOS: CI.*
