@@ -126,6 +126,9 @@ pub(crate) fn dispatch_notification(
 ) {
     match method {
         "textDocument/publishDiagnostics" => {
+            // The detail store keeps them (P5a); the event below still feeds
+            // Monaco markers and the node LEDs, unchanged.
+            crate::lsp::diagnostics_cache::record_publish(session_id, &params);
             let uri = params
                 .get("uri")
                 .and_then(|v| v.as_str())
