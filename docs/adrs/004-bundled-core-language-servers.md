@@ -67,7 +67,7 @@ All pinned versions are tracked in `src-tauri/src/lsp/packs/versions.rs`.
 | Dependency | Pinned Version | Purpose |
 |---|---|---|
 | Pyright | 1.1.414 | Python language server |
-| TypeScript Language Server | 6.0.0 | JS/TS language server |
+| TypeScript Language Server | 6.0.2 | JS/TS language server |
 | TypeScript Compiler | 6.0.3 | Required by tsserver (last line that ships it) |
 | Node.js | 24.14.0 (LTS) | Runtime for LSP servers + scaffold runner |
 | npm | (ships with Node) | Package management for scaffold CLI tools |
@@ -97,6 +97,21 @@ All pinned versions are tracked in `src-tauri/src/lsp/packs/versions.rs`.
 > `tsc -v` = 6.0.3, `bin/tsserver` present, `typescript-language-server
 > --version` = 6.0.0, pyright package 1.1.414 under the bundled Node.
 > Live LSP pass owed before merge (owner).
+
+> **Pin refresh (2026-10-11):** typescript-language-server 6.0.0 → 6.0.2.
+> TypeScript stays on 6.0.3, and Pyright is unchanged. 6.0.1 has two crash
+> fixes: the server stops when its syntax server crashes, and when tsserver is
+> killed by a signal. 6.0.2 is an internal refactor. Compatibility evidence:
+> npm metadata for 6.0.2 matches 6.0.0. Engines are still `node >=22.22.2`
+> (bundled Node is 24.14.0), with no runtime dependencies and no install
+> scripts. Published 2026-10-09, so it clears the 24 h age gate.
+>
+> Verified Windows-side. `npm run bundle:servers` staged 6.0.2 and the entry
+> point check passed. An LSP session against the staged bundle ran under the
+> bundled Node with Litria's `initializationOptions`, and the server reported
+> "Using Typescript version (bundled) 6.0.3". It published TS2322 for a type
+> error and answered hover with the function signature. `shutdown`/`exit`
+> ended with exit code 0, the same result as the 6.0.0 bundle.
 
 ## Scope Notes
 - This ADR covers Python (Pyright), JS/TS (TypeScript Language Server), and Node.js runtime.
