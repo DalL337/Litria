@@ -1,9 +1,10 @@
-//! `litria_changes_apply` (Project API build plan W2b; contract brief §13): a
-//! plan's outcome. Under the owner's ruling that every agent edit needs
-//! review (2026-10-11), a person's approval applies a plan; this call never
-//! applies one that awaits review. It answers where the plan stands, and once
-//! applied, each document's new revision. Asking again is safe: a plan is
-//! applied at most once.
+//! `litria_changes_apply` (Project API build plan W2b; contract brief §13):
+//! apply a prepared plan, all or none. The agent's own approval is enough —
+//! its client already asked the person (owner ruling, 2026-10-11) — so this
+//! call applies the plan unless Litria is set to review agent edits itself
+//! (off by default), when it answers `pendingReview` until a person decides.
+//! It reports where the plan stands and, once applied, each document's new
+//! revision. Asking again is safe: a plan is applied at most once.
 
 #[cfg(test)]
 use schemars::JsonSchema;
@@ -22,10 +23,11 @@ pub(crate) struct ChangesApplyOp;
 
 impl Operation for ChangesApplyOp {
     const NAME: &'static str = "litria_changes_apply";
-    const DESCRIPTION: &'static str = "The outcome of a plan from litria_changes_prepare. A plan is applied when a \
-         person approves it; this call never applies one that awaits review, so ask again later. Applied changes \
-         are in the editor, unsaved (effect: buffer), and each document reports its new revision. A plan is \
-         applied at most once; asking again returns the same outcome.";
+    const DESCRIPTION: &'static str = "Apply a plan from litria_changes_prepare, all or none: every document must \
+         still be the revision it was proposed against, otherwise nothing is applied (state conflict; propose \
+         again). Applied changes are in the editor, unsaved (effect: buffer), each with its new revision. A plan \
+         is applied at most once; asking again returns the same outcome. If Litria is set to have a person review \
+         agent edits, the plan waits for that decision (state pendingReview); ask again later.";
     const CAPABILITY: &'static str = "project.changes.apply";
     const READ_ONLY: bool = false;
     type Request = ChangesApplyRequest;

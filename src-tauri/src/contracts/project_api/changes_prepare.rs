@@ -1,8 +1,9 @@
 //! `litria_changes_prepare` (Project API build plan W2a; contract brief §13):
 //! propose exact-text edits to documents the editor holds. Nothing is applied
 //! here. Every change is checked against the current editor text; when all
-//! are ready they become one plan that waits for a person's review, and a
-//! plan applies only after approval (W2b, `litria_changes_apply`).
+//! are ready they become one plan, which `litria_changes_apply` applies (W2b).
+//! The agent's own approval is enough: its client already asked the person
+//! (owner ruling, 2026-10-11). Litria's own review is off unless enabled.
 
 #[cfg(test)]
 use schemars::JsonSchema;
@@ -29,11 +30,10 @@ pub(crate) struct ChangesPrepareOp;
 
 impl Operation for ChangesPrepareOp {
     const NAME: &'static str = "litria_changes_prepare";
-    const DESCRIPTION: &'static str = "Propose exact-text edits to documents the editor holds; nothing is applied. \
-         Each edit replaces oldText, which must occur exactly once in the document, with newText; expectedRevision \
-         is the revision litria_files_read reported. When every change is ready they become one plan that waits \
-         for a person to review it: an approved plan is applied to the editor (unsaved), and an unanswered one \
-         expires after ten minutes. Ask litria_changes_apply for its outcome.";
+    const DESCRIPTION: &'static str = "Propose exact-text edits to documents the editor holds; nothing is applied \
+         yet. Each edit replaces oldText, which must occur exactly once in the document, with newText; \
+         expectedRevision is the revision litria_files_read reported. When every change is ready they become one \
+         plan: apply it with litria_changes_apply. A plan that is not applied expires after ten minutes.";
     const CAPABILITY: &'static str = "project.changes.propose";
     const READ_ONLY: bool = false;
     type Request = ChangesPrepareRequest;
@@ -149,7 +149,7 @@ pub(crate) struct PreparedPlan {
     #[cfg_attr(test, schemars(length(min = PLAN_ID_LENGTH, max = PLAN_ID_LENGTH)))]
     pub plan_id: String,
     pub state: PlanState,
-    /// Seconds until an unanswered plan expires.
+    /// Seconds until the plan expires if it is not applied.
     #[cfg_attr(test, schemars(range(max = PLAN_TTL_SECONDS)))]
     pub expires_in_seconds: u32,
 }
@@ -160,7 +160,10 @@ pub(crate) struct PreparedPlan {
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum PlanState {
-    /// Waiting for a person to approve or reject it.
+    /// Ready: `litria_changes_apply` applies it.
+    Prepared,
+    /// Waiting for a person to approve or reject it. Only when Litria is set
+    /// to review agent edits itself (off by default).
     PendingReview,
     /// Approved, and being applied now.
     Applying,

@@ -50,7 +50,7 @@
     },
     {
       "capability": "project.changes.propose",
-      "description": "Propose exact-text edits to documents the editor holds; nothing is applied. Each edit replaces oldText, which must occur exactly once in the document, with newText; expectedRevision is the revision litria_files_read reported. When every change is ready they become one plan that waits for a person to review it: an approved plan is applied to the editor (unsaved), and an unanswered one expires after ten minutes. Ask litria_changes_apply for its outcome.",
+      "description": "Propose exact-text edits to documents the editor holds; nothing is applied yet. Each edit replaces oldText, which must occur exactly once in the document, with newText; expectedRevision is the revision litria_files_read reported. When every change is ready they become one plan: apply it with litria_changes_apply. A plan that is not applied expires after ten minutes.",
       "name": "litria_changes_prepare",
       "readOnly": false,
       "request": "litria_changes_prepare.request.schema.json",
@@ -59,7 +59,7 @@
     },
     {
       "capability": "project.changes.apply",
-      "description": "The outcome of a plan from litria_changes_prepare. A plan is applied when a person approves it; this call never applies one that awaits review, so ask again later. Applied changes are in the editor, unsaved (effect: buffer), and each document reports its new revision. A plan is applied at most once; asking again returns the same outcome.",
+      "description": "Apply a plan from litria_changes_prepare, all or none: every document must still be the revision it was proposed against, otherwise nothing is applied (state conflict; propose again). Applied changes are in the editor, unsaved (effect: buffer), each with its new revision. A plan is applied at most once; asking again returns the same outcome. If Litria is set to have a person review agent edits, the plan waits for that decision (state pendingReview); ask again later.",
       "name": "litria_changes_apply",
       "readOnly": false,
       "request": "litria_changes_apply.request.schema.json",

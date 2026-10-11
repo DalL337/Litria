@@ -264,11 +264,11 @@ fn denied_and_service_errors_are_conforming_tool_errors() {
     conforming(&result, ErrorCode::NotReady, "workspace closed");
 }
 
-/// A ready proposal through the real catalog becomes a plan awaiting review,
+/// A ready proposal through the real catalog becomes a prepared plan,
 /// and its result (plan present) conforms to the published schema; a proposal
 /// that is not ready makes no plan (build plan W2a).
 #[test]
-fn a_ready_proposal_becomes_a_pending_plan_through_the_real_catalog() {
+fn a_ready_proposal_becomes_a_prepared_plan_through_the_real_catalog() {
     let bound = Bound::new("propose");
     let dispatcher = crate::project_api::dispatcher();
     let context = bound.context(Grant::of(dispatcher.capabilities()));
@@ -284,7 +284,7 @@ fn a_ready_proposal_becomes_a_pending_plan_through_the_real_catalog() {
     let ready = tools_call(dispatcher, &context, &propose("src/auth.ts")).unwrap();
     assert_eq!(ready["isError"], false, "{ready}");
     let plan = &ready["structuredContent"]["plan"];
-    assert_eq!(plan["state"], "pendingReview");
+    assert_eq!(plan["state"], "prepared");
     assert_eq!(plan["expiresInSeconds"], 600);
     assert!(plan["planId"].as_str().unwrap().starts_with("plan-"));
     assert!(output.is_valid(&ready["structuredContent"]));
@@ -302,40 +302,44 @@ fn a_ready_proposal_becomes_a_pending_plan_through_the_real_catalog() {
     assert_eq!(annotations["readOnlyHint"], false);
 }
 
-/// The whole loop through the real catalog (build plan W2b): an agent
-/// proposes, `litria_changes_apply` answers pendingReview and applies nothing,
-/// a person approves (the debug review seam), and the agent then learns the
-/// plan applied, with each new revision; every answer conforms to the schema.
+/// The whole loop through the real catalog (build plan W2b; owner ruling: the
+/// agent's own approval is enough): an agent proposes, applies, and learns
+/// each new revision; applying again changes nothing; a plan a person rejects
+/// first is never applied. Every answer conforms to the schema.
 #[test]
-fn propose_review_and_apply_through_the_real_catalog() {
+fn propose_and_apply_through_the_real_catalog() {
     let bound = Bound::new("loop");
     let dispatcher = crate::project_api::dispatcher();
     let context = bound.context(Grant::of(dispatcher.capabilities()));
     let list = tools_list();
     let output = validator(&tool(&list, "litria_changes_apply")["outputSchema"]);
-    let prepared = tools_call(dispatcher, &context, &json!({ "name": "litria_changes_prepare", "arguments": { "changes": [{
-        "kind": "text.edit", "path": "src/auth.ts", "expectedRevision": "b1-x",
-        "edits": [{ "oldText": "signIn", "newText": "logIn" }]
-    }]}}))
-    .unwrap();
-    let plan_id = prepared["structuredContent"]["plan"]["planId"].as_str().unwrap().to_string();
-    let ask = || tools_call(dispatcher, &context, &json!({ "name": "litria_changes_apply", "arguments": { "planId": plan_id } })).unwrap();
+    let propose = |old: &str, new: &str| {
+        let prepared = tools_call(dispatcher, &context, &json!({ "name": "litria_changes_prepare", "arguments": { "changes": [{
+            "kind": "text.edit", "path": "src/auth.ts", "expectedRevision": "b1-x",
+            "edits": [{ "oldText": old, "newText": new }]
+        }]}}))
+        .unwrap();
+        prepared["structuredContent"]["plan"]["planId"].as_str().unwrap().to_string()
+    };
+    let apply = |plan_id: &str| {
+        tools_call(dispatcher, &context, &json!({ "name": "litria_changes_apply", "arguments": { "planId": plan_id } })).unwrap()
+    };
 
-    let pending = ask();
-    assert_eq!(pending["structuredContent"]["state"], "pendingReview");
-    assert!(output.is_valid(&pending["structuredContent"]));
-
-    let reviewed = crate::project_api::dev_review(&plan_id, true).unwrap();
-    assert_eq!(reviewed["state"], "applied", "{reviewed}");
-
-    let applied = ask();
+    let plan_id = propose("signIn", "logIn");
+    let applied = apply(&plan_id);
     let result = &applied["structuredContent"];
-    assert_eq!(result["state"], "applied");
+    assert_eq!(result["state"], "applied", "{result}");
     assert_eq!(result["effect"], "buffer");
     assert_eq!(result["changes"][0], json!({ "outcome": "applied", "path": "src/auth.ts", "revision": "b1-applied" }));
     assert!(output.is_valid(result), "{result}");
-    // Approving again applies nothing more.
-    assert_eq!(crate::project_api::dev_review(&plan_id, true).unwrap()["state"], "applied");
+    assert_eq!(apply(&plan_id)["structuredContent"], *result, "applying again returns the same outcome");
+
+    // A person can still turn a plan down before the agent applies it.
+    let rejected_id = propose("export", "export default");
+    assert_eq!(crate::project_api::dev_review(&rejected_id, false).unwrap()["state"], "rejected");
+    let rejected = apply(&rejected_id);
+    assert_eq!(rejected["structuredContent"]["state"], "rejected");
+    assert!(output.is_valid(&rejected["structuredContent"]));
     let annotations = &tool(&list, "litria_changes_apply")["annotations"];
     assert_eq!(annotations["readOnlyHint"], false);
 }

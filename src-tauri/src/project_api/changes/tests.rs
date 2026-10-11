@@ -33,11 +33,15 @@ fn planned(path: &str, revision: &str) -> Vec<ChangeToCheck> {
 }
 
 #[test]
-fn a_proposal_becomes_a_plan_awaiting_review() {
+fn a_proposal_becomes_a_prepared_plan() {
     let mut store = PlanStore::default();
     let now = Instant::now();
     let plan = store.propose(Principal::Test, "ws-1", planned("a.ts", "b1-x"), now).unwrap();
-    assert_eq!(plan.state, PlanState::PendingReview);
+    assert_eq!(plan.state, PlanState::Prepared, "the agent's own approval is enough (owner ruling)");
+    // With Litria's own review on, a plan waits for a person instead.
+    let mut reviewed = PlanStore::with_policy(ReviewPolicy::PersonReview);
+    let waiting = reviewed.propose(Principal::Test, "ws-1", planned("a.ts", "b1-x"), now).unwrap();
+    assert_eq!(waiting.state, PlanState::PendingReview);
     assert_eq!(plan.expires_in_seconds, PLAN_TTL_SECONDS);
     assert!(plan.plan_id.starts_with("plan-"));
     assert_eq!(plan.plan_id.len(), PLAN_ID_LENGTH);
@@ -229,7 +233,7 @@ fn ready_changes_become_one_plan_and_the_editor_is_asked_once() {
     let store = Mutex::new(PlanStore::default());
     let result = session.prepare(request(&["src/a.ts", "src/b.ts"]), &store).unwrap();
     let plan = result.plan.expect("every change is ready");
-    assert_eq!(plan.state, PlanState::PendingReview);
+    assert_eq!(plan.state, PlanState::Prepared);
     assert!(result.changes.iter().all(ChangeCheck::is_ready));
     assert_eq!(session.asked_paths(), [vec!["src/a.ts".to_string(), "src/b.ts".to_string()]]);
     let stored = store.lock().unwrap();
@@ -557,26 +561,84 @@ fn a_reviewed_plan_no_longer_counts_as_pending() {
     assert_ne!(again.plan_id, id);
 }
 
+/// The agent's own approval is enough (owner ruling): its apply applies its
+/// prepared plan, at most once, and reports each new revision.
 #[test]
-fn the_apply_tool_reports_and_never_applies() {
+fn the_agents_apply_applies_its_prepared_plan_once() {
     let session = Session::new("apply-tool", ready);
     let store = Mutex::new(PlanStore::default());
     let prepared = session.prepare(request(&["src/a.ts"]), &store).unwrap().plan.unwrap();
+    let (editor, calls) = applying_editor(&session.epoch, Duration::from_secs(5), all_applied);
     let ask = |id: &str, principal| {
         let mut context = session.context();
         context.principal = principal;
-        handle_apply_with(&context, ChangesApplyRequest { plan_id: id.into() }, &store, Instant::now()).unwrap()
+        handle_apply_with(&context, ChangesApplyRequest { plan_id: id.into() }, editor, &store, Instant::now()).unwrap()
     };
-    let pending = ask(&prepared.plan_id, Principal::Test);
-    assert_eq!(pending.state, PlanState::PendingReview, "asking never applies a plan that awaits review");
-    assert!(pending.effect.is_none() && pending.changes.is_empty());
+    // Another requester's plan, or a guessed id, is unknown and runs nothing.
     assert_eq!(ask(&prepared.plan_id, Principal::Dev).state, PlanState::Unknown, "another requester's plan");
     assert_eq!(ask("plan-guess", Principal::Test).state, PlanState::Unknown);
-    // Approved by a person (scripted editor), then asked: applied, buffer.
-    let (bridge, _) = applying_editor(&session.epoch, Duration::from_secs(5), all_applied);
-    review_with(&prepared.plan_id, Decision::Approve, &session.epoch, bridge, &store, Instant::now());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
     let applied = ask(&prepared.plan_id, Principal::Test);
     assert_eq!(applied.state, PlanState::Applied);
     assert_eq!(applied.effect, Some(Effect::Buffer));
-    assert_eq!(applied.changes.len(), 1);
+    assert_eq!(
+        applied.changes,
+        [ChangeOutcome::Applied { path: "src/a.ts".into(), revision: "b1-new-src/a.ts".into() }]
+    );
+    let again = ask(&prepared.plan_id, Principal::Test);
+    assert_eq!(again, applied, "asking again returns the same outcome");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "applied at most once");
+}
+
+/// With Litria's own review on, the agent's apply waits for a person and
+/// never applies; once a person approves, it reports the outcome.
+#[test]
+fn with_litria_review_on_the_agents_apply_waits_for_a_person() {
+    let session = Session::new("apply-review", ready);
+    let store = Mutex::new(PlanStore::with_policy(ReviewPolicy::PersonReview));
+    let prepared = session.prepare(request(&["src/a.ts"]), &store).unwrap().plan.unwrap();
+    assert_eq!(prepared.state, PlanState::PendingReview);
+    let (editor, calls) = applying_editor(&session.epoch, Duration::from_secs(5), all_applied);
+    let ask = || {
+        handle_apply_with(&session.context(), ChangesApplyRequest { plan_id: prepared.plan_id.clone() }, editor, &store, Instant::now())
+            .unwrap()
+    };
+    let waiting = ask();
+    assert_eq!(waiting.state, PlanState::PendingReview);
+    assert!(waiting.effect.is_none() && waiting.changes.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "never applied without the person");
+    review_with(&prepared.plan_id, Decision::Approve, &session.epoch, editor, &store, Instant::now());
+    let applied = ask();
+    assert_eq!(applied.state, PlanState::Applied);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+/// The agent's apply and a person's approval racing for one plan: one claim
+/// wins, the editor applies once.
+#[test]
+fn an_agents_apply_racing_a_persons_approval_applies_once() {
+    fn slow(paths: &[String]) -> Option<Value> {
+        std::thread::sleep(Duration::from_millis(150));
+        all_applied(paths)
+    }
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let store: &'static Mutex<PlanStore> = Box::leak(Box::new(store));
+    let (editor, calls) = applying_editor("ws-1", Duration::from_secs(5), slow);
+    let agent = {
+        let id = id.clone();
+        std::thread::spawn(move || {
+            let claimed = lock(store).claim(&id, "ws-1", now, Claimant::Agent(Principal::Test));
+            claimed.map(|changes| execute(&id, changes, "ws-1", editor, store).state)
+        })
+    };
+    let person = {
+        let id = id.clone();
+        std::thread::spawn(move || review_with(&id, Decision::Approve, "ws-1", editor, store, now).state)
+    };
+    let agent = agent.join().unwrap();
+    let person = person.join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "one claim won: {agent:?} / {person:?}");
+    assert_eq!(lock(store).status(&id, Principal::Test, "ws-1", now).0, PlanState::Applied);
 }

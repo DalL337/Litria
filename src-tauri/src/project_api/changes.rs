@@ -1,17 +1,21 @@
 //! Agent-proposed changes (Project API build plan W2; contract brief §13).
-//! W2a: proposing — `litria_changes_prepare`. W2b: a person's review (the
-//! review seam) and `litria_changes_apply`, the plan's outcome.
+//! W2a: proposing — `litria_changes_prepare`. W2b: applying —
+//! `litria_changes_apply` — and the review seam.
 //!
 //! A proposal is checked against the editor's latest text (the bridge's
 //! `editor.checkChanges`, W1's planning). Only when every change is ready does
 //! it become a plan: immutable (its canonical changes and their hash), bound
-//! to the requester and the workspace epoch, waiting for a person's review,
-//! and expiring ten minutes after preparation (owner rulings, 2026-10-11).
-//! Plans live in memory (durable operations are W4).
+//! to the requester and the workspace epoch, and expiring ten minutes after
+//! preparation if it is not applied. Plans live in memory (durable operations
+//! are W4).
 //!
-//! Only a person's approval applies a plan (owner ruling: every agent edit
-//! needs review). Approving claims the plan atomically — `pendingReview` →
-//! `applying`, so it executes at most once — and applies it through the
+//! Who must agree (owner rulings, 2026-10-11): the agent's own approval is
+//! enough — its client already asked the person, and Litria never stacks a
+//! second prompt on it or restricts the agent — so `litria_changes_apply`
+//! applies a `prepared` plan. Litria's own review (`ReviewPolicy::PersonReview`,
+//! plans start `pendingReview`) stays behind the review seam, off until track
+//! T gives it a surface. Either way a plan is claimed atomically — to
+//! `applying`, so it executes at most once — and applied through the
 //! editor's `editor.applyChanges`, all or none. An outcome Litria cannot be
 //! sure of is recorded as `needsReview` and never retried (R5).
 
@@ -38,8 +42,8 @@ use crate::contracts::project_api_bridge::editor::{
 };
 use crate::db;
 
-/// Plans one requester may have awaiting review at once. More are refused,
-/// never made room for by expiring older ones early.
+/// Plans one requester may have waiting (prepared or pending review) at once.
+/// More are refused, never made room for by expiring older ones early.
 pub(crate) const MAX_PENDING_PER_PRINCIPAL: usize = 16;
 const PLAN_TTL: Duration = Duration::from_secs(PLAN_TTL_SECONDS as u64);
 /// How long an expired plan is remembered, so it can still be answered as
@@ -158,19 +162,29 @@ fn prepare(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_apply(context: &CallContext, request: ChangesApplyRequest) -> Result<ChangesApplyResult, ContractError> {
-    handle_apply_with(context, request, plans(), Instant::now())
+    handle_apply_with(context, request, bridge::global(), plans(), Instant::now())
 }
 
-/// Where the requester's plan stands. Never applies: under the every-edit-
-/// needs-review ruling only a person's approval does.
+/// Apply the requester's `prepared` plan (claimed atomically, so it runs at
+/// most once), or report where the plan stands. A plan pending a person's
+/// review is never applied here.
 pub(crate) fn handle_apply_with(
     context: &CallContext,
     request: ChangesApplyRequest,
+    bridge: &Bridge,
     store: &Mutex<PlanStore>,
     now: Instant,
 ) -> Result<ChangesApplyResult, ContractError> {
     workspace::fenced(context, |_root| {
-        let (state, changes) = lock(store).status(&request.plan_id, context.principal, &context.epoch, now);
+        // Bound first: a guard in a `match` scrutinee would outlive the arms.
+        let claimed = lock(store).claim(&request.plan_id, &context.epoch, now, Claimant::Agent(context.principal));
+        let (state, changes) = match claimed {
+            Ok(changes) => {
+                let applied = execute(&request.plan_id, changes, &context.epoch, bridge, store);
+                (applied.state, applied.changes)
+            }
+            Err(_) => lock(store).status(&request.plan_id, context.principal, &context.epoch, now),
+        };
         Ok(ChangesApplyResult {
             plan_id: request.plan_id.clone(),
             state,
@@ -198,10 +212,10 @@ pub(crate) struct Reviewed {
     pub changes: Vec<ChangeOutcome>,
 }
 
-/// A person's decision on a plan of the workspace `epoch` — the seam the
-/// review surface calls (track T designs where it appears; tests and a
-/// debug-only command drive it until then). Approving applies the plan
-/// through the editor, at most once; rejecting ends it.
+/// A person's decision on a plan of the workspace `epoch` — the seam a
+/// review surface calls (track T designs whether and where one appears;
+/// tests and a debug-only command drive it until then). Approving applies a
+/// waiting plan through the editor, at most once; rejecting ends it.
 #[cfg_attr(not(debug_assertions), allow(dead_code))] // the debug command is its caller until track T
 pub(crate) fn review(plan_id: &str, decision: Decision, epoch: &str) -> Reviewed {
     review_with(plan_id, decision, epoch, bridge::global(), plans(), Instant::now())
@@ -222,14 +236,18 @@ pub(crate) fn review_with(
     // Bound first, so the store's guard is released before either arm runs:
     // a guard created in a `match` scrutinee lives to the end of the match,
     // and the second lock below would deadlock on it.
-    let claimed = lock(store).claim(plan_id, epoch, now);
-    let changes = match claimed {
-        Ok(changes) => changes,
-        // Not pending (applied, applying, rejected, expired, …) or not this
+    let claimed = lock(store).claim(plan_id, epoch, now, Claimant::Person);
+    match claimed {
+        Ok(changes) => execute(plan_id, changes, epoch, bridge, store),
+        // Not waiting (applied, applying, rejected, expired, …) or not this
         // workspace's: nothing runs, the plan's standing is the answer.
-        Err(state) => return lock(store).reviewed(plan_id, epoch, state),
-    };
-    // The store is not locked while the editor works.
+        Err(state) => lock(store).reviewed(plan_id, epoch, state),
+    }
+}
+
+/// Apply a claimed plan through the editor and record the outcome. The store
+/// is not locked while the editor works.
+fn execute(plan_id: &str, changes: Vec<ChangeToCheck>, epoch: &str, bridge: &Bridge, store: &Mutex<PlanStore>) -> Reviewed {
     let sent: Vec<String> = changes.iter().map(|change| change.path.clone()).collect();
     let (state, outcomes) = match bridge.call_reporting::<ApplyChangesOp>(epoch, &CheckChangesRequest { changes }) {
         Ok(result) if result.changes.iter().map(ApplyEntry::path).eq(sent.iter().map(String::as_str)) => {
@@ -290,10 +308,37 @@ pub(crate) struct Plan {
     outcomes: Vec<ChangeOutcome>,
 }
 
+/// Who must agree before a plan applies (owner rulings, 2026-10-11).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ReviewPolicy {
+    /// The agent's own approval is enough: its client already asked the
+    /// person. Plans start `prepared`; `litria_changes_apply` applies them.
+    #[default]
+    AgentApproval,
+    /// Litria's own review: plans start `pendingReview` and apply only on a
+    /// person's approval. Off until track T gives the review a surface.
+    #[cfg_attr(not(test), allow(dead_code))]
+    PersonReview,
+}
+
+/// Who is claiming a plan for applying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Claimant {
+    /// The requester, through `litria_changes_apply`: only its own
+    /// `prepared` plan.
+    Agent(Principal),
+    /// A person, through the review seam: any waiting plan of the workspace.
+    Person,
+}
+
+fn is_waiting(state: PlanState) -> bool {
+    matches!(state, PlanState::Prepared | PlanState::PendingReview)
+}
+
 impl Plan {
     /// Where the plan stands at `now`.
     pub(crate) fn state(&self, now: Instant) -> PlanState {
-        if self.state == PlanState::PendingReview && self.is_expired(now) {
+        if is_waiting(self.state) && self.is_expired(now) {
             PlanState::Expired
         } else {
             self.state
@@ -312,7 +357,7 @@ impl Plan {
         let left = self.expires_at().saturating_duration_since(now);
         PreparedPlan {
             plan_id: id.to_string(),
-            state: PlanState::PendingReview,
+            state: self.state,
             // Rounded up: a plan with time left never reads as 0.
             expires_in_seconds: (left.as_millis().div_ceil(1000) as u32).min(PLAN_TTL_SECONDS),
         }
@@ -322,9 +367,15 @@ impl Plan {
 #[derive(Debug, Default)]
 pub(crate) struct PlanStore {
     plans: HashMap<String, Plan>,
+    policy: ReviewPolicy,
 }
 
 impl PlanStore {
+    #[cfg(test)]
+    pub(crate) fn with_policy(policy: ReviewPolicy) -> Self {
+        Self { plans: HashMap::new(), policy }
+    }
+
     /// Store a proposal as a plan awaiting review, or return the pending plan
     /// the same requester already made of the same changes.
     pub(crate) fn propose(
@@ -336,16 +387,15 @@ impl PlanStore {
     ) -> Result<PreparedPlan, ContractError> {
         self.forget_old(now);
         let hash = plan_hash(&changes);
-        let pending = |plan: &Plan| {
-            plan.principal == principal && plan.epoch == epoch && plan.state(now) == PlanState::PendingReview
-        };
+        let pending =
+            |plan: &Plan| plan.principal == principal && plan.epoch == epoch && is_waiting(plan.state(now));
         if let Some((id, plan)) = self.plans.iter().find(|(_, plan)| pending(plan) && plan.hash == hash) {
             return Ok(plan.summary(id, now));
         }
         if self.plans.values().filter(|plan| pending(plan)).count() >= MAX_PENDING_PER_PRINCIPAL {
             return Err(ContractError::new(
                 ErrorCode::Busy,
-                format!("{MAX_PENDING_PER_PRINCIPAL} proposals already await review; wait for a decision, then retry"),
+                format!("{MAX_PENDING_PER_PRINCIPAL} proposals already wait to be applied; apply them or let them expire, then retry"),
             ));
         }
         let id = new_plan_id();
@@ -355,7 +405,10 @@ impl PlanStore {
             hash,
             changes,
             prepared_at: now,
-            state: PlanState::PendingReview,
+            state: match self.policy {
+                ReviewPolicy::AgentApproval => PlanState::Prepared,
+                ReviewPolicy::PersonReview => PlanState::PendingReview,
+            },
             outcomes: Vec::new(),
         };
         let summary = plan.summary(&id, now);
@@ -379,28 +432,41 @@ impl PlanStore {
         }
     }
 
-    /// Claim a plan of workspace `epoch` for applying: only a pending,
+    /// Claim a plan of workspace `epoch` for applying: only a waiting,
     /// unexpired plan moves to `Applying`, so at most one claim ever wins.
-    /// Otherwise the plan's standing (`Unknown` when there is none).
-    pub(crate) fn claim(&mut self, id: &str, epoch: &str, now: Instant) -> Result<Vec<ChangeToCheck>, PlanState> {
+    /// An agent may claim only its own `prepared` plan; a person any waiting
+    /// one. Otherwise the plan's standing (`Unknown` when there is none, or
+    /// when it is another requester's).
+    pub(crate) fn claim(
+        &mut self,
+        id: &str,
+        epoch: &str,
+        now: Instant,
+        claimant: Claimant,
+    ) -> Result<Vec<ChangeToCheck>, PlanState> {
         let Some(plan) = self.plans.get_mut(id).filter(|plan| plan.epoch == epoch) else {
             return Err(PlanState::Unknown);
         };
-        match plan.state(now) {
-            PlanState::PendingReview => {
-                plan.state = PlanState::Applying;
-                Ok(plan.changes.clone())
-            }
-            other => Err(other),
+        let state = plan.state(now);
+        let allowed = match claimant {
+            Claimant::Agent(principal) if plan.principal != principal => return Err(PlanState::Unknown),
+            Claimant::Agent(_) => state == PlanState::Prepared,
+            Claimant::Person => is_waiting(state),
+        };
+        if !allowed {
+            return Err(state);
         }
+        plan.state = PlanState::Applying;
+        Ok(plan.changes.clone())
     }
 
-    /// Reject a pending plan of workspace `epoch`; returns where it stands.
+    /// A person rejects a waiting plan of workspace `epoch`; returns where it
+    /// stands.
     pub(crate) fn reject(&mut self, id: &str, epoch: &str, now: Instant) -> PlanState {
         let Some(plan) = self.plans.get_mut(id).filter(|plan| plan.epoch == epoch) else {
             return PlanState::Unknown;
         };
-        if plan.state(now) == PlanState::PendingReview {
+        if is_waiting(plan.state(now)) {
             plan.state = PlanState::Rejected;
         }
         plan.state(now)
