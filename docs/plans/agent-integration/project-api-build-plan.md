@@ -38,7 +38,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Done: PR #89, merged 2026-09-30 (see [P2 record](#p2-record)) |
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Done: PR #90 (see [P3 record](#p3-record)) |
 | P4 | `litria_graph_query` | P2 | Done: PR #108, merged 2026-10-03 (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
-| P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)) |
+| P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)). Codex review: five findings, all fixed (see [P5 review record](#p5-review-record)) |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Outline |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
@@ -930,6 +930,77 @@ All tests and standard checks pass, plus a live pass with a real language server
 >
 > **Noted, not P5:** once, the frontend stopped the TypeScript session on its
 > own while both tabs stayed open. It is not investigated here.
+
+### P5 review record
+
+> **Codex review (2026-10-11), after P5 merged.** Codex reported five
+> findings, reproduced in an isolated harness. The harness ran the production
+> store, handler, policy and reader, with the app integration stubbed out.
+> Each finding was checked against the code, then reproduced in this repo by a
+> test that failed before its fix. All five were real; all five are fixed.
+>
+> - **F1 (medium): directories passed a file-only check.**
+>   - **Cause:** enumeration and related locations judged canonical paths with
+>     the file rules. So a folder named `.env.example` (only the file of that
+>     name is a readable template) or a user's `private/` folder came out
+>     `available`. Named requests were already right: they go through the
+>     reader's identity check, which checks for a directory.
+>   - **Fix:** a published document or related location must be a regular
+>     file; anything else is dropped.
+> - **F2 (medium): a late publish could be reported current.**
+>   - **Cause:** the webview restarted a document's versions at 1 on reopen,
+>     and the store files a publish under the opening it arrives in. So a late
+>     version-1 publish for the earlier opening matched the new opening's
+>     version 1. The P5a test for reopening asserted exactly that schedule as
+>     current.
+>   - **Fix:** the webview keeps counting versions across close and reopen.
+>     As a guard, the store reports a version an earlier opening also used as
+>     `unknown` (`reusedVersion`).
+> - **F3 (medium): unreadable entries erased real errors.**
+>   - **Cause:** a publish of only unreadable entries replaced a real error
+>     with a clean, complete empty list.
+>   - **Fix:** any unreadable entry marks the publish incomplete (`perFile`),
+>     and enumeration lists an incomplete file even when it is empty.
+> - **F4 (medium): store eviction was invisible.**
+>   - **Cause:** the store's eviction signal never reached the result.
+>   - **Fix:** a new `storeEvicted` reason. It is set when listing every file,
+>     and when a named file comes back `notAnalyzed`, if a session evicted.
+>   - **Disclosure:** it is one boolean, with no count and no path. The volume
+>     of activity in denied files can contribute to it; that is accepted.
+> - **F5 (low): shortened text claimed to be complete.**
+>   - **Cause:** cutting a message, code or related location set no flag.
+>   - **Fix:** a new `details` reason, with the file marked `truncated`. It
+>     covers cuts at the 1,000-character bound and cuts the store made when
+>     storing.
+>   - **Disclosure:** a related location the policy removes never sets the
+>     flag. A related URI too long to store whole is dropped, not cut, because
+>     a cut URI could name another file.
+>   - **Residual (accepted):** related locations the store itself drops do
+>     set the flag. These are unreadable ones, ones whose URI is too long, and
+>     any past the first 16. The store cannot tell whether they would have
+>     been allowed. The flag says only that some detail was lost, never which
+>     path.
+>
+> **Contract:** three new enum values (`reusedVersion`, `storeEvicted`,
+> `details`), added after the existing ones; artifacts regenerated. The API is
+> so far reachable only through the debug development call.
+>
+> **Evidence:**
+>
+> - 9 new Rust tests and 1 new JavaScript test. Six of the Rust tests and the
+>   JavaScript test failed on the unfixed code.
+> - 4 existing tests updated. The reopen test now reopens at version 2 (its
+>   reused version 1 is what F2 shows is ambiguous). Three gained assertions
+>   for the new marks. The byte-bound fixture now uses related URIs short
+>   enough to keep.
+> - `cargo test` 616 with zero warnings; `test:domains` 1515; architecture
+>   guards pass.
+>
+> **Not covered:**
+>
+> - No live pass. The JavaScript change only stops discarding a document's
+>   version counter on close; LSP does not require a reopen to start at 1.
+> - Not run on Linux or macOS, beyond CI.
 
 ## P6. MCP conformance over the read catalog
 

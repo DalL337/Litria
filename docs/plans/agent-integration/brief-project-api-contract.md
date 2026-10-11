@@ -395,6 +395,28 @@ Diagnostics that only JavaScript produces are reported as `unavailable` until th
 > 384 KiB encoded. The cost of skipping every remaining named path is reserved
 > before each entry is accepted, so the response always fits.
 
+> **Codex review of P5 (2026-10-11).** Five repairs; details in the build
+> plan's P5 review record.
+>
+> - **Only regular files are reported.** This covers published documents and
+>   related locations. A name the policy withholds only as a directory (a
+>   `.env.example/` folder, a user's `private/`) no longer passes a file check.
+> - **Versions never repeat for a document.** The webview keeps counting
+>   versions across a close and reopen. If a client did start over, a publish
+>   for a version an earlier opening also used is `unknown`, with reason
+>   `reusedVersion`, never `current`.
+> - **Unreadable entries make a file incomplete.** A publish with entries the
+>   store cannot read is marked `truncated` (`perFile`). When listing every
+>   file, such a file is included even when nothing could be kept.
+> - **`truncatedBy` gains two values:**
+>   - `storeEvicted`: the store dropped documents to stay bounded, so a
+>     missing or `notAnalyzed` file may have had diagnostics;
+>   - `details`: a message, code or related location was shortened (that
+>     file says `truncated`).
+>
+>   A related location the policy removes never sets a flag, so no flag can
+>   hint at a denied file.
+
 **Disclosure through allowed files.** A diagnostic on an allowed file can still point at a denied one:
 - Related locations in denied files are removed.
 - In the message, a path-like token that the policy's matcher classifies as denied is replaced with `[denied]` (for example, `Cannot find module './.env'`).

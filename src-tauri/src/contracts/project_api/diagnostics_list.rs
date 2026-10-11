@@ -114,7 +114,8 @@ pub(crate) enum FileDiagnostics {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         freshness_reason: Option<FreshnessReason>,
         diagnostics: Vec<Diagnostic>,
-        /// More diagnostics exist than were returned for this file.
+        /// The list is not complete: more diagnostics exist than were
+        /// returned for this file, or some were shortened (see `truncatedBy`).
         truncated: bool,
     },
     /// A producer exists for this kind of file, but no diagnostics can be
@@ -161,6 +162,9 @@ pub(crate) enum FreshnessReason {
     VersionAhead,
     /// Unknown: no version was recorded for this opening.
     NoSentVersion,
+    /// Unknown: an earlier opening of the document used the same version, so
+    /// which opening the producer diagnosed cannot be told apart.
+    ReusedVersion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,15 +222,22 @@ pub(crate) struct RelatedLocation {
     pub message: String,
 }
 
-/// A limit that ended the response.
+/// Why the response is not complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum TruncationReason {
-    /// A file had more than 100 diagnostics (that file says `truncated`).
+    /// A file has more diagnostics than it lists: over 100, or more than the
+    /// store could keep or read (that file says `truncated`).
     PerFile,
     /// The 1,000-diagnostic response ceiling was reached.
     Diagnostics,
     /// The encoded response ceiling was reached.
     ResponseSize,
+    /// The store dropped some files' diagnostics to stay within its bounds, so
+    /// a file missing from the list, or `notAnalyzed`, may have had some.
+    StoreEvicted,
+    /// A diagnostic's message, code or related locations were shortened (that
+    /// file says `truncated`).
+    Details,
 }
