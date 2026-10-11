@@ -1,6 +1,9 @@
-//! Agent-proposed changes (Project API build plan W2, W3b; contract brief
+//! Agent-proposed changes (Project API build plan W2, W3b, W3c; contract brief
 //! §13). W2a: proposing — `litria_changes_prepare`. W2b: applying —
-//! `litria_changes_apply` — and the review seam. W3b: new files.
+//! `litria_changes_apply` — and the review seam. W3b: new files. W3c: edits
+//! to documents the editor does not hold, planned on the disk text the agent
+//! read and opened into the session unsaved, in a background tab (owner
+//! ruling, 2026-10-11).
 //!
 //! A proposal's edits are checked against the editor's latest text (the
 //! bridge's `editor.checkChanges`, W1's planning), its new files' names
@@ -39,18 +42,20 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use super::bridge::{self, Bridge, CallFailure};
-use super::reader::{disk_revision, identity, Identity};
+use super::reader::{disk_revision, identity, read_disk, DiskRead, Identity};
 use super::workspace;
 use crate::contracts::boundary::invalid;
 use crate::contracts::context::{CallContext, Principal};
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::changes_apply::{ChangeOutcome, ChangesApplyRequest, ChangesApplyResult, Effect};
 use crate::contracts::project_api::changes_prepare::{
-    ChangeCheck, ChangesPrepareRequest, ChangesPrepareResult, PlanState, PreparedPlan, ProposedChange, PLAN_ID_LENGTH,
-    PLAN_TTL_SECONDS,
+    ChangeCheck, ChangesPrepareRequest, ChangesPrepareResult, PlanState, PreparedPlan, ProposedChange,
+    MAX_OPEN_FILE_BYTES, PLAN_ID_LENGTH, PLAN_TTL_SECONDS,
 };
+use crate::contracts::project_api_bridge::canvas::{ShowFilesOp, ShowFilesRequest, ShownFile};
 use crate::contracts::project_api_bridge::editor::{
     ApplyChangesOp, ApplyEntry, ChangeToCheck, CheckChangesOp, CheckChangesRequest, CheckedChange, EditToCheck,
+    FileToOpen,
 };
 use crate::contracts::project_api_bridge::files::{CreateFilesOp, CreateFilesRequest, CreatedFile, FileToCreate};
 use crate::db;
@@ -145,6 +150,7 @@ fn prepare(
             &context.epoch,
             &CheckChangesRequest {
                 changes: to_check.iter().map(|(_, change)| change.clone()).collect(),
+                opens: Vec::new(),
             },
         )?;
         // The reply answers exactly what was asked, in order; anything else is
@@ -154,24 +160,25 @@ fn prepare(
         {
             return Err(bridge::malformed());
         }
-        for (checked, (index, _)) in reply.changes.into_iter().zip(&to_check) {
-            let path = request.changes[*index].path().to_string();
-            checks[*index] = Some(match checked {
-                CheckedChange::Ready { .. } => ChangeCheck::Ready { path },
-                CheckedChange::Conflict { revision, .. } => ChangeCheck::Conflict { path, revision },
-                CheckedChange::NoMatch { edit, .. } => ChangeCheck::NoMatch { path, edit },
-                CheckedChange::Ambiguous { edit, .. } => ChangeCheck::Ambiguous { path, edit },
-                CheckedChange::NotInSession { .. } => ChangeCheck::NotInSession { path },
-            });
+        for (checked, (index, change)) in reply.changes.into_iter().zip(to_check) {
+            let path = request.changes[index].path().to_string();
+            let (check, plan) = match checked {
+                CheckedChange::Ready { .. } => (ChangeCheck::Ready { path }, Some(PlannedChange::Edit(change))),
+                CheckedChange::Conflict { revision, .. } => (ChangeCheck::Conflict { path, revision }, None),
+                CheckedChange::NoMatch { edit, .. } => (ChangeCheck::NoMatch { path, edit }, None),
+                CheckedChange::Ambiguous { edit, .. } => (ChangeCheck::Ambiguous { path, edit }, None),
+                // Not held with text of its own: an edit to the file on disk,
+                // as the agent read it (W3c).
+                CheckedChange::NotInSession { .. } => judge_disk_edit(root, path, change),
+            };
+            checks[index] = Some(check);
+            planned[index] = plan;
         }
     }
 
     let changes: Vec<ChangeCheck> = checks.into_iter().map(|check| check.expect("every change was judged")).collect();
     if !changes.iter().all(ChangeCheck::is_ready) {
         return Ok(ChangesPrepareResult { plan: None, changes });
-    }
-    for (index, change) in to_check {
-        planned[index] = Some(PlannedChange::Edit(change));
     }
     let planned: Vec<PlannedChange> =
         planned.into_iter().map(|change| change.expect("every ready change was planned")).collect();
@@ -291,7 +298,7 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
         .enumerate()
         .filter_map(|(index, change)| match change {
             PlannedChange::Edit(edit) => Some((index, edit)),
-            PlannedChange::Create(_) => None,
+            _ => None,
         })
         .collect();
     let creates: Vec<(usize, &FileToCreate)> = changes
@@ -299,20 +306,31 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
         .enumerate()
         .filter_map(|(index, change)| match change {
             PlannedChange::Create(file) => Some((index, file)),
-            PlannedChange::Edit(_) => None,
+            _ => None,
+        })
+        .collect();
+    let opens: Vec<(usize, &OpenEdit)> = changes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, change)| match change {
+            PlannedChange::Open(open) => Some((index, open)),
+            _ => None,
         })
         .collect();
     let unknown = |outcomes: Vec<Option<ChangeOutcome>>| (PlanState::NeedsReview, outcomes.into_iter().flatten().collect());
 
     // 1. Every new file, judged again as at the proposal — the policy, then
     // the name: a folder swapped for a link since could otherwise lead the
-    // create into a withheld folder (W3b adversarial check, reproduced). One
-    // that is not free now means nothing lands.
-    if !creates.is_empty() {
+    // create into a withheld folder (W3b adversarial check, reproduced). And
+    // every document to open, read again from disk: still the revision the
+    // edits were planned on (W3c). One that is not as planned means nothing
+    // lands.
+    let mut to_open: Vec<FileToOpen> = Vec::new();
+    if !creates.is_empty() || !opens.is_empty() {
         let Some(root) = bound_root(epoch) else {
             return (PlanState::Failed, Vec::new());
         };
-        let blocked: Vec<(usize, ChangeOutcome)> = creates
+        let mut blocked: Vec<(usize, ChangeOutcome)> = creates
             .iter()
             .filter_map(|(index, file)| {
                 let path = file.path.clone();
@@ -323,6 +341,23 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
                 }
             })
             .collect();
+        for (index, open) in &opens {
+            let path = open.path.clone();
+            match read_for_edit(&root, &open.path) {
+                DiskEdit::Text { text, revision } if revision == open.base_revision => {
+                    match plan_text_edits(&text, &open.edits) {
+                        Ok(edited) => to_open.push(FileToOpen { path, base_text: text, text: edited }),
+                        // The same text plans the same way; only a planner
+                        // change could get here.
+                        Err(_) => blocked.push((*index, ChangeOutcome::Conflict { path, revision })),
+                    }
+                }
+                DiskEdit::Text { revision, .. } => blocked.push((*index, ChangeOutcome::Conflict { path, revision })),
+                DiskEdit::Missing => blocked.push((*index, ChangeOutcome::NotInSession { path })),
+                DiskEdit::Denied => blocked.push((*index, ChangeOutcome::Denied { path })),
+                DiskEdit::NotEditable => blocked.push((*index, ChangeOutcome::Unavailable { path })),
+            }
+        }
         if !blocked.is_empty() {
             let outcomes = changes
                 .iter()
@@ -336,12 +371,54 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
         }
     }
 
-    // 2. The edits, all or none.
-    if !edits.is_empty() {
-        let request = CheckChangesRequest { changes: edits.iter().map(|(_, edit)| (*edit).clone()).collect() };
+    // 2. The documents to open go on the canvas first: every session document
+    // belongs to a piece (W3c). A piece only shows a file that exists, so one
+    // made for a plan that then does not apply is harmless; if any cannot be
+    // made, nothing is applied.
+    if !to_open.is_empty() {
+        let request = ShowFilesRequest { paths: to_open.iter().map(|open| open.path.clone()).collect() };
+        let shown = match bridge.call_reporting::<ShowFilesOp>(epoch, &request) {
+            Ok(result) if result.files.iter().map(ShownFile::path).eq(request.paths.iter().map(String::as_str)) => {
+                result.files
+            }
+            // Pieces only: no change was applied, whatever happened.
+            _ => return (PlanState::Failed, Vec::new()),
+        };
+        if shown.iter().any(|file| matches!(file, ShownFile::Failed { .. })) {
+            let failed: Vec<&str> = shown
+                .iter()
+                .filter_map(|file| match file {
+                    ShownFile::Failed { path } => Some(path.as_str()),
+                    ShownFile::Shown { .. } => None,
+                })
+                .collect();
+            let outcomes = changes
+                .iter()
+                .map(|change| match change {
+                    PlannedChange::Open(open) if failed.contains(&open.path.as_str()) => {
+                        ChangeOutcome::Unavailable { path: open.path.clone() }
+                    }
+                    other => ChangeOutcome::Ready { path: other.path().to_string() },
+                })
+                .collect();
+            return (PlanState::Failed, outcomes);
+        }
+    }
+
+    // 3. The edits and the opened documents, all or none.
+    if !edits.is_empty() || !to_open.is_empty() {
+        let request = CheckChangesRequest {
+            changes: edits.iter().map(|(_, edit)| (*edit).clone()).collect(),
+            opens: to_open.clone(),
+        };
+        let asked: Vec<(usize, &str)> = edits
+            .iter()
+            .map(|(index, edit)| (*index, edit.path.as_str()))
+            .chain(opens.iter().zip(&to_open).map(|((index, _), open)| (*index, open.path.as_str())))
+            .collect();
         match bridge.call_reporting::<ApplyChangesOp>(epoch, &request) {
-            Ok(result) if result.changes.iter().map(ApplyEntry::path).eq(edits.iter().map(|(_, edit)| edit.path.as_str())) => {
-                for ((index, _), entry) in edits.iter().zip(result.changes) {
+            Ok(result) if result.changes.iter().map(ApplyEntry::path).eq(asked.iter().map(|(_, path)| *path)) => {
+                for ((index, _), entry) in asked.iter().zip(result.changes) {
                     outcomes[*index] = Some(outcome_of(entry));
                 }
                 if !result.applied {
@@ -368,7 +445,7 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge) -> (PlanSt
         }
     }
 
-    // 3. The new files, through the filesystem write manager.
+    // 4. The new files, through the filesystem write manager.
     if !creates.is_empty() {
         let request = CreateFilesRequest { files: creates.iter().map(|(_, file)| (*file).clone()).collect() };
         match bridge.call_reporting::<CreateFilesOp>(epoch, &request) {
@@ -441,6 +518,82 @@ fn name_is_taken(root: &Path, path: &str) -> bool {
     !matches!(fs::symlink_metadata(root.join(path)), Err(error) if error.kind() == ErrorKind::NotFound)
 }
 
+/// A document read from disk for an edit (W3c).
+enum DiskEdit {
+    Text { text: String, revision: String },
+    Missing,
+    Denied,
+    /// Binary, not a regular file, unreadable, or over 1 MiB.
+    NotEditable,
+}
+
+/// Read a document the editor does not hold, as `litria_files_read` reads it
+/// (syntax, policy, typed resolution, policy on the canonical target), for an
+/// edit: whole, and no larger than an editor tab takes.
+fn read_for_edit(root: &Path, path: &str) -> DiskEdit {
+    match read_disk(root, path) {
+        DiskRead::Text { text, revision } if text.len() <= MAX_OPEN_FILE_BYTES => DiskEdit::Text { text, revision },
+        DiskRead::NotFound => DiskEdit::Missing,
+        DiskRead::Denied | DiskRead::InvalidPath => DiskEdit::Denied,
+        DiskRead::Text { .. } | DiskRead::NotFile | DiskRead::NotText | DiskRead::TooLarge | DiskRead::Unreadable => {
+            DiskEdit::NotEditable
+        }
+    }
+}
+
+/// An edit to a document the editor does not hold (W3c): checked against the
+/// disk text the agent read (its revision), and planned on it.
+fn judge_disk_edit(root: &Path, path: String, change: ChangeToCheck) -> (ChangeCheck, Option<PlannedChange>) {
+    match read_for_edit(root, &change.path) {
+        DiskEdit::Missing => (ChangeCheck::NotInSession { path }, None),
+        DiskEdit::Denied => (ChangeCheck::Denied { path }, None),
+        DiskEdit::NotEditable => (ChangeCheck::NotEditable { path }, None),
+        DiskEdit::Text { revision, .. } if revision != change.expected_revision => {
+            (ChangeCheck::Conflict { path, revision }, None)
+        }
+        DiskEdit::Text { text, revision } => match plan_text_edits(&text, &change.edits) {
+            Err(EditMiss::NoMatch(edit)) => (ChangeCheck::NoMatch { path, edit }, None),
+            Err(EditMiss::Ambiguous(edit)) => (ChangeCheck::Ambiguous { path, edit }, None),
+            Ok(_) => (
+                ChangeCheck::Ready { path },
+                Some(PlannedChange::Open(OpenEdit {
+                    path: change.path,
+                    base_revision: revision,
+                    edits: change.edits,
+                })),
+            ),
+        },
+    }
+}
+
+/// Why an edit did not plan.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum EditMiss {
+    NoMatch(u32),
+    Ambiguous(u32),
+}
+
+/// Apply exact-text edits in order, exactly as the editor plans them
+/// (`planBufferEdit`): each `oldText` must occur exactly once in the text as
+/// the earlier edits leave it, overlapping occurrences counting.
+pub(crate) fn plan_text_edits(text: &str, edits: &[EditToCheck]) -> Result<String, EditMiss> {
+    let mut text = text.to_string();
+    for (index, edit) in edits.iter().enumerate() {
+        let index = index as u32;
+        let Some(at) = text.find(&edit.old_text) else {
+            return Err(EditMiss::NoMatch(index));
+        };
+        // Search again from the next character: an overlapping occurrence
+        // counts, as `indexOf(oldText, at + 1)` counts it.
+        let next = at + text[at..].chars().next().map_or(1, char::len_utf8);
+        if text[next..].contains(edit.old_text.as_str()) {
+            return Err(EditMiss::Ambiguous(index));
+        }
+        text.replace_range(at..at + edit.old_text.len(), &edit.new_text);
+    }
+    Ok(text)
+}
+
 /// The project root bound to `epoch`, if it is still the open workspace.
 fn bound_root(epoch: &str) -> Option<PathBuf> {
     match db::workspace_binding() {
@@ -457,6 +610,7 @@ fn outcome_of(entry: ApplyEntry) -> ChangeOutcome {
         ApplyEntry::NoMatch { path, edit } => ChangeOutcome::NoMatch { path, edit },
         ApplyEntry::Ambiguous { path, edit } => ChangeOutcome::Ambiguous { path, edit },
         ApplyEntry::NotInSession { path } => ChangeOutcome::NotInSession { path },
+        ApplyEntry::Unavailable { path } => ChangeOutcome::Unavailable { path },
     }
 }
 
@@ -475,17 +629,29 @@ pub(crate) fn plans() -> &'static Mutex<PlanStore> {
 }
 
 /// One change of a plan, as Litria carries it out: an edit for the editor,
-/// or a new file for the filesystem write manager.
+/// an edit that opens its document from disk (W3c), or a new file for the
+/// filesystem write manager.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub(crate) enum PlannedChange {
     Edit(ChangeToCheck),
+    Open(OpenEdit),
     Create(FileToCreate),
+}
+
+/// An edit to a document the editor did not hold: planned on the disk text at
+/// `base_revision`, read again when the plan applies.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub(crate) struct OpenEdit {
+    pub path: String,
+    pub base_revision: String,
+    pub edits: Vec<EditToCheck>,
 }
 
 impl PlannedChange {
     pub(crate) fn path(&self) -> &str {
         match self {
             PlannedChange::Edit(edit) => &edit.path,
+            PlannedChange::Open(open) => &open.path,
             PlannedChange::Create(file) => &file.path,
         }
     }

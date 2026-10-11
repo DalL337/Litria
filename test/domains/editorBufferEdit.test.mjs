@@ -114,3 +114,69 @@ test('a malformed request is invalid, never applied', () => {
     assert.deepEqual(plan(state, request), { outcome: 'invalid' }, JSON.stringify(request));
   }
 });
+
+// ─── W3c: documents the session does not hold with text of its own ──────────
+
+test('a closed entry without unsaved text is planned against the disk, never the entry', () => {
+  // The agent read it from disk (a disk revision), as reads serve closed
+  // clean entries: the session's copy is not what it read.
+  const state = sessionWith([A], [1]);
+  const result = plan(state, { path: 'src/a.ts', expectedRevision: bufferRevision(A.code), edits: [{ oldText: 'a = 1', newText: 'a = 2' }] });
+  assert.deepEqual(result, { outcome: 'notInSession' });
+});
+
+test('a closed entry WITH unsaved text is still the session\'s', () => {
+  let state = sessionWith([A], [1]);
+  state = editorSessionReducer(state, { type: 'UPDATE_WORKING_CODE', tabId: 1, workingCode: 'export const a = 7;\n' });
+  const result = plan(state, { path: 'src/a.ts', expectedRevision: bufferRevision('export const a = 7;\n'), edits: [{ oldText: '7', newText: '8' }] });
+  assert.equal(result.outcome, 'applied');
+});
+
+const B = { id: 2, filename: 'src/b.ts', code: 'export const b = 1;\n' };
+const C = { id: 3, filename: 'src/c.ts' };
+
+test('an agent\'s edit opens in a background tab: the active tab, the focus and the drawer stay', () => {
+  const state = sessionWith([A, B]);
+  const before = { active: state.activeTabIdByPane, focused: state.focusedPaneId, isOpen: state.isOpen };
+  const next = editorSessionReducer(state, {
+    type: 'OPEN_IN_BACKGROUND', piece: C, code: 'export const c = 1;\n', workingCode: 'export const c = 2;\n'
+  });
+  assert.ok(next.openTabIds.includes(3), 'a tab beside the open ones');
+  assert.deepEqual(next.tabsById[3], {
+    id: 3, pieceId: 3, filename: 'src/c.ts',
+    code: 'export const c = 1;\n', workingCode: 'export const c = 2;\n', paneId: state.focusedPaneId
+  }, 'the disk text is the saved baseline; the edit is unsaved');
+  assert.deepEqual(
+    { active: next.activeTabIdByPane, focused: next.focusedPaneId, isOpen: next.isOpen },
+    before
+  );
+});
+
+test('with every tab slot taken, the edit is held unsaved without a tab, and no tab is closed', () => {
+  const pieces = Array.from({ length: 8 }, (_, index) => ({ id: index + 10, filename: `f${index}.ts`, code: '' }));
+  const state = sessionWith(pieces);
+  assert.equal(state.openTabIds.length, 8);
+  const next = editorSessionReducer(state, {
+    type: 'OPEN_IN_BACKGROUND', piece: { id: 3, filename: 'a.ts' }, code: 'x\n', workingCode: 'y\n'
+  });
+  assert.deepEqual(next.openTabIds, state.openTabIds, 'nothing evicted, even a name that sorts after it');
+  assert.equal(next.tabsById[3].workingCode, 'y\n', 'held as an unsaved closed entry');
+});
+
+test('a closed clean entry is replaced by the disk text and the edit', () => {
+  const state = sessionWith([A, B], [1]);
+  const next = editorSessionReducer(state, {
+    type: 'OPEN_IN_BACKGROUND', piece: A, code: 'export const a = 5;\n', workingCode: 'export const a = 6;\n'
+  });
+  assert.equal(next.tabsById[1].code, 'export const a = 5;\n');
+  assert.equal(next.tabsById[1].workingCode, 'export const a = 6;\n');
+  assert.ok(next.openTabIds.includes(1));
+});
+
+test('line endings are normalized as for every session document', () => {
+  const next = editorSessionReducer(sessionWith([A]), {
+    type: 'OPEN_IN_BACKGROUND', piece: C, code: 'a\r\nb\r\n', workingCode: 'a\r\nc\r\n'
+  });
+  assert.equal(next.tabsById[3].code, 'a\nb\n');
+  assert.equal(next.tabsById[3].workingCode, 'a\nc\n');
+});

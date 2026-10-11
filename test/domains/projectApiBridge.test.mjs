@@ -160,7 +160,11 @@ async function readyBridge({ session = fixtureSession(), epoch = 'ws-7', workspa
     disk: new Set(['notes.md']),
     created: [],
     canvas: [],
-    createFile: null
+    createFile: null,
+    // The canvas's pieces by path (W3c): README.md already has one.
+    pieces: new Map([['README.md', { id: 7, filename: 'README.md' }]]),
+    nextPieceId: 40,
+    opened: []
   };
   const bridge = createProjectApiBridge({
     ports: {
@@ -185,8 +189,23 @@ async function readyBridge({ session = fixtureSession(), epoch = 'ws-7', workspa
           return { success: true };
         }),
         holds: (path) => getSessionDocumentsByPath(holder.session).has(path),
-        showOnCanvas: async (path) => { holder.canvas.push(path); }
-      })
+        // What createPieceFromFile does: the existing piece, or a new one.
+        showOnCanvas: async (path) => {
+          holder.canvas.push(path);
+          if (!holder.pieces.has(path)) holder.pieces.set(path, { id: holder.nextPieceId++, filename: path });
+          return holder.pieces.get(path);
+        }
+      }),
+      // What the session's heldRevision and openInBackground do (W3c).
+      heldRevision: (path) => {
+        const held = getSessionDocumentsByPath(holder.session).get(path);
+        return held && held.state !== 'closedClean' ? bufferRevision(held.text) : null;
+      },
+      openInBackground: (piece, { code, text }) => {
+        holder.opened.push(piece.filename);
+        holder.session = reduce(holder.session, { type: 'OPEN_IN_BACKGROUND', piece, code, workingCode: text });
+        return { outcome: 'applied', revision: bufferRevision(holder.session.tabsById[piece.id].workingCode) };
+      }
     },
     transport,
     getWorkspaceEpoch: () => current,
@@ -877,6 +896,8 @@ async function repliesSettle(transport, count) {
   assert.equal(transport.replies.length, count, 'every request was answered');
 }
 
+const createRequestFor = (op, request, requestId = 'rq1') => ({ requestId, epoch: 'ws-7', generation: 'g3', op, request });
+
 const createRequest = (requestId, files) => ({
   requestId, epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.createFiles, request: { files }
 });
@@ -974,5 +995,91 @@ test('files.create: an answer that fails after it began is internal, never "noth
   await repliesSettle(transport, 1);
   assert.equal(transport.replies[0].reply.kind, 'error');
   assert.equal(transport.replies[0].reply.code, 'internal');
+});
+
+// ─── canvas.showFiles and editor.applyChanges opens (build plan W3c) ────────
+
+test('canvas.showFiles: the committed request gets the committed reply', async () => {
+  const { bridge, transport, holder } = await readyBridge();
+  bridge.handleRequest(acceptedFixture('canvas.showFiles.request.json'));
+  await repliesSettle(transport, 1);
+  const [{ requestId, generation, reply }] = transport.replies;
+  assert.equal(requestId, 'r1');
+  assert.equal(generation, 'g3');
+  assert.deepEqual(reply, acceptedFixture('canvas.showFiles.reply.json'));
+  assertDeclared(BRIDGE_OPS.showFiles, reply);
+  assert.deepEqual([...holder.pieces.keys()].sort(), ['README.md', 'src/closed.ts'], 'one new piece, README.md kept');
+});
+
+test('editor.applyChanges with an open: the committed request gets the committed reply', async () => {
+  // The user is working in src/session.ts.
+  const session = { ...proposalSession(), activeTabIdByPane: { 1: 2, 2: null } };
+  const { bridge, transport, holder } = await readyBridge({ session });
+  const before = { active: holder.session.activeTabIdByPane, focused: holder.session.focusedPaneId };
+  // The piece canvas.showFiles made just before, remembered by the bridge:
+  // the canvas owner has not rendered it yet.
+  bridge.handleRequest(createRequestFor('canvas.showFiles', { paths: ['src/closed.ts'] }));
+  await repliesSettle(transport, 1);
+  bridge.handleRequest(acceptedFixture('editor.applyChanges.request.with-open.json'));
+  await repliesSettle(transport, 2);
+  const { reply } = transport.replies[1];
+  assert.deepEqual(reply, acceptedFixture('editor.applyChanges.reply.with-open.json'));
+  assertDeclared(BRIDGE_OPS.applyChanges, reply);
+  assert.deepEqual(holder.opened, ['src/closed.ts']);
+  const opened = Object.values(holder.session.tabsById).find((entry) => entry.filename === 'src/closed.ts');
+  assert.equal(opened.code, 'export const closed = 1;\n', 'the disk text is the saved baseline');
+  assert.equal(opened.workingCode, 'export const closed = 2;\n', 'the edit is unsaved');
+  assert.ok(holder.session.openTabIds.includes(opened.id), 'a tab beside the open ones');
+  assert.deepEqual({ active: holder.session.activeTabIdByPane, focused: holder.session.focusedPaneId }, before, 'the user\'s tab stays active');
+});
+
+test('editor.applyChanges: an open with no canvas piece is unavailable, and nothing applies', async () => {
+  const { bridge, transport, holder } = await readyBridge({ session: proposalSession() });
+  const before = JSON.stringify(holder.session);
+  bridge.handleRequest(acceptedFixture('editor.applyChanges.request.with-open.json'));
+  await repliesSettle(transport, 1);
+  assert.deepEqual(transport.replies[0].reply, acceptedFixture('editor.applyChanges.reply.unavailable.json'));
+  assert.deepEqual(holder.applied, [], 'the ready edit was not applied either');
+  assert.equal(JSON.stringify(holder.session), before);
+});
+
+test('editor.applyChanges: a document the user has opened and typed in meanwhile is a conflict', async () => {
+  const session = proposalSession();
+  const { bridge, transport, holder } = await readyBridge({ session });
+  holder.pieces.set('src/twice.ts', { id: 3, filename: 'src/twice.ts' });
+  bridge.handleRequest(createRequestFor('editor.applyChanges', {
+    changes: [],
+    opens: [{ path: 'src/twice.ts', baseText: 'x x\n', text: 'y\n' }]
+  }));
+  await repliesSettle(transport, 1);
+  assert.deepEqual(transport.replies[0].reply.result, { applied: false, changes: [
+    { outcome: 'conflict', path: 'src/twice.ts', revision: bufferRevision('x x\n') }
+  ] });
+  assert.deepEqual(holder.opened, []);
+});
+
+test('editor.applyChanges: a malformed open is refused and applies nothing', async () => {
+  const { bridge, transport, holder } = await readyBridge({ session: proposalSession() });
+  for (const request of [
+    { changes: [], opens: [] },
+    { changes: [], opens: [{ path: 'src/a.ts', text: 'x' }] },
+    { changes: [], opens: 'src/a.ts' }
+  ]) {
+    const expected = transport.replies.length + 1;
+    bridge.handleRequest(createRequestFor('editor.applyChanges', request, `ro-${expected}`));
+    await repliesSettle(transport, expected);
+  }
+  assert.deepEqual(transport.replies.map((entry) => entry.reply.code), ['invalidRequest', 'invalidRequest', 'invalidRequest']);
+  assert.deepEqual(holder.opened, []);
+});
+
+test('canvas.showFiles: once the project switches, no piece is made', async () => {
+  const context = await readyBridge();
+  const { bridge, transport, holder } = context;
+  context.setWorkspaceEpoch('ws-8');
+  bridge.handleRequest(createRequestFor('canvas.showFiles', { paths: ['src/closed.ts'] }));
+  await repliesSettle(transport, 1);
+  assert.equal(transport.replies[0].reply.code, 'workspaceChanged');
+  assert.equal(holder.pieces.has('src/closed.ts'), false);
 });
 

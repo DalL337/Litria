@@ -1,0 +1,12 @@
+{
+  "kind": "result",
+  "result": {
+    "files": [
+      {
+        "outcome": "shown",
+        "path": "src/a.ts",
+        "pieceId": 7
+      }
+    ]
+  }
+}

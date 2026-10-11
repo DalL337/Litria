@@ -30,7 +30,7 @@ impl Operation for ChangesApplyOp {
     const DESCRIPTION: &'static str = "Apply a plan from litria_changes_prepare. Its text edits apply all or none: \
          every document must still be the revision it was proposed against, otherwise nothing is applied (state \
          conflict; propose again). Applied edits are in the editor, unsaved (effect buffer), each with its new \
-         revision. New files are created after the edits, each only if nothing has its name (effect disk; outcome \
+         revision; a document that was not open is opened beside the open tabs. New files are created after the edits, each only if nothing has its name (effect disk; outcome \
          created with the file's revision, or exists); if only some changes land the state is partial and each \
          change says what happened. A plan is applied at most once; asking again returns the same outcome. If \
          Litria is set to have a person review agent edits, the plan waits for that decision (state \
@@ -90,7 +90,8 @@ pub(crate) enum Effect {
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(tag = "outcome", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub(crate) enum ChangeOutcome {
-    /// Changed; the document's revision now.
+    /// Changed in the editor, unsaved; the document's revision now. A document
+    /// that was not open was opened beside the open tabs.
     Applied { path: String, revision: String },
     /// Would have applied, but another document of the plan did not: nothing
     /// was applied.
@@ -101,8 +102,11 @@ pub(crate) enum ChangeOutcome {
     NoMatch { path: String, edit: u32 },
     /// The edit at this index matches more than once now.
     Ambiguous { path: String, edit: u32 },
-    /// The editor no longer holds the document.
+    /// Neither the editor nor the disk has the document now.
     NotInSession { path: String },
+    /// The document could not be opened into the editor (its canvas piece could
+    /// not be made). Nothing was applied.
+    Unavailable { path: String },
     /// The new file was created on disk; its revision as created.
     Created { path: String, revision: String },
     /// Not created: something has the new file's name now, on disk or open in

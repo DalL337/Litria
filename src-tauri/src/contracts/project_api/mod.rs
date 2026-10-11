@@ -418,6 +418,7 @@ pub(crate) mod samples {
                 ChangeCheck::Denied { path: ".env".into() },
                 ChangeCheck::InvalidPath { path: "../outside.ts".into() },
                 ChangeCheck::Exists { path: "src/index.ts".into() },
+                ChangeCheck::NotEditable { path: "assets/logo.png".into() },
             ],
         }
     }

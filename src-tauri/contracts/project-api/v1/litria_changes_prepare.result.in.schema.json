@@ -114,12 +114,29 @@
           ]
         },
         {
-          "description": "The editor does not hold this document; open it first (disk edits come\nlater).",
+          "description": "Neither the editor nor the disk has this document.",
           "type": "object",
           "properties": {
             "outcome": {
               "type": "string",
               "const": "notInSession"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "The document is not one Litria opens as text: binary, not a regular\nfile, unreadable, or over 1 MiB.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "notEditable"
             },
             "path": {
               "type": "string"

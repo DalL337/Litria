@@ -135,7 +135,7 @@ export function getPaneTagsByPieceId(state) {
 
 const SESSION_STATE_RANK = { closedClean: 0, closedDirty: 1, open: 2 };
 
-function sessionPathOf(tab) {
+export function sessionPathOf(tab) {
   return typeof tab?.filename === 'string'
     ? tab.filename.replace(/\\/g, '/').replace(/^\/+/, '')
     : '';
@@ -219,7 +219,10 @@ export function planBufferEdit(state, request, revisionOf) {
     return { outcome: 'invalid' };
   }
   const document = getSessionDocumentsByPath(state).get(sessionPathOf({ filename: path }));
-  if (!document) return { outcome: 'notInSession' };
+  // A closed entry with no unsaved text is read from disk (contract brief §5),
+  // so an edit to it is planned against the disk (build plan W3c), never
+  // against this entry: an agent that read it holds a disk revision.
+  if (!document || document.state === 'closedClean') return { outcome: 'notInSession' };
   const current = document.text;
   if (revisionOf(current) !== expectedRevision) {
     return { outcome: 'conflict', revision: revisionOf(current) };
@@ -402,6 +405,30 @@ export function editorSessionReducer(state, action) {
           [targetPane]: tab.id
         },
         focusedPaneId: targetPane
+      };
+      return withPaneInvariants(next);
+    }
+    case 'OPEN_IN_BACKGROUND': {
+      // An agent's edit to a file that was not open (Project API build plan
+      // W3c; owner ruling 2026-10-11, "background tab"): the file joins the
+      // session with the edit as unsaved text, and a tab beside the open ones
+      // in the focused pane, without taking the active tab, the focused pane
+      // or the drawer. Its saved baseline is the disk text the edit was
+      // planned on. With every tab slot taken it is held as a closed entry
+      // (Save All still sees it), never by closing one of the user's tabs.
+      const pane = state.focusedPaneId;
+      const tab = normalizeTabFromPiece(
+        { ...action.piece, code: action.code, workingCode: action.workingCode },
+        pane
+      );
+      const openTabs = state.openTabIds.map((id) => state.tabsById[id]).filter(Boolean);
+      const shown = state.openTabIds.includes(tab.id) || openTabs.length >= MAX_OPEN_TABS
+        ? state.openTabIds
+        : dedupeTabs([...openTabs, tab].sort(byFilename)).map((entry) => entry.id);
+      const next = {
+        ...state,
+        openTabIds: shown,
+        tabsById: { ...state.tabsById, [tab.id]: tab }
       };
       return withPaneInvariants(next);
     }

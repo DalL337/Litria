@@ -48,7 +48,7 @@
       "request": "editor.checkChanges.request.schema.json"
     },
     {
-      "description": "Apply an approved plan's text changes to the editor session, all or none: every change is checked against the latest text and, only if every one is still ready, all are applied in the same turn (unsaved, undoable). Answers applied with each document's new revision, or not applied with what each change found.",
+      "description": "Apply an approved plan's text changes to the editor session, all or none: every change is checked against the latest text and, only if every one is still ready, all are applied in the same turn (unsaved). Opens (build plan W3c) join the same all or none: each document the session must not hold with text of its own (conflict) and whose canvas piece must exist (unavailable) is opened beside the open tabs with its text, unsaved. Answers applied with each document's new revision, or not applied with what each change found; the changes' entries first, then the opens'.",
       "name": "editor.applyChanges",
       "owner": "EditorDomain",
       "reply": "editor.applyChanges.reply.schema.json",
@@ -60,6 +60,13 @@
       "owner": "FilesystemWriteManager",
       "reply": "files.create.reply.schema.json",
       "request": "files.create.request.schema.json"
+    },
+    {
+      "description": "Put each existing file on the canvas: a piece made from the file on disk for each file that has none (no editor tab). One answer per file, in request order: shown (it has a piece now) or failed. Rust sends only paths the disclosure policy allows.",
+      "name": "canvas.showFiles",
+      "owner": "PieceDomain",
+      "reply": "canvas.showFiles.reply.schema.json",
+      "request": "canvas.showFiles.request.schema.json"
     }
   ],
   "replyCommand": "project_api_bridge_reply",

@@ -32,7 +32,8 @@ export const BRIDGE_OPS = Object.freeze({
   graph: 'workspace.graph',
   checkChanges: 'editor.checkChanges',
   applyChanges: 'editor.applyChanges',
-  createFiles: 'files.create'
+  createFiles: 'files.create',
+  showFiles: 'canvas.showFiles'
 });
 /** Encoded size of one reply (contract brief §10); the catalog publishes it. */
 export const MAX_REPLY_BYTES = 512 * 1024;
@@ -707,19 +708,52 @@ export function answerCheckChanges(request, check) {
 }
 
 /**
- * `editor.applyChanges` (Project API build plan W2b): an approved plan,
+ * `editor.applyChanges` (Project API build plan W2b, W3c): an approved plan,
  * applied all or none. Every change is checked first with `check`; only if
  * every one is still ready are all applied with `apply` (the session's
  * `applyBufferEdit`) — in this same synchronous turn, so nothing can change in
  * between and the documents change together. Otherwise nothing is applied and
  * the answer says what each change found (`ready` = would have applied).
+ *
+ * `request.opens` (W3c) are documents the session did not hold, with the
+ * disk text Rust read (`baseText`) and the edited text (`text`). They join
+ * the same all or none: each must still not be held with text of its own
+ * (`opens.heldRevision`: `conflict`) and must have a canvas piece
+ * (`opens.pieceFor`: `unavailable`); then each opens in a background tab
+ * with `opens.openInBackground` (owner ruling: the user's active tab stays).
+ * Answers list the changes first, then the opens.
  */
-export function answerApplyChanges(request, check, apply) {
+export function answerApplyChanges(request, check, apply, opens = null) {
   if (typeof apply !== 'function') return refusal('invalidRequest');
-  const checked = checkAll(request, check);
+  const toOpen = request?.opens ?? [];
+  if (
+    !Array.isArray(toOpen)
+    || toOpen.length > MAX_CREATE_FILES
+    || toOpen.some((open) => !open || typeof open.path !== 'string' || typeof open.baseText !== 'string' || typeof open.text !== 'string')
+  ) {
+    return refusal('invalidRequest');
+  }
+  const hasChanges = Array.isArray(request?.changes) && request.changes.length > 0;
+  if (!hasChanges && toOpen.length === 0) return refusal('invalidRequest');
+  const checked = hasChanges ? checkAll(request, check) : [];
   if (!checked) return refusal('invalidRequest');
-  if (!checked.every(({ answer }) => answer.outcome === 'ready')) {
-    return { kind: 'result', result: { applied: false, changes: checked.map(({ answer }) => answer) } };
+  if (
+    toOpen.length > 0
+    && ['heldRevision', 'pieceFor', 'openInBackground'].some((port) => typeof opens?.[port] !== 'function')
+  ) {
+    return refusal('internal');
+  }
+  const opening = toOpen.map((open) => {
+    const { path } = open;
+    const held = opens.heldRevision(path);
+    if (typeof held === 'string') return { open, answer: { outcome: 'conflict', path, revision: held } };
+    const piece = opens.pieceFor(path);
+    if (!piece) return { open, answer: { outcome: 'unavailable', path } };
+    return { open, piece, answer: { outcome: 'ready', path } };
+  });
+  const answers = [...checked, ...opening].map(({ answer }) => answer);
+  if (!answers.every((answer) => answer.outcome === 'ready')) {
+    return { kind: 'result', result: { applied: false, changes: answers } };
   }
   const changes = [];
   for (const { request: change } of checked) {
@@ -730,7 +764,49 @@ export function answerApplyChanges(request, check, apply) {
     if (applied?.outcome !== 'applied') return refusal('internal');
     changes.push({ outcome: 'applied', path: change.path, revision: applied.revision });
   }
+  for (const { open, piece } of opening) {
+    const opened = opens.openInBackground(piece, { code: open.baseText, text: open.text });
+    if (opened?.outcome !== 'applied') return refusal('internal');
+    changes.push({ outcome: 'applied', path: open.path, revision: opened.revision });
+  }
   return { kind: 'result', result: { applied: true, changes } };
+}
+
+/**
+ * `canvas.showFiles` (Project API build plan W3c): a canvas piece for each
+ * existing file an agent's edit opens (every session document belongs to a
+ * piece), made from the file on disk, with no editor tab. `owners` are taken
+ * once per request, like `files.create`'s: `showOnCanvas(path)` answers the
+ * piece (made, or already there) or null; `stillCurrent()` stops the batch
+ * once the request's workspace is no longer open. Each piece shown is
+ * `remember`ed for the `editor.applyChanges` that follows, which may arrive
+ * before React has rendered it. One answer per file: `shown` or `failed`.
+ */
+export async function answerShowFiles(request, owners) {
+  const paths = request?.paths;
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > MAX_CREATE_FILES || paths.some((path) => typeof path !== 'string')) {
+    return refusal('invalidRequest');
+  }
+  const { showOnCanvas, stillCurrent, remember } = owners ?? {};
+  if (typeof showOnCanvas !== 'function' || typeof stillCurrent !== 'function') return refusal('internal');
+  const files = [];
+  for (const path of paths) {
+    let piece = null;
+    if (stillCurrent()) {
+      try {
+        piece = await showOnCanvas(path);
+      } catch {
+        piece = null;
+      }
+    }
+    if (piece && stillCurrent()) {
+      remember?.(path, piece);
+      files.push({ outcome: 'shown', path });
+    } else {
+      files.push({ outcome: 'failed', path });
+    }
+  }
+  return { kind: 'result', result: { files } };
 }
 
 /**
@@ -841,7 +917,10 @@ function checkAll(request, check) {
  *   checkBufferEdit: (request: object) => object,
  *   applyBufferEdit: (request: object) => object,
  *   fileOwners?: () => {createFile: (path: string, text: string) => Promise<object>,
- *     holds: (path: string) => boolean, showOnCanvas: (path: string) => Promise<unknown>}
+ *     holds: (path: string) => boolean, showOnCanvas: (path: string) => Promise<unknown>},
+ *   heldRevision?: (path: string) => (string|null),
+ *   pieceFor?: (path: string) => (object|null),
+ *   openInBackground?: (piece: object, texts: {code: string, text: string}) => object
  * }} deps.ports
  *   Read-only owner ports: EditorDomain's `getSessionDocumentsByPath` and
  *   `getActiveSessionDocument`; the selection, its pieces and the selected
@@ -858,6 +937,14 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
   const state = { readyEpoch: null, attached: null, attaching: null, disposed: false };
   const replied = new Set();
   const revisionOf = createRevisions();
+  // Pieces `canvas.showFiles` just made, by path, for the
+  // `editor.applyChanges` that opens them (W3c). Bounded: a plan's changes.
+  const shownPieces = new Map();
+  const rememberShown = (path, piece) => {
+    shownPieces.delete(path);
+    shownPieces.set(path, piece);
+    if (shownPieces.size > MAX_CREATE_FILES) shownPieces.delete(shownPieces.keys().next().value);
+  };
   const enqueue = transport.enqueue ?? ((work) => work());
 
   async function reconcile() {
@@ -960,9 +1047,19 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
       case BRIDGE_OPS.checkChanges:
         return answerCheckChanges(request, ports.checkBufferEdit);
       case BRIDGE_OPS.applyChanges:
-        return answerApplyChanges(request, ports.checkBufferEdit, ports.applyBufferEdit);
+        return answerApplyChanges(request, ports.checkBufferEdit, ports.applyBufferEdit, {
+          heldRevision: (path) => ports.heldRevision?.(path) ?? null,
+          pieceFor: (path) => shownPieces.get(path) ?? ports.pieceFor?.(path) ?? null,
+          openInBackground: ports.openInBackground
+        });
       case BRIDGE_OPS.createFiles:
         return answerCreateFiles(request, { ...(ports.fileOwners?.() ?? {}), stillCurrent });
+      case BRIDGE_OPS.showFiles:
+        return answerShowFiles(request, {
+          showOnCanvas: ports.fileOwners?.()?.showOnCanvas ?? null,
+          stillCurrent,
+          remember: rememberShown
+        });
       default:
         return refusal('unknownOperation');
     }

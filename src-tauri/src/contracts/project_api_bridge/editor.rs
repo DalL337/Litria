@@ -298,6 +298,26 @@ impl BridgeOperation for CheckChangesOp {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CheckChangesRequest {
     pub changes: Vec<ChangeToCheck>,
+    /// `editor.applyChanges` only (build plan W3c): documents the session does
+    /// not hold, to open with their edits. Answered after `changes`, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opens: Vec<FileToOpen>,
+}
+
+/// A document opened into the session with an edit (build plan W3c): Rust read
+/// `baseText` from disk at the agent's revision and applied the edits to make
+/// `text`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileToOpen {
+    /// The project-relative path; its canvas piece already exists
+    /// (`canvas.showFiles`).
+    pub path: String,
+    /// The saved baseline: the disk text the edits were planned on.
+    pub base_text: String,
+    /// The unsaved text: the baseline with the edits applied.
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -408,8 +428,10 @@ impl BridgeOperation for ApplyChangesOp {
     const NAME: &'static str = "editor.applyChanges";
     const DESCRIPTION: &'static str = "Apply an approved plan's text changes to the editor session, all or none: \
          every change is checked against the latest text and, only if every one is still ready, all are applied \
-         in the same turn (unsaved, undoable). Answers applied with each document's new revision, or not applied \
-         with what each change found.";
+         in the same turn (unsaved). Opens (build plan W3c) join the same all or none: each document the session \
+         must not hold with text of its own (conflict) and whose canvas piece must exist (unavailable) is opened \
+         beside the open tabs with its text, unsaved. Answers applied with each document's new revision, or not \
+         applied with what each change found; the changes' entries first, then the opens'.";
     const OWNER: &'static str = "EditorDomain";
     type Request = CheckChangesRequest;
     type Result = ApplyChangesResult;
@@ -422,6 +444,7 @@ impl BridgeOperation for ApplyChangesOp {
 pub(crate) struct ApplyChangesResult {
     /// Every change was applied; otherwise none was.
     pub applied: bool,
+    /// The changes' entries, then the opens'.
     #[cfg_attr(test, schemars(length(min = 1, max = MAX_CHANGES)))]
     pub changes: Vec<ApplyEntry>,
 }
@@ -464,6 +487,11 @@ pub(crate) enum ApplyEntry {
         #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
         path: String,
     },
+    /// An open whose canvas piece does not exist: it cannot join the session.
+    Unavailable {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+    },
 }
 
 impl ApplyEntry {
@@ -474,7 +502,8 @@ impl ApplyEntry {
             | ApplyEntry::Conflict { path, .. }
             | ApplyEntry::NoMatch { path, .. }
             | ApplyEntry::Ambiguous { path, .. }
-            | ApplyEntry::NotInSession { path } => path,
+            | ApplyEntry::NotInSession { path }
+            | ApplyEntry::Unavailable { path } => path,
         }
     }
 }

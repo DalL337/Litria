@@ -55,6 +55,7 @@
           "type": "boolean"
         },
         "changes": {
+          "description": "The changes' entries, then the opens'.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/ApplyEntry"
@@ -200,6 +201,26 @@
             "outcome": {
               "type": "string",
               "const": "notInSession"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "An open whose canvas piece does not exist: it cannot join the session.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "unavailable"
             },
             "path": {
               "type": "string",

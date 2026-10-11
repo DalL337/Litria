@@ -1,0 +1,15 @@
+{
+  "kind": "result",
+  "result": {
+    "files": [
+      {
+        "outcome": "shown",
+        "path": "src/a.ts"
+      },
+      {
+        "outcome": "failed",
+        "path": "src/b.ts"
+      }
+    ]
+  }
+}

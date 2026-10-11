@@ -22,7 +22,7 @@
       "description": "One proposed change, by `kind`. Paths are project-relative with forward\nslashes; a path the API cannot accept is answered as `invalidPath`, not as\na request error.",
       "oneOf": [
         {
-          "description": "Exact-text replacement in the editor's copy of a document (its buffer;\nnot saved to disk).",
+          "description": "Exact-text replacement in the editor's copy of a document (its buffer;\nnot saved to disk). A document the editor does not hold is opened into\nit from disk, with the edit (build plan W3c).",
           "type": "object",
           "properties": {
             "edits": {
