@@ -79,6 +79,9 @@ const SHELL_COMPOSITION_MANIFEST = new Set([
   './app/usePythonFirstOpen',
   // npm scripts-off consent pill (ADR-021 §3) — same first-open pill shape.
   './app/useNpmScriptsFirstOpen',
+  // Interrupted agent changes (Project API build plan W4b) — same first-open
+  // pill shape; the wording is pure (src/app/interruptedOperations.js).
+  './app/useInterruptedOperationsNotice',
   // Managed-server install offers (ADR-005 A3) — file-open reconciler pill.
   './app/useManagedServerOffers',
   // Go class-3 toolchain offer (ADR-005 Slice 6.5) — same file-open pill shape.

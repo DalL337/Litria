@@ -6,7 +6,7 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
 
 ## Command inventory
 
-90 commands are registered; 6 of them exist only in debug builds.
+91 commands are registered; 6 of them exist only in debug builds.
 
 **Every release-build command has a frontend caller.**
 - Any registered command can be invoked from the webview, so a command with no caller is surface with no purpose.
@@ -147,10 +147,11 @@ The debug-only `crash_test_panic`, `project_api_dev_call` and `project_api_dev_r
 | `crash_log_list` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` |  |
 | `crash_log_read` | `src-tauri/src/commands.rs` | `src/app/useBuildLogs.js` |  |
 
-### Project API (debug builds only until track T)
+### Project API (debug builds only until track T, except as noted)
 
 | Command | Defined in | Frontend caller | Notes |
 |---|---|---|---|
+| `project_api_interrupted_operations` | `src-tauri/src/commands.rs` | `src/app/useInterruptedOperationsNotice.js` | **Release builds too.** For the epoch the caller opened, it does three things. It settles every agent operation an earlier run left applying, recording the state that run's record proves; a change started but never confirmed becomes `needsReview`, never replayed. It prunes receipts past 30 days. It returns each interrupted operation once (new files that may be on disk, and the count of unsaved edits lost) for the reopen pill. A read-only project is left as it is. Project API build plan W4b. |
 | `project_api_dev_call` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller** |
 | `project_api_dev_review` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. A person's decision on an agent's plan through the review seam (Project API build plan W2b), until track T gives the review a surface; approving applies the plan to the editor (unsaved), never to disk. |
 | `project_api_bridge_attach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |

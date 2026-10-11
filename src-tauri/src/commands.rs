@@ -479,6 +479,16 @@ pub(crate) async fn project_api_dev_review(
 // None of the three touches the filesystem; replies are accepted only for
 // requests Rust is waiting on, from the generation they were addressed to.
 
+/// Interrupted agent changes of the project open as `epoch`, for the reopen
+/// pill (Project API build plan W4b; owner ruling: a pill on reopen, never a
+/// replay). Each is reported once.
+#[tauri::command]
+pub(crate) fn project_api_interrupted_operations(
+    epoch: String,
+) -> CommandResult<Vec<crate::project_api::InterruptedReport>> {
+    crate::project_api::interrupted_operations(&epoch).map_err(CommandError::from)
+}
+
 /// Attach the frontend bridge for `epoch`, which must be the workspace open
 /// now. Returns the attach generation every reply must carry.
 #[cfg(debug_assertions)]

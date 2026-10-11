@@ -141,6 +141,8 @@ pub fn run() {
             commands::crash_home_dir,
             #[cfg(debug_assertions)]
             commands::crash_test_panic,
+            // Project API: interrupted agent changes, reported on reopen (W4b)
+            commands::project_api_interrupted_operations,
             // Project API — dev builds only, until a transport exists (track T)
             #[cfg(debug_assertions)]
             commands::project_api_dev_call,
