@@ -136,3 +136,42 @@ test('an edit to a model an editor shows is left to that editor', async () => {
   ws.releaseClosedTabs([], ctx);
   notified.length = 0;
 });
+
+// Compare-and-apply's engine side (build plan W1b).
+test('session text reaches a live model as one edit over the changed span, with no echo', async () => {
+  const ctx = context();
+  const mirrored = [];
+  const stopMirroring = ws.setSessionEditMirror((tabId, text) => mirrored.push([tabId, text]));
+  for (const [id, attached] of [[105, true], [106, false]]) {
+    const model = ws.acquireModel({ id, filename: `src/e${id}.ts`, workingCode: 'const a = 1;\nconst b = 2;\n' }, ctx);
+    model.attached = attached;
+    await settle();
+    notified.length = 0;
+    model.pushed = [];
+
+    assert.equal(ws.applySessionText(id, 'const a = 1;\nconst b = 3;\n', ctx), true);
+
+    assert.equal(model.getValue(), 'const a = 1;\nconst b = 3;\n');
+    assert.deepEqual(model.pushed, [[{ range: { startLineNumber: 2, startColumn: 11, endLineNumber: 2, endColumn: 12 }, text: '3' }]],
+      `one edit, over the changed span only (attached: ${attached})`);
+    assert.equal(ws.isApplyingSessionText(), false);
+    await settle();
+    assert.deepEqual(traffic(), [`typescript textDocument/didChange file:///${ROOT}/src/e${id}.ts`], 'the language server hears it once');
+  }
+  assert.deepEqual(mirrored, [], 'the session already holds the text: nothing is sent back');
+  assert.equal(ws.applySessionText(999, 'x', ctx), false, 'no live model');
+  stopMirroring();
+  ws.releaseClosedTabs([], ctx);
+  notified.length = 0;
+});
+
+test('the changed span never splits a surrogate pair', () => {
+  const ctx = context();
+  const model = ws.acquireModel({ id: 107, filename: 'notes.txt', workingCode: 'x\u{1F600}y' }, ctx);
+  model.pushed = [];
+  ws.applySessionText(107, 'x\u{1F603}y', ctx);
+  assert.equal(model.getValue(), 'x\u{1F603}y');
+  assert.equal(model.pushed[0][0].text, '\u{1F603}', 'the whole character is replaced');
+  ws.releaseClosedTabs([], ctx);
+  notified.length = 0;
+});

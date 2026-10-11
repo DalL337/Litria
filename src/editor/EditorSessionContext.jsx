@@ -14,14 +14,27 @@ import {
   PANE_RATIO_DEFAULT,
   MAX_OPEN_TABS,
   MAIN_PANE,
-  SIDE_PANE
+  SIDE_PANE,
+  planBufferEdit
 } from './editorSessionDomain.js';
 import { saveOneTab, saveTabsFromBatch, saveTabsSequentially } from './saveCoordinator.js';
+import { applyBufferText } from './engineCapabilities.js';
+import { bufferRevision } from '../app/projectApiBridge.js';
 
 const EditorSessionContext = createContext(null);
 
 export function EditorSessionProvider({ children }) {
-  const [state, dispatch] = useReducer(editorSessionReducer, initialEditorSessionState);
+  const [state, renderDispatch] = useReducer(editorSessionReducer, initialEditorSessionState);
+  // The session as of the last action dispatched, including actions this turn
+  // that React has not rendered yet. Compare-and-apply reads it (build plan
+  // W1b), so an edit sees typing and earlier edits from the same turn. Every
+  // action goes through `dispatch`, and the reducer is pure, so this is the
+  // state React renders next.
+  const latestRef = useRef(initialEditorSessionState);
+  const dispatch = useCallback((action) => {
+    latestRef.current = editorSessionReducer(latestRef.current, action);
+    renderDispatch(action);
+  }, []);
   // Divider position (ADR-017 Phase C): pane 1's fraction of the split row.
   // Geometry, not session semantics — lives beside the reducer, persisted
   // per-project like the viewport. Committed once per drag (release), never
@@ -93,6 +106,24 @@ export function EditorSessionProvider({ children }) {
     }
     dispatch({ type: 'UPDATE_WORKING_CODE', tabId, workingCode });
   }, [state.tabsById]);
+
+  /**
+   * Compare-and-apply (Project API build plan W1b; contract brief §13): edit
+   * a session document only if it is still the revision the caller read. The
+   * check and the edit happen in this turn, against the latest session text;
+   * the tab's live editor document, if any, takes the same text through the
+   * engine. See `planBufferEdit` for the request and every outcome; applied
+   * returns `{ outcome: 'applied', revision }`.
+   */
+  const applyBufferEdit = useCallback((request) => {
+    const plan = planBufferEdit(latestRef.current, request, bufferRevision);
+    if (plan.outcome !== 'applied') return plan;
+    const tab = latestRef.current.tabsById[plan.tabId];
+    persistenceRef.current?.onWorkingCodeChange?.(tab, plan.text);
+    dispatch({ type: 'UPDATE_WORKING_CODE', tabId: plan.tabId, workingCode: plan.text });
+    applyBufferText(plan.tabId, plan.text);
+    return { outcome: 'applied', revision: plan.revision };
+  }, [dispatch]);
 
   const closeTab = useCallback((tabId) => {
     dispatch({ type: 'CLOSE_TAB', tabId });
@@ -247,6 +278,7 @@ export function EditorSessionProvider({ children }) {
     setFocusedPane,
     splitEditor,
     updateWorkingCode,
+    applyBufferEdit,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,
@@ -279,6 +311,7 @@ export function EditorSessionProvider({ children }) {
     setFocusedPane,
     splitEditor,
     updateWorkingCode,
+    applyBufferEdit,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,

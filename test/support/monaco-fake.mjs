@@ -41,7 +41,12 @@ class TextModel {
     for (let index = 0; index < line - 1; index += 1) offset += lines[index].length + 1;
     return offset + column - 1;
   }
+  getPositionAt(offset) {
+    const before = this.value.slice(0, offset).split('\\n');
+    return { lineNumber: before.length, column: before[before.length - 1].length + 1 };
+  }
   pushEditOperations(_selections, edits) {
+    this.pushed = (this.pushed ?? []).concat([edits]);
     const ordered = edits
       .map((edit) => ({
         start: this.offsetAt(edit.range.startLineNumber, edit.range.startColumn),

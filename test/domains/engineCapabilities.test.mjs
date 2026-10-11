@@ -49,3 +49,20 @@ test('a stale cleanup cannot remove a newer engine registration', () => {
   second();
   assert.equal(containsTextFocus({ owner: 'second' }), false);
 });
+
+// Compare-and-apply's engine side (Project API build plan W1b).
+test('applyBufferText goes to the latest engine that provides it', async () => {
+  const { applyBufferText } = await import('../../src/editor/engineCapabilities.js');
+  assert.equal(applyBufferText(1, 'x'), false, 'no engine: nothing holds a live document');
+  const calls = [];
+  const focusOnly = registerEngineCapabilities({ containsTextFocus: () => false });
+  const unregister = registerEngineCapabilities({ applyBufferText: (tabId, text) => { calls.push([tabId, text]); return tabId === 1; } });
+  const later = registerEngineCapabilities({ containsTextFocus: () => true });
+  assert.equal(applyBufferText(1, 'one'), true, 'a later registration without it does not hide it');
+  assert.equal(applyBufferText(2, 'two'), false);
+  assert.deepEqual(calls, [[1, 'one'], [2, 'two']]);
+  unregister();
+  assert.equal(applyBufferText(1, 'three'), false);
+  later();
+  focusOnly();
+});

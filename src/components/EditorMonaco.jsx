@@ -3,6 +3,7 @@ import { setLspProviderContext } from '../lsp/pythonLspProviders';
 import { setTsLspProviderContext } from '../lsp/typescriptLspProviders';
 import { setManagedLspProviderContext } from '../lsp/managedLspProviders';
 import {
+  applySessionText,
   releaseClosedTabs,
   recomputeLspUris,
   setSessionEditMirror,
@@ -46,6 +47,12 @@ function EditorMonaco({
   useEffect(() => registerEngineCapabilities({
     containsTextFocus: (element) => Boolean(element?.closest?.('.monaco-editor'))
   }), []);
+
+  // Compare-and-apply's engine side (build plan W1b): the session's new text
+  // reaches the tab's live model in the same turn.
+  useEffect(() => registerEngineCapabilities({
+    applyBufferText: (tabId, text) => applySessionText(tabId, text, { projectId, projectRootPath, syntaxAdapter })
+  }), [projectId, projectRootPath, syntaxAdapter]);
 
   const applySlotWidths = (ratio) => {
     const first = slotRefs.current[1];
