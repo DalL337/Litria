@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BridgeReply",
+  "description": "A reply, as JavaScript sends it (the JSON text of the reply command's\n`reply` argument). Read strictly: unknown fields are rejected.",
+  "oneOf": [
+    {
+      "description": "The owner's answer.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "result"
+        },
+        "result": {
+          "$ref": "#/$defs/CheckChangesResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "result"
+      ]
+    },
+    {
+      "description": "The owner refused or failed. Never forwarded as text.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/BridgeErrorCode"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ]
+    }
+  ],
+  "$defs": {
+    "BridgeErrorCode": {
+      "oneOf": [
+        {
+          "description": "The request's epoch is not the one the owner's state belongs to.",
+          "type": "string",
+          "const": "workspaceChanged"
+        },
+        {
+          "description": "The owner does not know the operation.",
+          "type": "string",
+          "const": "unknownOperation"
+        },
+        {
+          "description": "The owner could not read the request.",
+          "type": "string",
+          "const": "invalidRequest"
+        },
+        {
+          "description": "Any other failure.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "CheckChangesResult": {
+      "description": "JavaScript → Rust: one entry per requested change, in request order.",
+      "type": "object",
+      "properties": {
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckedChange"
+          },
+          "maxItems": 16,
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "changes"
+      ]
+    },
+    "CheckedChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "ready"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "conflict"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            },
+            "revision": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "path",
+            "revision"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "edit": {
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 63,
+              "minimum": 0
+            },
+            "outcome": {
+              "type": "string",
+              "const": "noMatch"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "path",
+            "edit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "edit": {
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 63,
+              "minimum": 0
+            },
+            "outcome": {
+              "type": "string",
+              "const": "ambiguous"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "path",
+            "edit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "notInSession"
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "path"
+          ]
+        }
+      ]
+    }
+  }
+}

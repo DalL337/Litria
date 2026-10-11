@@ -1,0 +1,12 @@
+{
+  "kind": "result",
+  "result": {
+    "changes": [
+      {
+        "outcome": "ready",
+        "path": "a.ts",
+        "text": "export const a = 1;"
+      }
+    ]
+  }
+}

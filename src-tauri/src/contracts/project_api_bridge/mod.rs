@@ -142,6 +142,7 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
         entry::bridge_entry::<workspace::SelectionOp>(),
         entry::bridge_entry::<workspace::GraphOp>(),
         entry::bridge_entry::<languages::CapabilitiesOp>(),
+        entry::bridge_entry::<editor::CheckChangesOp>(),
     ]
 }
 
@@ -207,6 +208,31 @@ pub(crate) mod samples {
 
     pub(crate) fn capabilities_event() -> BridgeRequestEvent {
         event::<CapabilitiesOp>(&CapabilitiesRequest {})
+    }
+
+    /// Two changes, one with two ordered edits. The revisions are real buffer
+    /// revisions of the texts the JavaScript tests hold (src/auth.ts as read;
+    /// src/session.ts as read, before it changed to ttl = 90).
+    pub(crate) fn check_changes_event() -> BridgeRequestEvent {
+        use super::editor::{ChangeToCheck, CheckChangesOp, CheckChangesRequest, EditToCheck};
+        let edit = |old: &str, new: &str| EditToCheck { old_text: old.into(), new_text: new.into() };
+        event::<CheckChangesOp>(&CheckChangesRequest {
+            changes: vec![
+                ChangeToCheck {
+                    path: "src/auth.ts".into(),
+                    expected_revision: "b1-e20f31222078c95a25a7ef6c0d20fcd8".into(),
+                    edits: vec![
+                        edit("login(user)", "login(user, { remember: true })"),
+                        edit("export function", "export async function"),
+                    ],
+                },
+                ChangeToCheck {
+                    path: "src/session.ts".into(),
+                    expected_revision: "b1-0eb4282030cb877f4552949e5c746506".into(),
+                    edits: vec![edit("ttl = 60", "ttl = 600")],
+                },
+            ],
+        })
     }
 }
 

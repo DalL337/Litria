@@ -125,6 +125,16 @@ export function EditorSessionProvider({ children }) {
     return { outcome: 'applied', revision: plan.revision };
   }, [dispatch]);
 
+  /**
+   * Compare-and-apply's check alone (build plan W2a): the outcome
+   * `applyBufferEdit` would have now, against the latest session text, with
+   * nothing applied. The Project API checks agent proposals with it.
+   */
+  const checkBufferEdit = useCallback(
+    (request) => planBufferEdit(latestRef.current, request, bufferRevision),
+    []
+  );
+
   const closeTab = useCallback((tabId) => {
     dispatch({ type: 'CLOSE_TAB', tabId });
   }, []);
@@ -279,6 +289,7 @@ export function EditorSessionProvider({ children }) {
     splitEditor,
     updateWorkingCode,
     applyBufferEdit,
+    checkBufferEdit,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,
@@ -312,6 +323,7 @@ export function EditorSessionProvider({ children }) {
     splitEditor,
     updateWorkingCode,
     applyBufferEdit,
+    checkBufferEdit,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,

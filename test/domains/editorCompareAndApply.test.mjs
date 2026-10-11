@@ -113,3 +113,26 @@ test('anything but applied changes nothing', async () => {
   stopEngine();
   await session.unmount();
 });
+
+// Build plan W2a: the Project API checks agent proposals with the same
+// planning, against the same latest text — and applies nothing.
+test('checkBufferEdit sees the latest text and changes nothing', async () => {
+  const session = await mountSession();
+  const engine = [];
+  const stopEngine = registerEngineCapabilities({ applyBufferText: (tabId, text) => { engine.push([tabId, text]); return true; } });
+  await act(async () => { session.latest().openFromSelection([A]); });
+  const stale = session.latest();
+  let typedCheck;
+  let staleCheck;
+  await act(async () => {
+    stale.updateWorkingCode(1, 'typed\n');
+    typedCheck = stale.checkBufferEdit({ path: 'src/a.ts', expectedRevision: bufferRevision('typed\n'), edits: [{ oldText: 'typed', newText: 'x' }] });
+    staleCheck = stale.checkBufferEdit({ path: 'src/a.ts', expectedRevision: bufferRevision(A.code), edits: [{ oldText: 'a = 1', newText: 'x' }] });
+  });
+  assert.equal(typedCheck.outcome, 'applied', 'it would apply against the typed text');
+  assert.deepEqual(staleCheck, { outcome: 'conflict', revision: bufferRevision('typed\n') });
+  assert.equal(session.latest().tabsById[1].workingCode, 'typed\n', 'nothing was applied');
+  assert.deepEqual(engine, []);
+  stopEngine();
+  await session.unmount();
+});

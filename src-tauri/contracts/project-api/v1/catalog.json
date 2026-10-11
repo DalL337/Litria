@@ -47,6 +47,15 @@
       "request": "litria_diagnostics_list.request.schema.json",
       "resultIn": "litria_diagnostics_list.result.in.schema.json",
       "resultOut": "litria_diagnostics_list.result.out.schema.json"
+    },
+    {
+      "capability": "project.changes.propose",
+      "description": "Propose exact-text edits to documents the editor holds; nothing is applied. Each edit replaces oldText, which must occur exactly once in the document, with newText; expectedRevision is the revision litria_files_read reported. When every change is ready they become one plan that waits for a person to review it: an approved plan is applied to the editor (unsaved), and an unanswered one expires after ten minutes. Ask litria_changes_apply for its outcome.",
+      "name": "litria_changes_prepare",
+      "readOnly": false,
+      "request": "litria_changes_prepare.request.schema.json",
+      "resultIn": "litria_changes_prepare.result.in.schema.json",
+      "resultOut": "litria_changes_prepare.result.out.schema.json"
     }
   ],
   "status": "draft"

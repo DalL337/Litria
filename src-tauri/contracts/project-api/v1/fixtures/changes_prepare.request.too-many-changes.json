@@ -1,0 +1,191 @@
+{
+  "changes": [
+    {
+      "kind": "text.edit",
+      "path": "src/f0.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f1.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f2.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f3.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f4.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f5.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f6.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f7.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f8.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f9.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f10.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f11.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f12.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f13.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f14.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f15.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/f16.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    }
+  ]
+}

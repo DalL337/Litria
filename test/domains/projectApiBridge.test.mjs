@@ -21,7 +21,8 @@ import {
   editorSessionReducer as reduce,
   getActiveSessionDocument,
   getSessionDocumentsByPath,
-  initialEditorSessionState
+  initialEditorSessionState,
+  planBufferEdit
 } from '../../src/editor/editorSessionDomain.js';
 import { buildCapabilityMatrix, languageServerState } from '../../src/app/languageCapabilities.js';
 
@@ -157,7 +158,8 @@ async function readyBridge({ session = fixtureSession(), epoch = 'ws-7', workspa
     ports: {
       sessionDocuments: () => getSessionDocumentsByPath(holder.session),
       selection: () => selectionSnapshot(holder.workspace, holder.active),
-      languageCapabilities: () => holder.languages
+      languageCapabilities: () => holder.languages,
+      checkBufferEdit: (request) => planBufferEdit(holder.session, request, bufferRevision)
     },
     transport,
     getWorkspaceEpoch: () => current,
@@ -711,4 +713,63 @@ test('editor.bufferIndex: a path the contract cannot carry is counted as omitted
   const reply = answerBufferIndex({ maxEntries: 500 }, documents, () => 'b1-x');
   assert.deepEqual(reply.result.entries.map((entry) => entry.path), ['a.ts']);
   assert.equal(reply.result.omitted, 1);
+});
+
+// ─── editor.checkChanges (build plan W2a) ────────────────────────────────────
+
+// The session the committed checkChanges reply describes: src/auth.ts exactly
+// as the agent read it; src/session.ts changed to ttl = 90 since.
+function proposalSession() {
+  const tabs = [
+    tab(1, 'src/auth.ts', 'export function signIn(user) {\n  return login(user);\n}\n'),
+    tab(2, 'src/session.ts', 'export const ttl = 60;\n', 'export const ttl = 90;\n'),
+    tab(3, 'src/twice.ts', 'x x\n')
+  ];
+  return {
+    ...initialEditorSessionState,
+    openTabIds: [1, 2, 3],
+    tabsById: Object.fromEntries(tabs.map((entry) => [entry.id, entry]))
+  };
+}
+
+test('editor.checkChanges: the committed request gets the committed reply', async () => {
+  const { bridge, transport } = await readyBridge({ session: proposalSession() });
+  bridge.handleRequest(acceptedFixture('editor.checkChanges.request.json'));
+  const [{ requestId, generation, reply }] = transport.replies;
+  assert.equal(requestId, 'r1');
+  assert.equal(generation, 'g3');
+  assert.deepEqual(reply, acceptedFixture('editor.checkChanges.reply.json'));
+  assertDeclared(BRIDGE_OPS.checkChanges, reply);
+});
+
+test('editor.checkChanges: every outcome, and nothing is applied', async () => {
+  const session = proposalSession();
+  const before = JSON.stringify(session);
+  const { bridge, transport } = await readyBridge({ session });
+  const authRevision = bufferRevision(session.tabsById[1].workingCode);
+  const twiceRevision = bufferRevision('x x\n');
+  bridge.handleRequest({
+    requestId: 'r5', epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.checkChanges,
+    request: { changes: [
+      { path: 'src/auth.ts', expectedRevision: authRevision, edits: [{ oldText: 'nowhere', newText: 'x' }] },
+      { path: 'src/twice.ts', expectedRevision: twiceRevision, edits: [{ oldText: 'x', newText: 'y' }] },
+      { path: 'src/closed.ts', expectedRevision: authRevision, edits: [{ oldText: 'a', newText: 'b' }] }
+    ] }
+  });
+  const [{ reply }] = transport.replies;
+  assert.deepEqual(reply.result.changes, [
+    { outcome: 'noMatch', path: 'src/auth.ts', edit: 0 },
+    { outcome: 'ambiguous', path: 'src/twice.ts', edit: 0 },
+    { outcome: 'notInSession', path: 'src/closed.ts' }
+  ]);
+  assertDeclared(BRIDGE_OPS.checkChanges, reply);
+  assert.equal(JSON.stringify(session), before, 'a check changes nothing');
+});
+
+test('editor.checkChanges: a malformed request is refused', async () => {
+  const { bridge, transport } = await readyBridge({ session: proposalSession() });
+  for (const request of [{}, { changes: [] }, { changes: [{ expectedRevision: 'b1-x', edits: [] }] }]) {
+    bridge.handleRequest({ requestId: `r-${transport.replies.length}`, epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.checkChanges, request });
+  }
+  assert.deepEqual(transport.replies.map((entry) => entry.reply.code), ['invalidRequest', 'invalidRequest', 'invalidRequest']);
 });

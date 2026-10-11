@@ -528,6 +528,108 @@
       "expect": "reject",
       "note": "minSeverity is error, warning, information or hint.",
       "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.result.json",
+      "operation": "litria_changes_prepare",
+      "message": "result",
+      "expect": "accept",
+      "note": "A proposal that is not ready: every check outcome, and no plan, exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "changes_prepare.result.unknown-outcome.json",
+      "operation": "litria_changes_prepare",
+      "message": "result",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An unfamiliar check outcome must never read as a known one."
+    },
+    {
+      "file": "changes_prepare.request.minimal.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "accept",
+      "note": "One change with one edit."
+    },
+    {
+      "file": "changes_prepare.request.full.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "accept",
+      "note": "Several documents, ordered edits, and an edit that deletes (empty newText)."
+    },
+    {
+      "file": "changes_prepare.request.no-changes.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "A proposal changes at least one document.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.request.too-many-changes.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "At most 16 documents per proposal.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.request.no-edits.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "A change carries at least one edit.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.request.too-many-edits.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "At most 64 edits per change.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.request.empty-old-text.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "oldText is never empty: an empty text matches everywhere.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.request.unknown-kind.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "text.edit is the only kind of change.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.request.missing-revision.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "Every change names the revision it was proposed against.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_prepare.request.duplicate-path.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "A document appears at most once per proposal. JSON Schema cannot say one field is unique across items, so the boundary alone rejects it.",
+      "errorCode": "invalidParams",
+      "limit": true
+    },
+    {
+      "file": "changes_prepare.request.unknown-field.json",
+      "operation": "litria_changes_prepare",
+      "message": "request",
+      "expect": "reject",
+      "note": "Unknown fields are rejected (saving is not part of this operation).",
+      "errorCode": "invalidParams"
     }
   ]
 }

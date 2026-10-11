@@ -300,6 +300,9 @@ mod outbound {
         let graph = assert_conforms("graph query", &samples::graph_query_result());
         assert_eq!(graph["nodes"][0]["kind"], "file");
         assert_eq!(graph["edges"][0]["provenance"]["kind"], "sourceDerived");
+        let prepare = assert_conforms("changes prepare", &samples::changes_prepare_result());
+        assert!(prepare.get("plan").is_none(), "an absent plan is omitted");
+        assert_eq!(prepare["changes"][1]["outcome"], "conflict");
         let diagnostics = assert_conforms("diagnostics list", &samples::diagnostics_list_result());
         assert_eq!(diagnostics["files"][0]["state"], "available");
         assert_eq!(diagnostics["files"][0]["freshnessReason"], "producerOmitsVersion");
@@ -340,6 +343,10 @@ mod outbound {
         check::<crate::contracts::project_api::diagnostics_list::DiagnosticsListResult>(
             "diagnostics_list.result.json",
             &samples::diagnostics_list_result(),
+        );
+        check::<crate::contracts::project_api::changes_prepare::ChangesPrepareResult>(
+            "changes_prepare.result.json",
+            &samples::changes_prepare_result(),
         );
     }
 }
@@ -447,6 +454,7 @@ mod bridge_family {
                 Some("selection") => samples::selection_event(),
                 Some("graph") => samples::graph_event(),
                 Some("capabilities") => samples::capabilities_event(),
+                Some("checkChanges") => samples::check_changes_event(),
                 other => panic!("{file}: unknown sample {other:?}"),
             };
             assert_eq!(sample.op, fixture.operation, "{file}: the sample is for another operation");

@@ -1,0 +1,16 @@
+{
+  "kind": "result",
+  "result": {
+    "changes": [
+      {
+        "outcome": "ready",
+        "path": "src/auth.ts"
+      },
+      {
+        "outcome": "conflict",
+        "path": "src/session.ts",
+        "revision": "b1-30e217dafba8bae4b210e802479fb377"
+      }
+    ]
+  }
+}

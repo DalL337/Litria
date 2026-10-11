@@ -1,0 +1,14 @@
+{
+  "changes": [
+    {
+      "kind": "text.edit",
+      "path": "src/auth.ts",
+      "edits": [
+        {
+          "oldText": "a",
+          "newText": "b"
+        }
+      ]
+    }
+  ]
+}

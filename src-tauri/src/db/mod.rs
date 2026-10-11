@@ -297,6 +297,16 @@ pub(crate) fn workspace_binding() -> Option<(String, Option<PathBuf>)> {
     guard.as_ref().map(|open| (open.epoch.clone(), open.root.clone()))
 }
 
+/// Whether the open workspace database is read-only (ADR-026 decision 3: the
+/// project opened in safety mode), asked of the connection itself. `None` when
+/// no workspace is open. Agent edits are refused while it is (Project API build
+/// plan W2a).
+pub(crate) fn workspace_read_only() -> Option<bool> {
+    let guard = project_db_lock().lock().ok()?;
+    let open = guard.as_ref()?;
+    open.conn.is_readonly(DatabaseName::Main).ok()
+}
+
 /// Close the currently open workspace database.
 pub(crate) fn close_workspace_db() -> Result<(), String> {
     let lock = project_db_lock();

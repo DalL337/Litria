@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChangesPrepareResult",
+  "type": "object",
+  "properties": {
+    "changes": {
+      "description": "One check per proposed change, in request order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChangeCheck"
+      }
+    },
+    "plan": {
+      "description": "The plan awaiting review: present only when every change is ready.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PreparedPlan"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "changes"
+  ],
+  "$defs": {
+    "ChangeCheck": {
+      "description": "One proposed change, checked against the editor's current text. A reader\nthat meets an unfamiliar `outcome` must treat the change as not ready.",
+      "oneOf": [
+        {
+          "description": "The editor holds the expected revision and every edit matches once.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "ready"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "The editor holds another revision of this document now.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "conflict"
+            },
+            "path": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "revision"
+          ]
+        },
+        {
+          "description": "The edit at this index matches nowhere in the text as it stands.",
+          "type": "object",
+          "properties": {
+            "edit": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "outcome": {
+              "type": "string",
+              "const": "noMatch"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "edit"
+          ]
+        },
+        {
+          "description": "The edit at this index matches more than once.",
+          "type": "object",
+          "properties": {
+            "edit": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "outcome": {
+              "type": "string",
+              "const": "ambiguous"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "edit"
+          ]
+        },
+        {
+          "description": "The editor does not hold this document; open it first (disk edits come\nlater).",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "notInSession"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "The disclosure policy withholds the path; it is never written.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "denied"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "Not a path the API accepts (contract brief §6).",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "invalidPath"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        }
+      ]
+    },
+    "PlanState": {
+      "description": "Where a plan stands. A reader that meets an unfamiliar value must not\nassume the plan was applied.",
+      "oneOf": [
+        {
+          "description": "Waiting for a person to approve or reject it.",
+          "type": "string",
+          "const": "pendingReview"
+        }
+      ]
+    },
+    "PreparedPlan": {
+      "type": "object",
+      "properties": {
+        "expiresInSeconds": {
+          "description": "Seconds until an unanswered plan expires.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 600,
+          "minimum": 0
+        },
+        "planId": {
+          "description": "Opaque; pass it to `litria_changes_apply`.",
+          "type": "string",
+          "maxLength": 37,
+          "minLength": 37
+        },
+        "state": {
+          "$ref": "#/$defs/PlanState"
+        }
+      },
+      "required": [
+        "planId",
+        "state",
+        "expiresInSeconds"
+      ]
+    }
+  }
+}

@@ -1,0 +1,271 @@
+{
+  "changes": [
+    {
+      "kind": "text.edit",
+      "path": "src/auth.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "x0",
+          "newText": "y0"
+        },
+        {
+          "oldText": "x1",
+          "newText": "y1"
+        },
+        {
+          "oldText": "x2",
+          "newText": "y2"
+        },
+        {
+          "oldText": "x3",
+          "newText": "y3"
+        },
+        {
+          "oldText": "x4",
+          "newText": "y4"
+        },
+        {
+          "oldText": "x5",
+          "newText": "y5"
+        },
+        {
+          "oldText": "x6",
+          "newText": "y6"
+        },
+        {
+          "oldText": "x7",
+          "newText": "y7"
+        },
+        {
+          "oldText": "x8",
+          "newText": "y8"
+        },
+        {
+          "oldText": "x9",
+          "newText": "y9"
+        },
+        {
+          "oldText": "x10",
+          "newText": "y10"
+        },
+        {
+          "oldText": "x11",
+          "newText": "y11"
+        },
+        {
+          "oldText": "x12",
+          "newText": "y12"
+        },
+        {
+          "oldText": "x13",
+          "newText": "y13"
+        },
+        {
+          "oldText": "x14",
+          "newText": "y14"
+        },
+        {
+          "oldText": "x15",
+          "newText": "y15"
+        },
+        {
+          "oldText": "x16",
+          "newText": "y16"
+        },
+        {
+          "oldText": "x17",
+          "newText": "y17"
+        },
+        {
+          "oldText": "x18",
+          "newText": "y18"
+        },
+        {
+          "oldText": "x19",
+          "newText": "y19"
+        },
+        {
+          "oldText": "x20",
+          "newText": "y20"
+        },
+        {
+          "oldText": "x21",
+          "newText": "y21"
+        },
+        {
+          "oldText": "x22",
+          "newText": "y22"
+        },
+        {
+          "oldText": "x23",
+          "newText": "y23"
+        },
+        {
+          "oldText": "x24",
+          "newText": "y24"
+        },
+        {
+          "oldText": "x25",
+          "newText": "y25"
+        },
+        {
+          "oldText": "x26",
+          "newText": "y26"
+        },
+        {
+          "oldText": "x27",
+          "newText": "y27"
+        },
+        {
+          "oldText": "x28",
+          "newText": "y28"
+        },
+        {
+          "oldText": "x29",
+          "newText": "y29"
+        },
+        {
+          "oldText": "x30",
+          "newText": "y30"
+        },
+        {
+          "oldText": "x31",
+          "newText": "y31"
+        },
+        {
+          "oldText": "x32",
+          "newText": "y32"
+        },
+        {
+          "oldText": "x33",
+          "newText": "y33"
+        },
+        {
+          "oldText": "x34",
+          "newText": "y34"
+        },
+        {
+          "oldText": "x35",
+          "newText": "y35"
+        },
+        {
+          "oldText": "x36",
+          "newText": "y36"
+        },
+        {
+          "oldText": "x37",
+          "newText": "y37"
+        },
+        {
+          "oldText": "x38",
+          "newText": "y38"
+        },
+        {
+          "oldText": "x39",
+          "newText": "y39"
+        },
+        {
+          "oldText": "x40",
+          "newText": "y40"
+        },
+        {
+          "oldText": "x41",
+          "newText": "y41"
+        },
+        {
+          "oldText": "x42",
+          "newText": "y42"
+        },
+        {
+          "oldText": "x43",
+          "newText": "y43"
+        },
+        {
+          "oldText": "x44",
+          "newText": "y44"
+        },
+        {
+          "oldText": "x45",
+          "newText": "y45"
+        },
+        {
+          "oldText": "x46",
+          "newText": "y46"
+        },
+        {
+          "oldText": "x47",
+          "newText": "y47"
+        },
+        {
+          "oldText": "x48",
+          "newText": "y48"
+        },
+        {
+          "oldText": "x49",
+          "newText": "y49"
+        },
+        {
+          "oldText": "x50",
+          "newText": "y50"
+        },
+        {
+          "oldText": "x51",
+          "newText": "y51"
+        },
+        {
+          "oldText": "x52",
+          "newText": "y52"
+        },
+        {
+          "oldText": "x53",
+          "newText": "y53"
+        },
+        {
+          "oldText": "x54",
+          "newText": "y54"
+        },
+        {
+          "oldText": "x55",
+          "newText": "y55"
+        },
+        {
+          "oldText": "x56",
+          "newText": "y56"
+        },
+        {
+          "oldText": "x57",
+          "newText": "y57"
+        },
+        {
+          "oldText": "x58",
+          "newText": "y58"
+        },
+        {
+          "oldText": "x59",
+          "newText": "y59"
+        },
+        {
+          "oldText": "x60",
+          "newText": "y60"
+        },
+        {
+          "oldText": "x61",
+          "newText": "y61"
+        },
+        {
+          "oldText": "x62",
+          "newText": "y62"
+        },
+        {
+          "oldText": "x63",
+          "newText": "y63"
+        },
+        {
+          "oldText": "x64",
+          "newText": "y64"
+        }
+      ]
+    }
+  ]
+}

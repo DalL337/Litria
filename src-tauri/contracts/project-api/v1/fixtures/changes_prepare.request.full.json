@@ -1,0 +1,41 @@
+{
+  "changes": [
+    {
+      "kind": "text.edit",
+      "path": "src/auth.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "login(user)",
+          "newText": "login(user, { remember: true })"
+        },
+        {
+          "oldText": "export function",
+          "newText": "export async function"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "src/session.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "ttl = 60",
+          "newText": "ttl = 600"
+        }
+      ]
+    },
+    {
+      "kind": "text.edit",
+      "path": "README.md",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "# Sample",
+          "newText": ""
+        }
+      ]
+    }
+  ]
+}

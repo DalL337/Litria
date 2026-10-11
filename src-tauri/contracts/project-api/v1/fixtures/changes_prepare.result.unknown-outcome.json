@@ -1,0 +1,8 @@
+{
+  "changes": [
+    {
+      "outcome": "applied",
+      "path": "src/auth.ts"
+    }
+  ]
+}

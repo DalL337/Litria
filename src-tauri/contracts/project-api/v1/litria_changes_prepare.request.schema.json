@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChangesPrepareRequest",
+  "type": "object",
+  "properties": {
+    "changes": {
+      "description": "One change per document, each document at most once. Checked in this\norder and answered in it.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProposedChange"
+      },
+      "maxItems": 16,
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "changes"
+  ],
+  "$defs": {
+    "ChangeKind": {
+      "description": "The kind of change. Only `text.edit` exists; file creation joins later.",
+      "oneOf": [
+        {
+          "description": "Exact-text replacement in the editor's copy of a document (its buffer;\nnot saved to disk).",
+          "type": "string",
+          "const": "text.edit"
+        }
+      ]
+    },
+    "ProposedChange": {
+      "type": "object",
+      "properties": {
+        "edits": {
+          "description": "Applied in order; each `oldText` must occur exactly once in the text as\nthe earlier edits leave it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TextEdit"
+          },
+          "maxItems": 64,
+          "minItems": 1
+        },
+        "expectedRevision": {
+          "description": "The revision `litria_files_read` reported for this document. The change\nis ready only while the editor still holds exactly that text.",
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "kind": {
+          "$ref": "#/$defs/ChangeKind"
+        },
+        "path": {
+          "description": "Project-relative path with forward slashes. A path the API cannot\naccept is answered as `invalidPath`, not as a request error.",
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path",
+        "expectedRevision",
+        "edits"
+      ]
+    },
+    "TextEdit": {
+      "type": "object",
+      "properties": {
+        "newText": {
+          "description": "Its replacement; may be empty.",
+          "type": "string",
+          "maxLength": 65536
+        },
+        "oldText": {
+          "description": "Text that must occur exactly once (overlapping occurrences count).",
+          "type": "string",
+          "maxLength": 65536,
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "oldText",
+        "newText"
+      ]
+    }
+  }
+}
