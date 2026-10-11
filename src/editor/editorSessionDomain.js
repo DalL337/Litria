@@ -188,6 +188,55 @@ export function getSessionDocumentsByPath(state) {
 }
 
 /**
+ * Compare-and-apply, the plan (Project API build plan W1b; contract brief
+ * §13). Pure: it decides, the session context applies.
+ *
+ * The document is the session entry for `path` (the same entry the reads
+ * report, open or closed). It applies only when `revisionOf(text)` equals
+ * `expectedRevision`, the revision the caller read. Each `{ oldText,
+ * newText }` replaces text that must occur exactly once in the text as the
+ * earlier edits left it — overlapping occurrences count, so an empty
+ * `oldText` never matches once. All or nothing.
+ *
+ * Returns one of:
+ * - `{ outcome: 'applied', tabId, text, revision }`: the new session text, as
+ *   the session holds text (CRLF → LF), and its revision;
+ * - `{ outcome: 'conflict', revision }`: the document's current revision;
+ * - `{ outcome: 'notInSession' }`: the session holds no such document;
+ * - `{ outcome: 'noMatch', edit }` / `{ outcome: 'ambiguous', edit }`: the
+ *   index of the edit whose `oldText` occurs no times / more than once;
+ * - `{ outcome: 'invalid' }`: the request is not shaped as above.
+ */
+export function planBufferEdit(state, request, revisionOf) {
+  const { path, expectedRevision, edits } = request ?? {};
+  if (
+    typeof path !== 'string'
+    || typeof expectedRevision !== 'string'
+    || !Array.isArray(edits)
+    || edits.length === 0
+    || !edits.every((edit) => typeof edit?.oldText === 'string' && typeof edit?.newText === 'string')
+  ) {
+    return { outcome: 'invalid' };
+  }
+  const document = getSessionDocumentsByPath(state).get(sessionPathOf({ filename: path }));
+  if (!document) return { outcome: 'notInSession' };
+  const current = document.text;
+  if (revisionOf(current) !== expectedRevision) {
+    return { outcome: 'conflict', revision: revisionOf(current) };
+  }
+  let text = current;
+  for (let index = 0; index < edits.length; index += 1) {
+    const { oldText, newText } = edits[index];
+    const at = text.indexOf(oldText);
+    if (at < 0) return { outcome: 'noMatch', edit: index };
+    if (text.indexOf(oldText, at + 1) >= 0) return { outcome: 'ambiguous', edit: index };
+    text = text.slice(0, at) + newText + text.slice(at + oldText.length);
+  }
+  text = normalizeEditorText(text);
+  return { outcome: 'applied', tabId: document.tabId, text, revision: revisionOf(text) };
+}
+
+/**
  * Serialize per-tab pane residency for persistence (ADR-017 Phase B).
  * Keys follow openTabIds order, so the string is value-stable across
  * keystrokes (workingCode churn) and only changes when membership or

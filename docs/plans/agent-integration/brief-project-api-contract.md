@@ -593,7 +593,7 @@ The bridge applies the same shrink-to-fit rule to its pages. It measures each pa
 
 The write contract is written after the reads land. Today's inspection found these prerequisites:
 
-- **Compare-and-apply is an EditorDomain command.** It checks the buffer revision and applies to the session text in the same turn. Where a live model exists, it applies there too, through a capability injected from an engine file, so the engine guard's seal holds. It is not built on the syntax adapter's `writeResultText`, which replaces the whole buffer with no check.
+- **Compare-and-apply is an EditorDomain command.** It checks the buffer revision and applies to the session text in the same turn. Where a live model exists, it applies there too, through a capability injected from an engine file, so the engine guard's seal holds. It is not built on the syntax adapter's `writeResultText`, which replaces the whole buffer with no check. *(Built 2026-10-11, build plan W1b: `applyBufferEdit`; both defects below fixed first in W1a, PR #128. See the build plan's W1 records.)*
 - **Two current defects affect it. Fix or avoid them before the first mediated edit:**
   1. After a rename, the model URI and the LSP tab maps keep the old filename (`monacoWorkspace.js` re-acquire path).
   2. A programmatic edit to an open model that is not attached to a pane is not mirrored into `workingCode`. The pane's sync effect would undo it on the next activation (inferred from code, not reproduced).

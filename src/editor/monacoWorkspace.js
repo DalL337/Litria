@@ -57,6 +57,9 @@ const modelFilenames = new Map();
 // The session's text setter, registered by the container: edits made to a
 // model no editor shows reach the session through it (see trackModel).
 let sessionEditMirror = null;
+// True while applySessionText edits a model: the change is the session's
+// own, so neither the pane's onChange nor the mirror sends it back.
+let applyingSessionText = false;
 let providersRegistered = false;
 
 export function toLspUri(projectRootPath, filename) {
@@ -134,7 +137,7 @@ function createTabModel(tabId, filename, text, context) {
   models.set(tabId, model);
   modelFilenames.set(tabId, filename);
   model.onDidChangeContent(() => {
-    if (model.isDisposed() || model.isAttachedToEditor()) return;
+    if (applyingSessionText || model.isDisposed() || model.isAttachedToEditor()) return;
     const value = model.getValue();
     sessionEditMirror?.(tabId, value);
     notifyChange(tabId, value, context);
@@ -271,6 +274,72 @@ export function acquireModel(tab, context) {
     }
   }
   return model;
+}
+
+/** Whether the current model change is the session's own (applySessionText). */
+export function isApplyingSessionText() {
+  return applyingSessionText;
+}
+
+/**
+ * Put the session's text into a tab's live model, if it has one — the engine
+ * side of compare-and-apply (Project API build plan W1b). One undoable edit
+ * over the changed span only, so cursors outside it stay put; no echo back
+ * into the session; the language servers and the syntax index are notified
+ * once. Returns whether a live model exists.
+ */
+export function applySessionText(tabId, text, context) {
+  const model = getLiveModel(tabId);
+  if (!model) return false;
+  const current = model.getValue();
+  if (current === text) return true;
+  const span = changedSpan(current, text);
+  const from = model.getPositionAt(span.start);
+  const to = model.getPositionAt(span.endBefore);
+  applyingSessionText = true;
+  try {
+    model.pushEditOperations(
+      [],
+      [{
+        range: {
+          startLineNumber: from.lineNumber,
+          startColumn: from.column,
+          endLineNumber: to.lineNumber,
+          endColumn: to.column
+        },
+        text: text.slice(span.start, span.endAfter)
+      }],
+      () => null
+    );
+  } finally {
+    applyingSessionText = false;
+  }
+  notifyChange(tabId, text, context);
+  return true;
+}
+
+/**
+ * The span that differs between two texts: the shared prefix and suffix are
+ * left alone. Offsets are UTF-16, as the engine counts them; a surrogate pair
+ * is never split.
+ */
+function changedSpan(before, after) {
+  const isLowSurrogate = (unit) => unit >= 0xdc00 && unit <= 0xdfff;
+  let start = 0;
+  const limit = Math.min(before.length, after.length);
+  while (start < limit && before.charCodeAt(start) === after.charCodeAt(start)) start += 1;
+  let endBefore = before.length;
+  let endAfter = after.length;
+  while (endBefore > start && endAfter > start && before.charCodeAt(endBefore - 1) === after.charCodeAt(endAfter - 1)) {
+    endBefore -= 1;
+    endAfter -= 1;
+  }
+  if (start > 0 && start < before.length && isLowSurrogate(before.charCodeAt(start))) start -= 1;
+  if (endBefore < before.length && isLowSurrogate(before.charCodeAt(endBefore))) {
+    endBefore += 1;
+    endAfter += 1;
+  }
+  return { start, endBefore, endAfter };
 }
 
 /** Dispose models + close LSP/syntax docs for tabs that left the open set. */

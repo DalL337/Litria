@@ -6,7 +6,7 @@ import { getLanguageFromFilename } from '../editor/editorLanguage';
 import { lspRequest } from '../lsp/lspClient';
 import { managedSessionLanguageForMonacoLanguage } from '../lsp/managedLspProviders';
 import { parsePythonSymbols } from '../editor/pythonLocalIntelligence';
-import { acquireModel, getModel, notifyChange, ensureLspProviders } from '../editor/monacoWorkspace';
+import { acquireModel, getModel, notifyChange, ensureLspProviders, isApplyingSessionText } from '../editor/monacoWorkspace';
 
 /**
  * One editor pane (ADR-017). Instance-scoped: the Monaco editor widget, its
@@ -498,6 +498,8 @@ function EditorMonacoPane({
           // Focus follows the pane the user is typing in.
           editor.onDidFocusEditorText(() => { onFocus?.(); });
           editor.onDidChangeModelContent((event) => {
+            // The session's own edit (compare-and-apply) is not typing.
+            if (isApplyingSessionText()) return;
             const model = editor.getModel();
             if (!model) return;
             const lang = model.getLanguageId();
@@ -545,7 +547,7 @@ function EditorMonacoPane({
         }}
         onChange={(value) => {
           if (!activeTab) return;
-          if (syncingRef.current) return;
+          if (syncingRef.current || isApplyingSessionText()) return;
           onChange?.(activeTab.id, value ?? '');
           // Push the edit to LSP servers + syntax adapter via the workspace.
           notifyChange(activeTab.id, value ?? '', { projectId, syntaxAdapter });
