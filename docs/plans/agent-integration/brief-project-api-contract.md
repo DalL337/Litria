@@ -356,6 +356,45 @@ Diagnostics that only JavaScript produces are reported as `unavailable` until th
 > `unknown`, by owner ruling. A session's diagnostics are dropped when it
 > stops, crashes or is replaced. Details and evidence: build plan, P5a record.
 
+> **As built, P5b (2026-10-11).** Per file the state is one of:
+>
+> - `available`: producer, freshness and reason, diagnostics, and a per-file
+>   `truncated` flag;
+> - `unavailable`, with a reason: `notBridged` (JSON/CSS: the editor's own
+>   workers), `producerNotRunning`, or `notAnalyzed` (the server is running but
+>   has not reported on the file; most only analyse open files);
+> - `noProducer`.
+>
+> A file named in the request can also be `denied` or `invalidPath`, exactly as
+> `litria_files_read` answers. It is `skipped` when a ceiling is reached first;
+> a file with diagnostics is never returned with an empty list for lack of
+> budget. Without paths, the operation lists every file with diagnostics at
+> or above `minSeverity`, in path order. It skips unindexed files as search
+> does and omits denied ones uncounted.
+>
+> A published document is reported under its **canonical** project path, and
+> only if the URI still leads where it led when the server published
+> (adversarial F1: a link swapped in between cannot rename a denied file).
+>
+> Redaction covers messages and codes:
+>
+> - absolute paths inside the project become project paths;
+> - paths outside the project, or relative paths that climb out of it, become
+>   `[path]`;
+> - path-like tokens the policy denies become `[denied]`, judged both from the
+>   diagnosed file's folder and from the root;
+> - related locations in denied files or outside the project are removed.
+>
+> **Positions:** lines are 1-based. Columns are the producer's UTF-16 offset
+> plus one. They equal Unicode code points unless a character outside the
+> Basic Multilingual Plane precedes the position on its line. Exact code points
+> would need the very text the producer diagnosed, which Rust does not hold
+> for an unsaved buffer.
+>
+> Ceilings: 100 per file, 1,000 per response, 1,000-character messages and
+> 384 KiB encoded. The cost of skipping every remaining named path is reserved
+> before each entry is accepted, so the response always fits.
+
 **Disclosure through allowed files.** A diagnostic on an allowed file can still point at a denied one:
 - Related locations in denied files are removed.
 - In the message, a path-like token that the policy's matcher classifies as denied is replaced with `[denied]` (for example, `Cannot find module './.env'`).
@@ -411,7 +450,7 @@ Tab ids and piece ids are mapped to paths inside the bridge; they never leave it
 
 **As built in build plan P3 (2026-09-30).** Two more operations, under the same rules:
 - **`workspace.selection`** answers `{ selected, omitted, folder?, activeDocument? }`. `selected` lists the selected pieces' file paths, in path order and without duplicates, up to the requested `maxPaths` (at most 1,000) and within the reply ceiling; the rest are counted in `omitted`. `folder` is the selected group's folder, for folder groups only. `activeDocument` is the focused pane's document with its unsaved state (EditorDomain's `getActiveSessionDocument`). The bridge maps piece and group ids to paths (`selectionSnapshot`); no id leaves it. A path longer than the contract allows is counted, never sent. The same rule now applies to `editor.bufferIndex`, where such a path used to fail the whole reply.
-- **`languages.capabilities`** answers `{ languages }` with up to 32 capability rows (§7.1 addendum), computed by `src/app/languageCapabilities.js`.
+- **`languages.capabilities`** answers `{ languages }` with up to 32 capability rows (§7.1 addendum), computed by `src/app/languageCapabilities.js`. *(P5b, 2026-10-11: each row also carries `diagnosticsSource` — `server`, `editor` or `none` — and `server`, the language-server pack that serves it (`typescript` also serves JavaScript), so `litria_diagnostics_list` reads one table with `project_context`.)*
 - **Readiness covers the selection too.** The bridge answers for a hydrated load only (§4.3), and the open handler now clears the selection in the same batch as the instance change (§7.1 addendum), so no render pairs a new project with an old selection.
 
 ## 9. Errors and outcomes

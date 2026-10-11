@@ -38,7 +38,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Done: PR #89, merged 2026-09-30 (see [P2 record](#p2-record)) |
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Done: PR #90 (see [P3 record](#p3-record)) |
 | P4 | `litria_graph_query` | P2 | Done: PR #108, merged 2026-10-03 (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
-| P5 | `litria_diagnostics_list` and its detail store | P2 | In progress: P5a detail store built (see [P5a record](#p5a-record)); P5b the tool, P5c the live pass |
+| P5 | `litria_diagnostics_list` and its detail store | P2 | In progress: P5a detail store (PR #122, see [P5a record](#p5a-record)); P5b the tool, stacked on it (see [P5b record](#p5b-record)); P5c the live pass |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Outline |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
@@ -824,6 +824,69 @@ All tests and standard checks pass, plus a live pass with a real language server
 > safe: an empty store, which P5b reports as `unavailable`, never as "no
 > errors". Checks: `cargo test` 578 (zero warnings), architecture guards 7/7,
 > `test:domains` 1513, build.
+
+### P5b record
+
+> **The tool (2026-10-11), stacked on P5a.** `litria_diagnostics_list`
+> (capability `project.diagnostics.read`). Brief §7.5 has the as-built
+> semantics.
+>
+> - **Contract:** `contracts/project_api/diagnostics_list.rs`, with the catalog
+>   entry, samples, artifacts and seven fixtures. `project_context` publishes
+>   its limits (`DiagnosticsListLimits`).
+> - **Handler:** `project_api/diagnostics.rs`. The live sessions come from
+>   `lsp::session::live_sessions_for_root`, matched on the canonical root the
+>   start quotas already key on, so no project-id mapping is needed.
+> - **Language table:** the `languages.capabilities` bridge row gained
+>   `diagnosticsSource` and `server`. JS fills them from `EDITOR_FEATURES`;
+>   the matrix fixture was regenerated from the real function. The table is
+>   fetched lazily, at most once per call, and only when a named file has
+>   nothing published.
+>
+> **Found while building**, each by a failing test written for the purpose:
+>
+> - The token trim was single-pass, so `(.env).` escaped redaction.
+> - `skipped` entries were appended after the ceiling check, so 100 skipped
+>   paths could push a response over 384 KiB. The skipped tail is now reserved
+>   in advance; requests are capped at 64 KiB, so it always fits.
+> - A file with diagnostics but no budget left came back `available` with an
+>   empty list. It is now `skipped`.
+>
+> **Adversarial check** (policy Rule 3). The enforcement point is the
+> disclosure rules, plus the P5a store's input bounds that they rest on:
+>
+> - **F1, check versus use: reproduced, then fixed.** A link swapped between
+>   publish and query surfaced a denied file's diagnostics under the link's old
+>   name. The unfixed output carried `core.secret = hunter2` as
+>   `public/config`. The store now records each publish's canonical path,
+>   resolved before taking its lock, and the tool reports a document only if
+>   its query-time canonical path is the same.
+> - **F2, aggregate memory: reproduced, then fixed.** The store was bounded per
+>   item but not in total. It now caps each document at 2 MiB
+>   (`storeTruncated`) and each session at 32 MiB. Over budget, it drops the
+>   stored diagnostics of the least recently touched documents, closed ones
+>   first. Related messages are capped at 500 characters and URIs at 2,048.
+> - **F3:** `code` is free server text, so it is redacted like a message.
+> - **F4:** differently cased project paths in messages are covered by a test
+>   on Windows and macOS.
+> - **Residual (suspected, low):** related locations are mapped by their
+>   query-time canonical path only.
+>
+> **Evidence and checks.** 15 handler tests and 21 store tests:
+>
+> - every state;
+> - lazy table fetch;
+> - enumeration order and omission;
+> - a static link and a swapped link;
+> - severity;
+> - each ceiling, including measured encoded sizes;
+> - freshness mapping;
+> - related locations;
+> - redaction;
+> - one pass through the epoch fence and the real bridge.
+>
+> `cargo test` 595 with zero warnings, architecture guards 7/7,
+> `test:domains` 1514, and the build all pass.
 
 ## P6. MCP conformance over the read catalog
 
