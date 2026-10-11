@@ -927,10 +927,10 @@ fn contained_script_from_line(dp0: &str, line: &str) -> Option<String> {
 /// Returns `Some((node_executable, script_path))` or `None` if resolution fails.
 #[cfg(windows)]
 fn resolve_cmd_to_node(command: &str) -> Option<(String, String)> {
-    use std::process::Command as WhereCmd;
-
-    // Use `where` to locate the .cmd file on PATH
-    let where_output = WhereCmd::new("where")
+    // Use `where` to locate the .cmd file on PATH. hidden_command: a bare
+    // std Command here opened a console window on every session start in a
+    // release build, whenever the server came from a global npm install.
+    let where_output = hidden_command("where")
         .arg(format!("{command}.cmd"))
         .output()
         .ok()?;
