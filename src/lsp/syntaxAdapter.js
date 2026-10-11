@@ -497,13 +497,16 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
    *
    * @param {string} oldPath
    * @param {string} newPath
+   * @param {object|null} [replacementModel] The model that now holds the file,
+   *   when the editor replaced it on the rename (a model's URI names its file,
+   *   so a renamed open file gets a new model); otherwise the old one moves.
    * @returns {Promise<{ patchesApplied: number }>}
    */
-  async function onFileRenamed(oldPath, newPath) {
-    const model = modelRegistry.get(oldPath);
+  async function onFileRenamed(oldPath, newPath, replacementModel = null) {
+    const model = replacementModel ?? modelRegistry.get(oldPath);
+    modelRegistry.delete(oldPath);
     if (model) {
       modelRegistry.set(newPath, model);
-      modelRegistry.delete(oldPath);
     }
 
     const result = syntaxDomain.commands.renameFile(oldPath, newPath);
