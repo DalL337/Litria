@@ -1,0 +1,15 @@
+{
+  "changes": [
+    {
+      "kind": "file.delete",
+      "path": "src/auth.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "return login(user);",
+          "newText": "return login(user, { remember: true });"
+        }
+      ]
+    }
+  ]
+}

@@ -11,7 +11,9 @@
 //! P1 (build plan) delivers `litria_files_read`; P3 adds
 //! `litria_project_context` and `litria_files_search`. The graph and
 //! diagnostics reads join the catalog in P4–P5 (P5b: `litria_diagnostics_list`).
+//! The write increment starts in W2a: `litria_changes_prepare` proposes edits.
 
+pub(crate) mod changes_prepare;
 pub(crate) mod diagnostics_list;
 pub(crate) mod files_read;
 pub(crate) mod files_search;
@@ -36,6 +38,7 @@ pub(crate) fn catalog() -> Vec<crate::contracts::catalog::OperationEntry> {
         entry::<files_search::FilesSearchOp>(),
         entry::<graph_query::GraphQueryOp>(),
         entry::<diagnostics_list::DiagnosticsListOp>(),
+        entry::<changes_prepare::ChangesPrepareOp>(),
     ]
 }
 
@@ -54,6 +57,7 @@ pub(crate) fn test_dispatcher() -> crate::contracts::catalog::Dispatcher {
     dispatcher.register::<files_search::FilesSearchOp>(|_, _| Ok(samples::files_search_result()));
     dispatcher.register::<graph_query::GraphQueryOp>(|_, _| Ok(samples::graph_query_result()));
     dispatcher.register::<diagnostics_list::DiagnosticsListOp>(|_, _| Ok(samples::diagnostics_list_result()));
+    dispatcher.register::<changes_prepare::ChangesPrepareOp>(|_, _| Ok(samples::changes_prepare_result()));
     dispatcher
 }
 
@@ -388,6 +392,27 @@ pub(crate) mod samples {
                 GraphTruncationReason::Edges,
                 GraphTruncationReason::Symbols,
                 GraphTruncationReason::ResponseSize,
+            ],
+        }
+    }
+
+    /// A proposal that is not ready: every check outcome. (A ready one carries
+    /// a plan; the MCP proof's real-catalog suite emits those.)
+    pub(crate) fn changes_prepare_result() -> super::changes_prepare::ChangesPrepareResult {
+        use super::changes_prepare::{ChangeCheck, ChangesPrepareResult};
+        ChangesPrepareResult {
+            plan: None,
+            changes: vec![
+                ChangeCheck::Ready { path: "src/auth.ts".into() },
+                ChangeCheck::Conflict {
+                    path: "src/session.ts".into(),
+                    revision: "b1-4214304b1f1da00402a1a02f7580dce5".into(),
+                },
+                ChangeCheck::NoMatch { path: "src/a.ts".into(), edit: 0 },
+                ChangeCheck::Ambiguous { path: "src/b.ts".into(), edit: 2 },
+                ChangeCheck::NotInSession { path: "src/closed.ts".into() },
+                ChangeCheck::Denied { path: ".env".into() },
+                ChangeCheck::InvalidPath { path: "../outside.ts".into() },
             ],
         }
     }

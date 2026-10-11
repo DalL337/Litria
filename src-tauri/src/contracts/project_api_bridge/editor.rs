@@ -1,5 +1,6 @@
 //! EditorDomain operations of the bridge family (Project API contract brief
-//! §5, §8): `editor.documents` and `editor.bufferIndex`.
+//! §5, §8): `editor.documents`, `editor.bufferIndex`, and `editor.checkChanges`
+//! (build plan W2a).
 //!
 //! Buffer truth is the editor session — the working text of every entry it
 //! holds, including closed entries it still retains — never an editor engine
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::BridgeOperation;
 use crate::contracts::boundary::{invalid, schema_length, Validate};
 use crate::contracts::error::ContractError;
+use crate::contracts::project_api::changes_prepare::{MAX_CHANGES, MAX_EDITS_PER_CHANGE};
 use crate::contracts::project_api::files_read::{
     MAX_BYTES_PER_DOCUMENT, MAX_DOCUMENTS, MAX_PATH_LENGTH, MIN_DOCUMENTS, MIN_PATH_LENGTH,
 };
@@ -266,6 +268,127 @@ impl Validate for BufferIndexResult {
         for entry in &self.entries {
             check_path(&entry.path)?;
             check_revision(&entry.revision)?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// editor.checkChanges
+// ---------------------------------------------------------------------------
+
+/// Proposed edits checked against the session's latest text, without applying
+/// them (build plan W2a): the same planning W1's compare-and-apply runs, so a
+/// change that is ready here would apply if nothing changes first.
+pub(crate) struct CheckChangesOp;
+
+impl BridgeOperation for CheckChangesOp {
+    const NAME: &'static str = "editor.checkChanges";
+    const DESCRIPTION: &'static str = "For each proposed text change, whether it would apply to the editor session's \
+         latest text now: ready, conflict (with the current revision), noMatch or ambiguous (with the edit's index), \
+         or notInSession. Nothing is applied. Rust sends only paths the disclosure policy allows.";
+    const OWNER: &'static str = "EditorDomain";
+    type Request = CheckChangesRequest;
+    type Result = CheckChangesResult;
+}
+
+/// Rust → JavaScript.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CheckChangesRequest {
+    pub changes: Vec<ChangeToCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChangeToCheck {
+    /// The session path (the canonical project path Rust resolved).
+    pub path: String,
+    pub expected_revision: String,
+    pub edits: Vec<EditToCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EditToCheck {
+    pub old_text: String,
+    pub new_text: String,
+}
+
+/// JavaScript → Rust: one entry per requested change, in request order.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CheckChangesResult {
+    #[cfg_attr(test, schemars(length(min = 1, max = MAX_CHANGES)))]
+    pub changes: Vec<CheckedChange>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(tag = "outcome", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub(crate) enum CheckedChange {
+    Ready {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+    },
+    Conflict {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        #[cfg_attr(test, schemars(length(min = 1, max = MAX_REVISION_LENGTH)))]
+        revision: String,
+    },
+    NoMatch {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        #[cfg_attr(test, schemars(range(max = MAX_EDIT_INDEX)))]
+        edit: u32,
+    },
+    Ambiguous {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        #[cfg_attr(test, schemars(range(max = MAX_EDIT_INDEX)))]
+        edit: u32,
+    },
+    NotInSession {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+    },
+}
+
+impl CheckedChange {
+    pub(crate) fn path(&self) -> &str {
+        match self {
+            CheckedChange::Ready { path }
+            | CheckedChange::Conflict { path, .. }
+            | CheckedChange::NoMatch { path, .. }
+            | CheckedChange::Ambiguous { path, .. }
+            | CheckedChange::NotInSession { path } => path,
+        }
+    }
+}
+
+/// Edit indexes stay below the per-change bound.
+const MAX_EDIT_INDEX: u32 = MAX_EDITS_PER_CHANGE as u32 - 1;
+
+impl Validate for CheckChangesResult {
+    fn validate(&self) -> Result<(), ContractError> {
+        let count = self.changes.len();
+        if !(1..=MAX_CHANGES).contains(&count) {
+            return Err(invalid(format!("changes: expected 1 to {MAX_CHANGES} entries")));
+        }
+        for change in &self.changes {
+            check_path(change.path())?;
+            match change {
+                CheckedChange::Conflict { revision, .. } => check_revision(revision)?,
+                CheckedChange::NoMatch { edit, .. } | CheckedChange::Ambiguous { edit, .. } if *edit > MAX_EDIT_INDEX => {
+                    return Err(invalid(format!("edit: at most {MAX_EDIT_INDEX}")));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

@@ -89,8 +89,9 @@ fn put(root: &Path, path: &str, text: &str) {
     fs::write(full, text).unwrap();
 }
 
-/// A frontend with nothing open: no buffers, no selection, no wires; the
-/// language table is the committed bridge fixture.
+/// A frontend with nothing open but src/auth.ts (for proposals): no other
+/// buffers, no selection, no wires; the language table is the committed
+/// bridge fixture.
 fn owner(event: &BridgeRequestEvent) -> Option<String> {
     let paths = |key: &str| -> Vec<Value> { event.request[key].as_array().cloned().unwrap_or_default() };
     let result = match event.op.as_str() {
@@ -110,6 +111,17 @@ fn owner(event: &BridgeRequestEvent) -> Option<String> {
             "edges": [],
             "discoveryInFlight": false,
             "omitted": 0
+        }),
+        // It holds src/auth.ts unchanged since it was read, and nothing else:
+        // a proposal for it alone becomes a plan (build plan W2a).
+        "editor.checkChanges" => json!({
+            "changes": paths("changes")
+                .iter()
+                .map(|change| match change["path"].as_str() {
+                    Some("src/auth.ts") => json!({ "outcome": "ready", "path": change["path"] }),
+                    _ => json!({ "outcome": "notInSession", "path": change["path"] }),
+                })
+                .collect::<Vec<_>>()
         }),
         "languages.capabilities" => {
             let reply = committed_json_in(&bridge_dir().join(FIXTURES_DIR), "languages.capabilities.reply.json");
@@ -234,4 +246,42 @@ fn denied_and_service_errors_are_conforming_tool_errors() {
     db::close_workspace_db().unwrap();
     let result = tools_call(dispatcher, &bound.context(everything()), &context_call).unwrap();
     conforming(&result, ErrorCode::NotReady, "workspace closed");
+}
+
+/// A ready proposal through the real catalog becomes a plan awaiting review,
+/// and its result (plan present) conforms to the published schema; a proposal
+/// that is not ready makes no plan (build plan W2a).
+#[test]
+fn a_ready_proposal_becomes_a_pending_plan_through_the_real_catalog() {
+    let bound = Bound::new("propose");
+    let dispatcher = crate::project_api::dispatcher();
+    let context = bound.context(Grant::of(dispatcher.capabilities()));
+    let list = tools_list();
+    let output = validator(&tool(&list, "litria_changes_prepare")["outputSchema"]);
+    let propose = |path: &str| {
+        json!({ "name": "litria_changes_prepare", "arguments": { "changes": [{
+            "kind": "text.edit", "path": path, "expectedRevision": "b1-x",
+            "edits": [{ "oldText": "signIn", "newText": "logIn" }]
+        }]}})
+    };
+
+    let ready = tools_call(dispatcher, &context, &propose("src/auth.ts")).unwrap();
+    assert_eq!(ready["isError"], false, "{ready}");
+    let plan = &ready["structuredContent"]["plan"];
+    assert_eq!(plan["state"], "pendingReview");
+    assert_eq!(plan["expiresInSeconds"], 600);
+    assert!(plan["planId"].as_str().unwrap().starts_with("plan-"));
+    assert!(output.is_valid(&ready["structuredContent"]));
+    let again = tools_call(dispatcher, &context, &propose("src/auth.ts")).unwrap();
+    assert_eq!(again["structuredContent"]["plan"]["planId"], plan["planId"], "the same proposal is the same plan");
+
+    let not_ready = tools_call(dispatcher, &context, &propose("src/b.ts")).unwrap();
+    assert!(not_ready["structuredContent"].get("plan").is_none());
+    assert_eq!(not_ready["structuredContent"]["changes"][0]["outcome"], "notInSession");
+
+    let withheld = tools_call(dispatcher, &context, &propose(".env")).unwrap();
+    assert_eq!(withheld["structuredContent"]["changes"][0]["outcome"], "denied");
+    assert!(!withheld.to_string().contains("SECRET"));
+    let annotations = &tool(&list, "litria_changes_prepare")["annotations"];
+    assert_eq!(annotations["readOnlyHint"], false);
 }

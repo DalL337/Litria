@@ -1,0 +1,35 @@
+{
+  "changes": [
+    {
+      "outcome": "ready",
+      "path": "src/auth.ts"
+    },
+    {
+      "outcome": "conflict",
+      "path": "src/session.ts",
+      "revision": "b1-4214304b1f1da00402a1a02f7580dce5"
+    },
+    {
+      "edit": 0,
+      "outcome": "noMatch",
+      "path": "src/a.ts"
+    },
+    {
+      "edit": 2,
+      "outcome": "ambiguous",
+      "path": "src/b.ts"
+    },
+    {
+      "outcome": "notInSession",
+      "path": "src/closed.ts"
+    },
+    {
+      "outcome": "denied",
+      "path": ".env"
+    },
+    {
+      "outcome": "invalidPath",
+      "path": "../outside.ts"
+    }
+  ]
+}

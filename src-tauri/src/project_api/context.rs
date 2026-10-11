@@ -283,6 +283,7 @@ mod tests {
     use crate::contracts::context::{Grant, Principal};
     use crate::contracts::project_api::files_read::FilesReadOp;
     use crate::contracts::project_api::files_search::FilesSearchOp;
+    use crate::contracts::project_api::changes_prepare::ChangesPrepareOp;
     use crate::contracts::project_api::diagnostics_list::DiagnosticsListOp;
     use crate::contracts::project_api::graph_query::GraphQueryOp;
     use crate::contracts::project_api::project_context::{DeniedClass, ProjectContextOp};
@@ -594,6 +595,7 @@ mod tests {
         assert_eq!(
             dispatcher.operations_for(&Grant::of(dispatcher.capabilities())),
             [
+                ChangesPrepareOp::NAME,
                 DiagnosticsListOp::NAME,
                 FilesReadOp::NAME,
                 FilesSearchOp::NAME,

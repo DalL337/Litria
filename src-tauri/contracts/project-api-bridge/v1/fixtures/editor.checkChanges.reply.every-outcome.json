@@ -1,0 +1,30 @@
+{
+  "kind": "result",
+  "result": {
+    "changes": [
+      {
+        "outcome": "ready",
+        "path": "a.ts"
+      },
+      {
+        "outcome": "conflict",
+        "path": "b.ts",
+        "revision": "b1-x"
+      },
+      {
+        "outcome": "noMatch",
+        "path": "c.ts",
+        "edit": 0
+      },
+      {
+        "outcome": "ambiguous",
+        "path": "d.ts",
+        "edit": 63
+      },
+      {
+        "outcome": "notInSession",
+        "path": "e.ts"
+      }
+    ]
+  }
+}

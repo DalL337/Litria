@@ -1,0 +1,12 @@
+{
+  "kind": "result",
+  "result": {
+    "changes": [
+      {
+        "outcome": "noMatch",
+        "path": "a.ts",
+        "edit": 64
+      }
+    ]
+  }
+}

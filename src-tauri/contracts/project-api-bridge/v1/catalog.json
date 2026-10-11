@@ -39,6 +39,13 @@
       "owner": "LanguageSupportDomain, SyntaxDomain",
       "reply": "languages.capabilities.reply.schema.json",
       "request": "languages.capabilities.request.schema.json"
+    },
+    {
+      "description": "For each proposed text change, whether it would apply to the editor session's latest text now: ready, conflict (with the current revision), noMatch or ambiguous (with the edit's index), or notInSession. Nothing is applied. Rust sends only paths the disclosure policy allows.",
+      "name": "editor.checkChanges",
+      "owner": "EditorDomain",
+      "reply": "editor.checkChanges.reply.schema.json",
+      "request": "editor.checkChanges.request.schema.json"
     }
   ],
   "replyCommand": "project_api_bridge_reply",

@@ -12,6 +12,7 @@
 //! external transport (build plan track T) is the release consumer.
 
 pub(crate) mod bridge;
+mod changes;
 mod context;
 mod diagnostics;
 mod files_read;
@@ -33,6 +34,7 @@ use crate::contracts::catalog::{Dispatcher, Limits};
 use crate::contracts::context::{CallContext, Grant, Principal};
 #[cfg(debug_assertions)]
 use crate::contracts::error::{ContractError, ErrorCode};
+use crate::contracts::project_api::changes_prepare::ChangesPrepareOp;
 use crate::contracts::project_api::diagnostics_list::DiagnosticsListOp;
 use crate::contracts::project_api::files_read::FilesReadOp;
 use crate::contracts::project_api::files_search::FilesSearchOp;
@@ -59,6 +61,7 @@ pub(crate) fn dispatcher() -> &'static Dispatcher {
         dispatcher.register::<FilesSearchOp>(search::handle);
         dispatcher.register::<GraphQueryOp>(graph_query::handle);
         dispatcher.register::<DiagnosticsListOp>(diagnostics::handle);
+        dispatcher.register::<ChangesPrepareOp>(changes::handle);
         dispatcher
     })
 }

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CheckChangesRequest",
+  "description": "Rust → JavaScript.",
+  "type": "object",
+  "properties": {
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChangeToCheck"
+      }
+    }
+  },
+  "required": [
+    "changes"
+  ],
+  "$defs": {
+    "ChangeToCheck": {
+      "type": "object",
+      "properties": {
+        "edits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EditToCheck"
+          }
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "path": {
+          "description": "The session path (the canonical project path Rust resolved).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "expectedRevision",
+        "edits"
+      ]
+    },
+    "EditToCheck": {
+      "type": "object",
+      "properties": {
+        "newText": {
+          "type": "string"
+        },
+        "oldText": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "oldText",
+        "newText"
+      ]
+    }
+  }
+}

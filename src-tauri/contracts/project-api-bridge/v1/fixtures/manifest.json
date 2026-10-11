@@ -339,6 +339,63 @@
       "message": "reply",
       "expect": "reject",
       "note": "One language row more than a reply may hold."
+    },
+    {
+      "file": "editor.checkChanges.request.json",
+      "operation": "editor.checkChanges",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits (asserted in fixtures.rs).",
+      "sample": "checkChanges"
+    },
+    {
+      "file": "editor.checkChanges.reply.json",
+      "operation": "editor.checkChanges",
+      "message": "reply",
+      "expect": "accept",
+      "note": "What the JavaScript bridge answers to editor.checkChanges.request.json when the second file changed since."
+    },
+    {
+      "file": "editor.checkChanges.reply.every-outcome.json",
+      "operation": "editor.checkChanges",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Every outcome; edit indexes run to 63."
+    },
+    {
+      "file": "editor.checkChanges.reply.edit-beyond-bound.json",
+      "operation": "editor.checkChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An edit index is below the 64-edit bound."
+    },
+    {
+      "file": "editor.checkChanges.reply.unknown-outcome.json",
+      "operation": "editor.checkChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An unfamiliar outcome is rejected: a check never applies anything."
+    },
+    {
+      "file": "editor.checkChanges.reply.no-changes.json",
+      "operation": "editor.checkChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "A reply answers at least one change."
+    },
+    {
+      "file": "editor.checkChanges.reply.conflict-without-revision.json",
+      "operation": "editor.checkChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "A conflict names the revision the editor holds now."
+    },
+    {
+      "file": "editor.checkChanges.reply.unknown-field.json",
+      "operation": "editor.checkChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "Unknown fields are rejected: the editor never sends text back."
     }
   ]
 }

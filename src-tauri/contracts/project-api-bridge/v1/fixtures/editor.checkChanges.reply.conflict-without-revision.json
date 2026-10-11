@@ -1,0 +1,11 @@
+{
+  "kind": "result",
+  "result": {
+    "changes": [
+      {
+        "outcome": "conflict",
+        "path": "a.ts"
+      }
+    ]
+  }
+}

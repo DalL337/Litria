@@ -63,11 +63,12 @@ export function useProjectApiBridge({
   languageSupportDomain,
   graphOwnersRef
 }) {
-  const { tabsById, openTabIds, activeTabId } = useEditorSession();
+  const { tabsById, openTabIds, activeTabId, checkBufferEdit } = useEditorSession();
   const fallbackGraphRef = useRef({});
   const ownersRef = useRef(null);
   ownersRef.current = {
     session: { tabsById, openTabIds },
+    checkBufferEdit,
     activeTabId,
     workspace: { selectedIds, piecesById, selectedGroupId, groups },
     languageSupportDomain,
@@ -85,6 +86,8 @@ export function useProjectApiBridge({
           return selectionSnapshot(workspace, getActiveSessionDocument(session, active));
         },
         languageCapabilities: () => buildCapabilityMatrix(ownersRef.current.languageSupportDomain),
+        // Proposed changes, checked against the session's latest text (W2a).
+        checkBufferEdit: (request) => ownersRef.current.checkBufferEdit(request),
         graph: () => {
           const { workspace, graph } = ownersRef.current;
           const owners = graph.current ?? {};

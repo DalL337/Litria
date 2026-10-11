@@ -95,8 +95,10 @@ fn tool_definitions_follow_the_revision() {
         assert_eq!(published["annotations"]["readOnlyHint"], entry.read_only, "{name}");
         assert_eq!(published["annotations"]["openWorldHint"], false, "{name}");
     }
-    // Every operation in the read catalog is read-only.
-    assert!(catalog().iter().all(|entry| entry.read_only));
+    // The reads are read-only; proposing a change is not (build plan W2a).
+    for entry in catalog() {
+        assert_eq!(entry.read_only, !entry.name.starts_with("litria_changes_"), "{}", entry.name);
+    }
 }
 
 #[test]

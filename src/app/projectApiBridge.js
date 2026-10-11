@@ -29,7 +29,8 @@ export const BRIDGE_OPS = Object.freeze({
   bufferIndex: 'editor.bufferIndex',
   selection: 'workspace.selection',
   capabilities: 'languages.capabilities',
-  graph: 'workspace.graph'
+  graph: 'workspace.graph',
+  checkChanges: 'editor.checkChanges'
 });
 /** Encoded size of one reply (contract brief §10); the catalog publishes it. */
 export const MAX_REPLY_BYTES = 512 * 1024;
@@ -686,6 +687,47 @@ export function answerCapabilities(request, rows) {
   return { kind: 'result', result: { languages: (rows ?? []).slice(0, MAX_LANGUAGE_ROWS) } };
 }
 
+/**
+ * `editor.checkChanges` (Project API build plan W2a): each proposed change
+ * checked against the session's latest text by `check` — the session's
+ * `checkBufferEdit`, W1's compare-and-apply planning — and never applied. One
+ * answer per change, in request order: `ready`, `conflict` (with the
+ * revision the session holds now), `noMatch` or `ambiguous` (with the
+ * edit's index), or `notInSession`. Rust sends only paths the disclosure
+ * policy allows.
+ */
+export function answerCheckChanges(request, check) {
+  const changes = request?.changes;
+  if (!Array.isArray(changes) || changes.length === 0 || typeof check !== 'function') {
+    return refusal('invalidRequest');
+  }
+  const answers = [];
+  for (const change of changes) {
+    if (!change || typeof change.path !== 'string') return refusal('invalidRequest');
+    const { path } = change;
+    const plan = check({ path, expectedRevision: change.expectedRevision, edits: change.edits });
+    switch (plan?.outcome) {
+      case 'applied':
+        answers.push({ outcome: 'ready', path });
+        break;
+      case 'conflict':
+        answers.push({ outcome: 'conflict', path, revision: plan.revision });
+        break;
+      case 'noMatch':
+      case 'ambiguous':
+        answers.push({ outcome: plan.outcome, path, edit: plan.edit });
+        break;
+      case 'notInSession':
+        answers.push({ outcome: 'notInSession', path });
+        break;
+      default:
+        // Rust validated the request; anything else is a broken request.
+        return refusal('invalidRequest');
+    }
+  }
+  return { kind: 'result', result: { changes: answers } };
+}
+
 // ─── The bridge ────────────────────────────────────────────────────────────
 
 /**
@@ -693,7 +735,8 @@ export function answerCapabilities(request, rows) {
  * @param {{
  *   sessionDocuments: () => Map<string, {tabId:any, path:string, state:string, dirty:boolean, text:string}>,
  *   selection: () => {selectedPaths: string[], folder: (string|null), activeDocument: ({path:string, dirty:boolean}|null)},
- *   languageCapabilities: () => object[]
+ *   languageCapabilities: () => object[],
+ *   checkBufferEdit: (request: object) => object
  * }} deps.ports
  *   Read-only owner ports: EditorDomain's `getSessionDocumentsByPath` and
  *   `getActiveSessionDocument`; the selection, its pieces and the selected
@@ -797,6 +840,8 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
         return answerGraph(request, ports.graph?.() ?? graphSnapshot({}), ceiling);
       case BRIDGE_OPS.capabilities:
         return answerCapabilities(request, ports.languageCapabilities());
+      case BRIDGE_OPS.checkChanges:
+        return answerCheckChanges(request, ports.checkBufferEdit);
       default:
         return refusal('unknownOperation');
     }
