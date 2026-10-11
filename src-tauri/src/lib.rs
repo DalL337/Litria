@@ -58,6 +58,7 @@ pub fn run() {
             commands::read_project_file_with_revision,
             commands::open_file_dialog,
             commands::write_project_file,
+            commands::create_project_file,
             commands::list_project_tree,
             commands::move_project_path,
             commands::create_project_directory,

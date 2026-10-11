@@ -148,6 +148,27 @@ export async function writeProjectFile(rootPath, relativePath, contents) {
   return response.ok;
 }
 
+/**
+ * Create a file only if nothing has its name: never an overwrite (Project
+ * API build plan W3a). The path is taken exactly. Resolves 'created' or
+ * 'exists', or null on failure (with the typed error recorded).
+ */
+export async function createProjectFile(rootPath, relativePath, contents) {
+  if (!rootPath || !relativePath) {
+    setLastProjectStorageError(createClientValidationError('project_file.path.required', 'Project and file paths are required.'));
+    return null;
+  }
+  const response = await invokeWithTypedError('create_project_file', {
+    rootPath,
+    relativePath,
+    contents: contents ?? ''
+  }, {
+    fallbackCode: 'project_file.create.failed',
+    fallbackMessage: 'Unable to create project file.'
+  });
+  return response.ok ? response.data : null;
+}
+
 export async function listProjectTree(rootPath) {
   if (!rootPath) {
     setLastProjectStorageError(createClientValidationError('project_tree.path.required', 'Project path is required.'));

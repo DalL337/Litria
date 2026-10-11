@@ -9,7 +9,7 @@ export function usePieceUiActions({
   addPiece,
   pieces,
   projectRootPath,
-  writeProjectFile,
+  createProjectFile,
   bumpScaffoldRefresh,
   pillDomain,
   projectInstanceId,
@@ -42,15 +42,19 @@ export function usePieceUiActions({
     const spawn = typeof getSpawnPosition === 'function' ? getSpawnPosition() : { x: 0, y: 0 };
 
     if (rootPath && cleanPath) {
-      // Write the file to disk first (via the filesystem write manager).
-      // A failed write must NOT fall through to piece creation: the old
+      // Create the file on disk first (via the filesystem write manager).
+      // A failed create must NOT fall through to piece creation: the old
       // fire-and-forget call left a SQLite row + canvas node pointing at a
-      // file that never existed.
-      const written = await writeProjectFile(rootPath, cleanPath, initialCode);
-      if (written !== true) {
+      // file that never existed. It is a create, never a write: the name
+      // check above sees only canvas pieces, so a file on disk with no piece
+      // (package.json, litria.toml) used to be replaced (W3a, 2026-10-11).
+      const created = await createProjectFile(rootPath, cleanPath, initialCode);
+      if (created?.success !== true) {
         pillDomain?.commands?.addPill({
           projectId: projectInstanceId,
-          message: `Failed to create "${cleanPath}" on disk`,
+          message: created?.code === 'fs.exists'
+            ? `"${cleanPath}" already exists`
+            : `Failed to create "${cleanPath}" on disk`,
           severity: 'error'
         });
         setIsCreatePieceModalOpen(false);
@@ -104,7 +108,7 @@ export function usePieceUiActions({
     projectInstanceId,
     projectRootPath,
     setIsCreatePieceModalOpen,
-    writeProjectFile
+    createProjectFile
   ]);
 
   const validateNewPieceFilename = useCallback(

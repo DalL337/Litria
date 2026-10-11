@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createFilesystemWriteManager } from './filesystemWriteManager';
-import { removeEmptyDirectory, createProjectDirectory } from '../project/storage.js';
+import { removeEmptyDirectory, createProjectDirectory, createProjectFile } from '../project/storage.js';
 import { normalizePath, getBasename } from '../utils/path';
 
 /**
@@ -25,6 +25,10 @@ import { normalizePath, getBasename } from '../utils/path';
  * these callers own file CONTENT (editor saves, import-line edits, piece
  * seed content) — they notify the syntax domain themselves where needed and
  * never change the tree shape.
+ *
+ * `createContentFile` is the same for a NEW file: it never overwrites (the
+ * manager's createFile) and answers the structured result, so a taken name
+ * reaches its caller as `fs.exists` (New Node, W3a).
  */
 export function useManagerFileWriter() {
   const managerRef = useRef(null);
@@ -43,7 +47,18 @@ export function useManagerFileWriter() {
     const result = await writeContentFileWithResult(...args);
     return result.success === true;
   }, [writeContentFileWithResult]);
-  return { managerRef, writeContentFile, writeContentFileWithResult };
+  const createContentFile = useCallback(async (_rootPath, relativePath, contents) => {
+    const manager = managerRef.current;
+    if (!manager) {
+      return {
+        success: false,
+        code: 'fs.no_manager',
+        error: 'The filesystem write manager is unavailable.'
+      };
+    }
+    return manager.createFile(relativePath, contents, { notify: false, skipScaffold: true });
+  }, []);
+  return { managerRef, writeContentFile, writeContentFileWithResult, createContentFile };
 }
 
 /**
@@ -84,6 +99,7 @@ export function useFilesystemWriteManager({
   const manager = useMemo(() => createFilesystemWriteManager({
     moveProjectPath: (rootPath, from, to) => moveProjectPath(rootPath, from, to),
     writeProjectFile: (rootPath, path, contents) => writeProjectFile(rootPath, path, contents),
+    createProjectFile,
     removeEmptyDirectory,
     createProjectDirectory,
     deleteProjectPath: (rootPath, path) => deleteProjectPath(rootPath, path),

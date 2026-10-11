@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -155,6 +156,40 @@ pub(crate) fn resolve_relative_path_for_write(root: &Path, relative_path: &str) 
         ancestor = candidate.parent().map(Path::to_path_buf);
     }
 
+    Err("Path is not within project root.".into())
+}
+
+/// Where a new file goes (create-if-absent, Project API build plan W3a): the
+/// directory that will hold it, which may not exist yet, and the name it gets.
+/// The path is taken EXACTLY as given, with no trimming, so the file created
+/// is the file named (adversarial-check Learned Flaw 3).
+///
+/// The nearest existing ancestor of the directory is canonicalized and must
+/// lie within the root, as for writes. The name itself is never resolved:
+/// whatever already has it, a link included, makes the create `Exists`. The
+/// caller canonicalizes the directory again once it exists.
+pub(crate) fn resolve_new_file(root: &Path, relative_path: &str) -> Result<(PathBuf, OsString), String> {
+    let relative = validate_relative_path_exact(relative_path)?;
+    // On Windows `:` names a stream: `a.ts:x` is a stream of `a.ts`, never a
+    // new file, and creating it left a stray file behind (W3a adversarial
+    // check, reproduced on Windows). No Windows file name can hold one.
+    if cfg!(windows) && relative_path.contains(':') {
+        return Err("Invalid relative path.".into());
+    }
+    let name = relative
+        .file_name()
+        .ok_or_else(|| "Invalid relative path.".to_string())?
+        .to_os_string();
+    let parent = root.join(relative.parent().unwrap_or_else(|| Path::new("")));
+    let mut ancestor = Some(parent.as_path());
+    while let Some(candidate) = ancestor {
+        if candidate.exists() {
+            let canonical = fs::canonicalize(candidate).map_err(|error| format!("Unable to resolve path: {error}"))?;
+            ensure_within_root(root, &canonical)?;
+            return Ok((parent.clone(), name));
+        }
+        ancestor = candidate.parent();
+    }
     Err("Path is not within project root.".into())
 }
 

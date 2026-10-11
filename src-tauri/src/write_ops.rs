@@ -209,6 +209,204 @@ fn atomic_write_string_inner(
     sync_parent_dir(path)
 }
 
+// ---------------------------------------------------------------------------
+// Create-if-absent (Project API build plan W3a; Project API proposal R2)
+// ---------------------------------------------------------------------------
+
+/// Why `create_new_string` did not create the file.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CreateError {
+    /// Something already has the name: a file, a directory or a link, which
+    /// is never followed. It was not touched.
+    Exists,
+    /// Anything else. Nothing was created at the target and the temp file is
+    /// removed: unlike a save's, the content's only copy is not on disk (the
+    /// caller still holds it).
+    Failed(String),
+}
+
+/// How a no-clobber commit failed.
+#[derive(Debug)]
+enum CommitError {
+    /// The name is taken.
+    Exists,
+    /// This filesystem cannot commit this way (no hard links: FAT32 or exFAT
+    /// on Linux and macOS, some network shares). `create_exclusive_in_place`
+    /// takes over.
+    Unsupported(io::Error),
+    Failed(io::Error),
+}
+
+/// Create `path` holding `content` only if nothing has that name, and never
+/// replace anything.
+///
+/// The content is written and fsynced beside the target first, then put in
+/// place by one step the filesystem performs atomically and that fails if the
+/// name is taken (`commit_no_clobber`). A crash therefore leaves no file or
+/// the whole file, and anything that takes the name before the commit, from
+/// any process, is left alone and answered `Exists`. Filesystems without hard
+/// links on Linux and macOS use `create_exclusive_in_place`, which still
+/// never clobbers but can leave a partial new file if the process ends
+/// mid-write.
+///
+/// The parent directory must exist. `before_commit` runs after the content is
+/// durable and immediately before the commit: the caller's last check that
+/// the parent is still the directory it resolved, and the tests' race window.
+pub(crate) fn create_new_string(
+    path: &Path,
+    content: &str,
+    before_commit: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<(), CreateError> {
+    create_new_string_inner(path, content, before_commit, &mut commit_no_clobber)
+}
+
+fn create_new_string_inner(
+    path: &Path,
+    content: &str,
+    before_commit: &mut dyn FnMut() -> Result<(), String>,
+    commit: &mut dyn FnMut(&Path, &Path) -> Result<(), CommitError>,
+) -> Result<(), CreateError> {
+    // An early answer that saves writing the temp; the commit is the authority.
+    if fs::symlink_metadata(path).is_ok() {
+        return Err(CreateError::Exists);
+    }
+    let temp_path = temp_path_for(path).map_err(CreateError::Failed)?;
+    let discard_temp = |temp: &Path| {
+        let _ = fs::remove_file(temp);
+    };
+
+    // Phase 1: the content, durable beside the target. Nothing visible has
+    // changed yet.
+    let prepared = (|| -> Result<(), String> {
+        let mut temp_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+            .map_err(|error| format!("Unable to create temp file: {error}"))?;
+        temp_file
+            .write_all(content.as_bytes())
+            .map_err(|error| format!("Unable to write temp file: {error}"))?;
+        temp_file
+            .sync_all()
+            .map_err(|error| format!("Unable to fsync temp file: {error}"))
+    })();
+    if let Err(error) = prepared {
+        discard_temp(&temp_path);
+        return Err(CreateError::Failed(error));
+    }
+    if let Err(error) = before_commit() {
+        discard_temp(&temp_path);
+        return Err(CreateError::Failed(error));
+    }
+
+    // Phase 2: the commit, which never replaces anything.
+    match commit(&temp_path, path) {
+        Ok(()) => {}
+        Err(CommitError::Exists) => {
+            discard_temp(&temp_path);
+            return Err(CreateError::Exists);
+        }
+        Err(CommitError::Unsupported(reason)) => {
+            eprintln!("[write_ops] no atomic create here ({reason}); creating {} in place", path.display());
+            let created = create_exclusive_in_place(path, content);
+            discard_temp(&temp_path);
+            created?;
+        }
+        Err(CommitError::Failed(error)) => {
+            discard_temp(&temp_path);
+            return Err(CreateError::Failed(format!("Unable to create file: {error}")));
+        }
+    }
+
+    // The file exists, whole, so the create is reported. A failed directory
+    // fsync only leaves the new name's durability across a power loss
+    // unconfirmed; reporting a failure here would deny a file that is there.
+    if let Err(error) = sync_parent_dir(path) {
+        eprintln!("[write_ops] created {}, but {error}", path.display());
+    }
+    Ok(())
+}
+
+/// Move `temp` to `target` only if nothing has the name `target`, in one step
+/// the filesystem performs atomically.
+///
+/// `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` fails with
+/// `ERROR_ALREADY_EXISTS` if anything has the name. Every Windows filesystem
+/// supports it (NTFS, ReFS, FAT32, exFAT, SMB), so Windows needs no fallback.
+#[cfg(windows)]
+fn commit_no_clobber(temp: &Path, target: &Path) -> Result<(), CommitError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+
+    let wide = |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(std::iter::once(0)).collect() };
+    let (from, to) = (wide(temp), wide(target));
+    // SAFETY: both buffers are NUL-terminated and outlive the call.
+    let moved = unsafe { MoveFileExW(PCWSTR(from.as_ptr()), PCWSTR(to.as_ptr()), MOVEFILE_WRITE_THROUGH) };
+    match moved {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let error = win32_io_error(&error);
+            match error.kind() {
+                io::ErrorKind::AlreadyExists => Err(CommitError::Exists),
+                io::ErrorKind::Unsupported => Err(CommitError::Unsupported(error)),
+                _ => Err(CommitError::Failed(error)),
+            }
+        }
+    }
+}
+
+/// `windows::core::Error` converts to `io::Error` by its HRESULT, which
+/// `io::ErrorKind` cannot classify; recover the Win32 code it wraps.
+#[cfg(windows)]
+fn win32_io_error(error: &windows::core::Error) -> io::Error {
+    let code = error.code().0 as u32;
+    if code & 0xFFFF_0000 == 0x8007_0000 {
+        io::Error::from_raw_os_error((code & 0xFFFF) as i32)
+    } else {
+        io::Error::other(error.message())
+    }
+}
+
+/// `link(2)` never replaces: it fails with `EEXIST` if anything has the name,
+/// a dangling link included. The temp's name is dropped afterwards; if the
+/// process ends in between, the target is already whole and a hidden stray
+/// temp with the same bytes remains.
+#[cfg(unix)]
+fn commit_no_clobber(temp: &Path, target: &Path) -> Result<(), CommitError> {
+    match fs::hard_link(temp, target) {
+        Ok(()) => {
+            let _ = fs::remove_file(temp);
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(CommitError::Exists),
+        Err(error) => Err(CommitError::Unsupported(error)),
+    }
+}
+
+/// The fallback where hard links are unsupported: claim the name with an
+/// exclusive create (it fails if anything has the name, and never follows a
+/// link), then write. It never clobbers, but a crash mid-write can leave a
+/// partial new file: the residual risk of that filesystem class. A failed
+/// write removes the half-written file, which this call created a moment ago.
+fn create_exclusive_in_place(target: &Path, content: &str) -> Result<(), CreateError> {
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(target) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Err(CreateError::Exists),
+        Err(error) => return Err(CreateError::Failed(format!("Unable to create file: {error}"))),
+    };
+    let written = file.write_all(content.as_bytes()).and_then(|()| file.sync_all());
+    if let Err(error) = written {
+        drop(file);
+        let _ = fs::remove_file(target);
+        return Err(CreateError::Failed(format!("Unable to write file: {error}")));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod create_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
