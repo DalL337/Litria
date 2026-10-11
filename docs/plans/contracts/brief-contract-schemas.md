@@ -165,6 +165,8 @@ This also answers the extension sandbox design's open question 4 at the contract
 
   Use the selected MCP SDK if one exists by then; otherwise build a thin serializer over the committed artifacts.
 
+  *(Decided 2026-10-11, Project API build plan P6: the thin serializer, no MCP SDK. Without a transport, an SDK brings only the protocol envelope and session machinery, which are track T's. Track T re-opens the choice; any SDK must serve the committed schemas verbatim. See the build plan's P6 record.)*
+
 **Tests:**
 
 - **Rust boundary verdict:** each input fixture runs through the complete boundary (byte budget, deserialization, explicit validation). The boundary's accept or reject verdict must equal the inbound schema's verdict (jsonschema 0.58.2 as a dev-dependency is the candidate). Deserialization alone is not expected to reject bound violations; the explicit validator is.

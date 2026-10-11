@@ -37,6 +37,7 @@ impl Operation for GraphQueryOp {
          unavailable with reasons. A walk that hits maxNodes, the edge ceiling or the symbol ceiling says so in \
          truncatedBy.";
     const CAPABILITY: &'static str = "project.graph.read";
+    const READ_ONLY: bool = true;
     type Request = GraphQueryRequest;
     type Result = GraphQueryResult;
 }

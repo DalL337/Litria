@@ -30,6 +30,11 @@ pub(crate) trait Operation: 'static {
     const DESCRIPTION: &'static str;
     /// Capability an external principal needs to call the operation.
     const CAPABILITY: &'static str;
+    /// The operation changes nothing: no file, buffer, canvas or setting. MCP
+    /// publishes it as the tool's `readOnlyHint` (build plan P6). Required,
+    /// so a write operation must say it is one.
+    #[cfg_attr(not(test), allow(dead_code))]
+    const READ_ONLY: bool;
     type Request: DeserializeOwned + Validate;
     /// Emitted to callers; also readable back, so the fixtures can prove the
     /// tolerant-reader rules (ADR-033 decision 6).
@@ -196,6 +201,7 @@ mod schema_entry {
         pub name: &'static str,
         pub description: &'static str,
         pub capability: &'static str,
+        pub read_only: bool,
         pub request_schema: fn() -> Schema,
         pub result_schema_out: fn() -> Schema,
         pub result_schema_in: fn() -> Schema,
@@ -214,6 +220,7 @@ mod schema_entry {
             name: O::NAME,
             description: O::DESCRIPTION,
             capability: O::CAPABILITY,
+            read_only: O::READ_ONLY,
             request_schema: inbound_schema::<O::Request>,
             result_schema_out: outbound_schema::<O::Result>,
             result_schema_in: inbound_schema::<O::Result>,
@@ -261,6 +268,7 @@ mod tests {
         const NAME: &'static str = "litria_orphan";
         const DESCRIPTION: &'static str = "Registered, never listed.";
         const CAPABILITY: &'static str = "project.files.read";
+        const READ_ONLY: bool = true;
         type Request = FilesReadRequest;
         type Result = FilesReadResult;
     }

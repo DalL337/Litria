@@ -1,29 +1,87 @@
-//! Minimal MCP adapter proof (brief §9). No SDK and no agent runtime: this
-//! builds the `tools/list` entries and `tools/call` results an adapter would
-//! publish, from the catalog and the COMMITTED artifacts — the files the
-//! application would embed — following MCP revision 2026-07-28.
+//! MCP adapter proof (contract-schemas brief §9; Project API build plan P6).
+//! No SDK and no transport: this builds the `tools/list` result and the
+//! `tools/call` results an adapter publishes, from the catalog and the
+//! COMMITTED artifacts, embedded the way the application will embed them,
+//! following MCP revision 2026-07-28. Track T adds the transport and moves the
+//! adapter into the application; until then it is test-only (plan §1).
 //!
-//! Mapping decisions S0 fixes:
+//! SDK or thin serializer (P6 decision, 2026-10-11): the thin serializer, and
+//! no new crate. Without a transport an SDK would bring only its protocol
+//! envelope and session machinery, which is track T's subject; what the
+//! adapter itself owns is this mapping, pinned here by tests to the revision.
+//! Whatever SDK track T picks must serve the committed schemas verbatim.
+//!
+//! Mapping (S0, extended in P6):
 //! - `inputSchema` is the inbound request schema; `outputSchema` the outbound
-//!   result schema.
+//!   result schema. Annotations: `readOnlyHint` from the catalog, and
+//!   `openWorldHint: false` — the Project API never reaches outside the
+//!   project.
+//! - Every result says `resultType: "complete"` (the revision's servers MUST).
 //! - A contract failure is a tool execution error: `isError: true`, the error
-//!   JSON as text content, and no `structuredContent` — the spec requires any
-//!   structured result to conform to `outputSchema`, which an error does not.
-//! - An unknown operation is a protocol error (JSON-RPC -32602), as MCP
-//!   specifies for unknown tools, not a tool result.
+//!   JSON as text content, and no `structuredContent` — any structured result
+//!   must conform to `outputSchema`, which an error does not. Input validation
+//!   errors are tool execution errors too, as the revision directs.
+//! - An unknown tool, or a call whose parameters are not a `CallToolRequest`
+//!   (no string `name`, `arguments` not an object), is a protocol error:
+//!   JSON-RPC −32602, with a fixed message that never echoes the call.
 
 use serde_json::{json, Value};
 
-use super::artifacts::{committed_json, CATALOG_FILE};
 use super::catalog::Dispatcher;
 use super::context::CallContext;
 use super::error::{ContractError, ErrorCode};
 
-/// JSON-RPC "Invalid params", which MCP uses for an unknown tool.
-const INVALID_PARAMS: i64 = -32602;
+/// The MCP revision this mapping follows.
+pub(crate) const REVISION: &str = "2026-07-28";
 
+/// JSON-RPC "Invalid params": MCP's code for an unknown tool or a malformed
+/// `tools/call`.
+pub(crate) const INVALID_PARAMS: i64 = -32602;
+
+/// The committed artifacts MCP serves, compiled in exactly as the application
+/// will carry them (contract-schemas brief §5: the running application never
+/// generates schemas). A file the catalog names but this table lacks fails a
+/// test; a file this table names but the repository lacks fails the build.
+pub(crate) mod embedded {
+    use serde_json::Value;
+
+    pub(crate) const CATALOG: &str = "catalog.json";
+    pub(crate) const ERROR: &str = "error.schema.json";
+
+    macro_rules! artifacts {
+        ($($file:literal),* $(,)?) => {
+            &[$(($file, include_str!(concat!("../../contracts/project-api/v1/", $file)))),*]
+        };
+    }
+
+    pub(crate) const FILES: &[(&str, &str)] = artifacts![
+        "catalog.json",
+        "error.schema.json",
+        "litria_files_read.request.schema.json",
+        "litria_files_read.result.out.schema.json",
+        "litria_project_context.request.schema.json",
+        "litria_project_context.result.out.schema.json",
+        "litria_files_search.request.schema.json",
+        "litria_files_search.result.out.schema.json",
+        "litria_graph_query.request.schema.json",
+        "litria_graph_query.result.out.schema.json",
+        "litria_diagnostics_list.request.schema.json",
+        "litria_diagnostics_list.result.out.schema.json",
+    ];
+
+    pub(crate) fn text(name: &str) -> Option<&'static str> {
+        FILES.iter().find(|(file, _)| *file == name).map(|(_, text)| *text)
+    }
+
+    pub(crate) fn json(name: &str) -> Value {
+        let text = text(name).unwrap_or_else(|| panic!("`{name}` is not embedded"));
+        serde_json::from_str(text).unwrap_or_else(|error| panic!("parse embedded {name}: {error}"))
+    }
+}
+
+/// The `tools/list` result: every operation in the catalog, in catalog order.
 pub(crate) fn tools_list() -> Value {
-    let catalog = committed_json(CATALOG_FILE);
+    let catalog = embedded::json(embedded::CATALOG);
     let tools: Vec<Value> = catalog["operations"]
         .as_array()
         .expect("catalog operations")
@@ -32,15 +90,38 @@ pub(crate) fn tools_list() -> Value {
             json!({
                 "name": operation["name"],
                 "description": operation["description"],
-                "inputSchema": committed_json(operation["request"].as_str().unwrap()),
-                "outputSchema": committed_json(operation["resultOut"].as_str().unwrap()),
+                "inputSchema": embedded::json(operation["request"].as_str().expect("request schema file")),
+                "outputSchema": embedded::json(operation["resultOut"].as_str().expect("result schema file")),
+                "annotations": {
+                    "readOnlyHint": operation["readOnly"].as_bool().expect("readOnly flag"),
+                    "openWorldHint": false,
+                },
             })
         })
         .collect();
-    json!({ "tools": tools })
+    json!({ "resultType": "complete", "tools": tools })
 }
 
-/// `Ok` is a `CallToolResult`; `Err` is a JSON-RPC error object.
+/// A `tools/call` request's `params`. `Ok` is a `CallToolResult`; `Err` is a
+/// JSON-RPC error object.
+pub(crate) fn tools_call(dispatcher: &Dispatcher, context: &CallContext, params: &Value) -> Result<Value, Value> {
+    let Some(params) = params.as_object() else {
+        return Err(malformed());
+    };
+    let Some(name) = params.get("name").and_then(Value::as_str) else {
+        return Err(malformed());
+    };
+    // `arguments` is optional; when present it must be an object.
+    let raw = match params.get("arguments") {
+        None => b"{}".to_vec(),
+        Some(arguments @ Value::Object(_)) => serde_json::to_vec(arguments).expect("arguments serialize"),
+        Some(_) => return Err(malformed()),
+    };
+    call_tool(dispatcher, context, name, &raw)
+}
+
+/// One call with its arguments already encoded: the byte budget measures
+/// exactly these bytes.
 pub(crate) fn call_tool(
     dispatcher: &Dispatcher,
     context: &CallContext,
@@ -49,19 +130,26 @@ pub(crate) fn call_tool(
 ) -> Result<Value, Value> {
     match dispatcher.dispatch(context, name, arguments) {
         Ok(value) => Ok(json!({
+            "resultType": "complete",
             "content": [{ "type": "text", "text": value.to_string() }],
             "structuredContent": value,
             "isError": false,
         })),
-        Err(error) if error.code == ErrorCode::UnknownOperation => Err(json!({
-            "code": INVALID_PARAMS,
-            "message": error.message,
-        })),
+        Err(error) if error.code == ErrorCode::UnknownOperation => Err(protocol_error(&error.message)),
         Err(error) => Ok(json!({
+            "resultType": "complete",
             "content": [{ "type": "text", "text": error_text(&error) }],
             "isError": true,
         })),
     }
+}
+
+fn malformed() -> Value {
+    protocol_error("tools/call needs a string `name` and, if given, object `arguments`")
+}
+
+fn protocol_error(message: &str) -> Value {
+    json!({ "code": INVALID_PARAMS, "message": message })
 }
 
 fn error_text(error: &ContractError) -> String {
@@ -69,102 +157,6 @@ fn error_text(error: &ContractError) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::contracts::artifacts::{assert_self_contained, validator, ERROR_FILE};
-    use crate::contracts::catalog::Operation;
-    use crate::contracts::context::{Grant, Principal};
-    use crate::contracts::project_api::files_read::FilesReadOp;
-    use crate::contracts::project_api::{catalog, test_dispatcher};
-
-    fn tool<'a>(list: &'a Value, name: &str) -> &'a Value {
-        list["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == name)
-            .unwrap_or_else(|| panic!("tool `{name}` not published"))
-    }
-
-    fn context() -> CallContext {
-        CallContext {
-            principal: Principal::Test,
-            grant: Grant::of([FilesReadOp::CAPABILITY]),
-            epoch: "ws-test".into(),
-        }
-    }
-
-    #[test]
-    fn published_schemas_are_the_committed_and_generated_ones() {
-        let list = tools_list();
-        let names: Vec<&str> = list["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect();
-        let expected: Vec<&str> = catalog().iter().map(|entry| entry.name).collect();
-        assert_eq!(names, expected, "tools are published in catalog order");
-        for entry in catalog() {
-            let published = tool(&list, entry.name);
-            assert_eq!(published["inputSchema"], Value::from((entry.request_schema)()), "{}", entry.name);
-            assert_eq!(published["outputSchema"], Value::from((entry.result_schema_out)()), "{}", entry.name);
-            assert_eq!(published["inputSchema"]["type"], "object", "{}", entry.name);
-            assert_self_contained(entry.name, &published["inputSchema"]);
-            assert_self_contained(entry.name, &published["outputSchema"]);
-        }
-    }
-
-    #[test]
-    fn successful_calls_return_conforming_structured_content() {
-        let list = tools_list();
-        let result = call_tool(
-            &test_dispatcher(),
-            &context(),
-            FilesReadOp::NAME,
-            br#"{"documents":[{"path":"src/auth.ts"}],"source":"disk"}"#,
-        )
-        .expect("a tool result");
-        assert_eq!(result["isError"], false);
-        let structured = &result["structuredContent"];
-        let output_schema = &tool(&list, FilesReadOp::NAME)["outputSchema"];
-        assert!(validator(output_schema).is_valid(structured), "structuredContent violates outputSchema");
-        // MCP backwards compatibility: the same JSON also as text content.
-        let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(&text, structured);
-    }
-
-    #[test]
-    fn contract_failures_are_tool_errors_without_structured_content() {
-        let error_schema = committed_json(ERROR_FILE);
-        let result = call_tool(
-            &test_dispatcher(),
-            &context(),
-            FilesReadOp::NAME,
-            br#"{"documents":[{"path":"a"}],"extra":true}"#,
-        )
-        .expect("a tool result, not a protocol error");
-        assert_eq!(result["isError"], true);
-        assert!(result.get("structuredContent").is_none(), "errors carry no structuredContent");
-        let error: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert!(validator(&error_schema).is_valid(&error), "error payload violates {ERROR_FILE}");
-        assert_eq!(error["code"], "invalidParams");
-    }
-
-    #[test]
-    fn a_denied_capability_is_a_tool_error() {
-        let mut context = context();
-        context.grant = Grant::default();
-        let result = call_tool(&test_dispatcher(), &context, FilesReadOp::NAME, br#"{"documents":[{"path":"a"}]}"#)
-            .expect("a tool result");
-        assert_eq!(result["isError"], true);
-        let error: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(error["code"], "denied");
-    }
-
-    #[test]
-    fn an_unknown_tool_is_a_protocol_error() {
-        let error = call_tool(&test_dispatcher(), &context(), "litria_nope", b"{}").unwrap_err();
-        assert_eq!(error["code"], INVALID_PARAMS);
-    }
-}
+mod tests;
+#[cfg(test)]
+mod real_catalog;

@@ -26,6 +26,7 @@ impl Operation for ProjectContextOp {
          connection may call, the server's limits, and a summary of what the disclosure policy withholds. Paths are \
          project-relative; withheld paths are never listed or counted.";
     const CAPABILITY: &'static str = "project.context.read";
+    const READ_ONLY: bool = true;
     type Request = ProjectContextRequest;
     type Result = ProjectContextResult;
 }

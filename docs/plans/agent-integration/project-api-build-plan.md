@@ -39,7 +39,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Done: PR #90 (see [P3 record](#p3-record)) |
 | P4 | `litria_graph_query` | P2 | Done: PR #108, merged 2026-10-03 (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)). Codex review: five findings, all fixed (see [P5 review record](#p5-review-record)) |
-| P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
+| P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Outline |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
 | W3 | Native conditional disk operations (create-if-absent, replace-if-expected-revision) | P1 | Outline |
@@ -1026,6 +1026,88 @@ Prove the future adapter's contract against the real v1 read catalog, without a 
 
 All tests and standard checks pass. The adapter is test-only or unreachable in release builds until track T.
 
+### P6 record
+
+> **Built 2026-10-11, over S0's adapter proof.** The adapter is
+> `contracts/mcp.rs`, still `#[cfg(test)]`, so no shipped build contains
+> it. It follows MCP revision 2026-07-28, checked against the specification's
+> tools page and its `schema.ts`.
+>
+> **Decision: S0's thin serializer, no MCP SDK.**
+>
+> - **Why:** without a transport, an SDK would bring only its protocol
+>   envelope and session machinery. Those belong to track T. What the adapter
+>   owns is the mapping, which tests pin to the revision.
+> - **Constraint on any SDK:** it must serve the committed schemas verbatim
+>   (contract-schemas brief §5).
+> - **Track T re-opens the question** with these criteria:
+>   - support for this revision (`resultType`, the stateless `_meta`,
+>     `subscriptions/listen`);
+>   - a stdio transport;
+>   - schemas accepted as given;
+>   - MSRV, licence, audit and maintenance.
+>
+> No dependency was added.
+>
+> **What P6 added:**
+>
+> - **Embedded artifacts.** `tools/list` is built from the committed files,
+>   compiled in with `include_str!` the way the application will carry them.
+>   A test proves the embedded table is exactly the files the catalog names,
+>   byte for byte.
+> - **`resultType: "complete"`** on `tools/list` and on every
+>   `tools/call` result. Servers on this revision must include it; S0's
+>   results did not.
+> - **`tools/call` takes the `CallToolRequest` parameters.**
+>   - `arguments` is optional; absent, it is `{}`.
+>   - Parameters that are not an object, a `name` that is not a string, or
+>     `arguments` that are not an object are a protocol error, −32602.
+>   - So is an unknown tool.
+>   - Input validation stays a tool execution error, as the revision directs.
+>   - No message echoes the call.
+> - **Annotations.**
+>   - `readOnlyHint` comes from the catalog: every operation now declares
+>     `READ_ONLY` (required, so a write operation must say it is one), and
+>     `catalog.json` publishes `readOnly`.
+>   - `openWorldHint` is `false` for the family, because the Project API
+>     never reaches outside the project.
+>
+> **Real-catalog conformance.** Calls go through the production dispatcher
+> and handlers, the epoch fence and the disclosure policy. The workspace is
+> bound in a temporary folder, and the global bridge is attached to a scripted
+> editor that holds nothing open.
+>
+> - **Every committed request fixture (56)** goes through `tools/call`.
+>   - The 18 accepted ones return a `structuredContent` that conforms to the
+>     published `outputSchema`, with the same JSON as text.
+>   - The 38 rejected ones return tool errors that conform to
+>     `error.schema.json`, with the manifest's error code.
+> - **Every tool, called without its capability,** returns a conforming
+>   `denied` tool error.
+> - **Service errors are conforming tool errors too:** `ownerUnavailable`
+>   once the editor is detached, and `notReady` once the workspace is closed.
+> - **The answers come from the workspace,** not samples: the real text of a
+>   file, and `.env` denied.
+>
+> **The suite can fail.** A planted result whose `structuredContent` breaks
+> the schema failed 36 checks (every accepted fixture, twice) and two tests.
+>
+> **Adversarial check** (security policy Rule 2), on the adapter's input
+> mapping: no bypass found. Two items carry to track T:
+>
+> - **Bound the raw message before parsing.** The 64 KiB budget measures the
+>   re-encoded `arguments`, so padding or a huge message would already be
+>   parsed by then.
+> - **Duplicate keys.** They collapse when the transport parses JSON, so the
+>   boundary never sees them.
+>
+> `tools/list` lists every tool regardless of grant. The revision allows
+> filtering by authorization; track T decides.
+>
+> **Evidence.** 9 new tests in `contracts::mcp` (14 in all).
+> `cargo test` 625 with zero warnings; `test:domains` 1515; architecture
+> guards pass.
+
 ## W-track outline
 
 The brief §13 holds the direction. Slices are detailed when the write contract is written.
@@ -1049,7 +1131,11 @@ Then:
 - the bundled stdio MCP helper;
 - authenticated local IPC bound to one project session;
 - real principals, with grants from project grant records;
-- small-context budget measurement.
+- small-context budget measurement;
+- carried from P6:
+  - bound the raw MCP message before parsing (the 64 KiB budget measures re-encoded `arguments`);
+  - decide whether `tools/list` filters by grant;
+  - choose an SDK, or keep the thin serializer, by the [P6 record](#p6-record)'s criteria.
 
 A separate plan owns these once a runtime is chosen. No P or W slice may add a listener, socket or external process.
 

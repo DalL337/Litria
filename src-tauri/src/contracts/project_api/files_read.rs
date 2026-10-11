@@ -32,6 +32,7 @@ impl Operation for FilesReadOp {
          (source: effective), or the saved file only (source: disk). Every document reports its source, \
          dirty state and revision.";
     const CAPABILITY: &'static str = "project.files.read";
+    const READ_ONLY: bool = true;
     type Request = FilesReadRequest;
     type Result = FilesReadResult;
 }
