@@ -25,7 +25,7 @@ pub(crate) const PYRIGHT_VERSION: &str = "1.1.414";
 
 // TypeScript language server (bundled in resources/servers/typescript/)
 #[allow(dead_code)]
-pub(crate) const TSSERVER_VERSION: &str = "6.0.0";
+pub(crate) const TSSERVER_VERSION: &str = "6.0.2";
 
 // TypeScript compiler itself (bundled alongside typescript-language-server)
 // Pinned to the 6.x line deliberately (last JavaScript-based line; ships
