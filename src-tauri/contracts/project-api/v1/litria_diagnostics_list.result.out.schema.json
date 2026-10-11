@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DiagnosticsListResult",
+  "type": "object",
+  "properties": {
+    "files": {
+      "description": "Requested paths in request order; otherwise files in path order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FileDiagnostics"
+      }
+    },
+    "truncated": {
+      "description": "The response stopped before covering everything; see `truncatedBy`.",
+      "type": "boolean"
+    },
+    "truncatedBy": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TruncationReason"
+      }
+    }
+  },
+  "required": [
+    "files",
+    "truncated",
+    "truncatedBy"
+  ],
+  "$defs": {
+    "Diagnostic": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "At most 1,000 characters; denied and out-of-project paths replaced.",
+          "type": "string"
+        },
+        "producer": {
+          "type": "string"
+        },
+        "range": {
+          "$ref": "#/$defs/DiagnosticRange"
+        },
+        "related": {
+          "description": "Locations the producer relates to this diagnostic, inside the project\nand not denied.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RelatedLocation"
+          }
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "required": [
+        "severity",
+        "message",
+        "range",
+        "producer"
+      ]
+    },
+    "DiagnosticRange": {
+      "description": "Lines and columns are 1-based (brief §5). Columns count the producer's\nUTF-16 code units: they equal Unicode code points unless a character\noutside the Basic Multilingual Plane (an emoji, for example) precedes the\nposition on its line. The producer's positions describe the text it\ndiagnosed; see `freshness`.",
+      "type": "object",
+      "properties": {
+        "endColumn": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "endLine": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "startColumn": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "startLine": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "startLine",
+        "startColumn",
+        "endLine",
+        "endColumn"
+      ]
+    },
+    "FileDiagnostics": {
+      "description": "One file's answer. A reader that meets an unfamiliar `state` must not\nassume the file has no errors.",
+      "oneOf": [
+        {
+          "description": "The producer has reported on this file. An empty list means it found\nnothing at or above `minSeverity`, as fresh as `freshness` says.",
+          "type": "object",
+          "properties": {
+            "diagnostics": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Diagnostic"
+              }
+            },
+            "freshness": {
+              "$ref": "#/$defs/Freshness"
+            },
+            "freshnessReason": {
+              "description": "Why the freshness is not `current`.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FreshnessReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "producer": {
+              "description": "The language server that reported (for example\n`typescript-language-server`).",
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "available"
+            },
+            "truncated": {
+              "description": "More diagnostics exist than were returned for this file.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "state",
+            "path",
+            "producer",
+            "freshness",
+            "diagnostics",
+            "truncated"
+          ]
+        },
+        {
+          "description": "A producer exists for this kind of file, but no diagnostics can be\nreported. Not the same as no errors.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/UnavailableReason"
+            },
+            "state": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "required": [
+            "state",
+            "path",
+            "reason"
+          ]
+        },
+        {
+          "description": "Nothing produces diagnostics for this kind of file.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "noProducer"
+            }
+          },
+          "required": [
+            "state",
+            "path"
+          ]
+        },
+        {
+          "description": "The disclosure policy withholds the path (only when asked for by name;\notherwise it is omitted). Existence is not revealed.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "denied"
+            }
+          },
+          "required": [
+            "state",
+            "path"
+          ]
+        },
+        {
+          "description": "Not a path the API accepts (contract brief §6).",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "invalidPath"
+            }
+          },
+          "required": [
+            "state",
+            "path"
+          ]
+        },
+        {
+          "description": "Not reported: the response ceiling was reached first. Ask again.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "skipped"
+            }
+          },
+          "required": [
+            "state",
+            "path"
+          ]
+        }
+      ]
+    },
+    "Freshness": {
+      "description": "A reader that meets an unfamiliar value must not treat the file as current.",
+      "oneOf": [
+        {
+          "description": "The producer diagnosed the version Litria last sent, in this opening of\nthe document, in its current session.",
+          "type": "string",
+          "const": "current"
+        },
+        {
+          "description": "The producer diagnosed an older version or an earlier opening.",
+          "type": "string",
+          "const": "stale"
+        },
+        {
+          "description": "Freshness cannot be proven; see `freshnessReason`.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "FreshnessReason": {
+      "oneOf": [
+        {
+          "description": "Stale: an older version than the one last sent.",
+          "type": "string",
+          "const": "olderVersion"
+        },
+        {
+          "description": "Stale: reported during an earlier opening of the document.",
+          "type": "string",
+          "const": "reopened"
+        },
+        {
+          "description": "Unknown: the producer reports no document version.",
+          "type": "string",
+          "const": "producerOmitsVersion"
+        },
+        {
+          "description": "Unknown: the file is not open in Litria; the producer diagnosed it from disk.",
+          "type": "string",
+          "const": "closedFile"
+        },
+        {
+          "description": "Unknown: the producer reported a version newer than any Litria sent.",
+          "type": "string",
+          "const": "versionAhead"
+        },
+        {
+          "description": "Unknown: no version was recorded for this opening.",
+          "type": "string",
+          "const": "noSentVersion"
+        }
+      ]
+    },
+    "RelatedLocation": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "range": {
+          "$ref": "#/$defs/DiagnosticRange"
+        }
+      },
+      "required": [
+        "path",
+        "range",
+        "message"
+      ]
+    },
+    "Severity": {
+      "description": "LSP severities, most severe first.",
+      "type": "string",
+      "enum": [
+        "error",
+        "warning",
+        "information",
+        "hint"
+      ]
+    },
+    "TruncationReason": {
+      "description": "A limit that ended the response.",
+      "oneOf": [
+        {
+          "description": "A file had more than 100 diagnostics (that file says `truncated`).",
+          "type": "string",
+          "const": "perFile"
+        },
+        {
+          "description": "The 1,000-diagnostic response ceiling was reached.",
+          "type": "string",
+          "const": "diagnostics"
+        },
+        {
+          "description": "The encoded response ceiling was reached.",
+          "type": "string",
+          "const": "responseSize"
+        }
+      ]
+    },
+    "UnavailableReason": {
+      "oneOf": [
+        {
+          "description": "The editor produces this file's diagnostics itself (JSON, CSS); they\nare not bridged to the Project API.",
+          "type": "string",
+          "const": "notBridged"
+        },
+        {
+          "description": "The language server for this file is not running.",
+          "type": "string",
+          "const": "producerNotRunning"
+        },
+        {
+          "description": "The language server is running but has not reported on this file (most\nservers only analyse files open in the editor).",
+          "type": "string",
+          "const": "notAnalyzed"
+        }
+      ]
+    }
+  }
+}

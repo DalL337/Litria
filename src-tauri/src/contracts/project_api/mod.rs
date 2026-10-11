@@ -10,8 +10,9 @@
 //!
 //! P1 (build plan) delivers `litria_files_read`; P3 adds
 //! `litria_project_context` and `litria_files_search`. The graph and
-//! diagnostics reads join the catalog in P4–P5.
+//! diagnostics reads join the catalog in P4–P5 (P5b: `litria_diagnostics_list`).
 
+pub(crate) mod diagnostics_list;
 pub(crate) mod files_read;
 pub(crate) mod files_search;
 pub(crate) mod graph_query;
@@ -34,6 +35,7 @@ pub(crate) fn catalog() -> Vec<crate::contracts::catalog::OperationEntry> {
         entry::<project_context::ProjectContextOp>(),
         entry::<files_search::FilesSearchOp>(),
         entry::<graph_query::GraphQueryOp>(),
+        entry::<diagnostics_list::DiagnosticsListOp>(),
     ]
 }
 
@@ -51,6 +53,7 @@ pub(crate) fn test_dispatcher() -> crate::contracts::catalog::Dispatcher {
     dispatcher.register::<project_context::ProjectContextOp>(|_, _| Ok(samples::project_context_result()));
     dispatcher.register::<files_search::FilesSearchOp>(|_, _| Ok(samples::files_search_result()));
     dispatcher.register::<graph_query::GraphQueryOp>(|_, _| Ok(samples::graph_query_result()));
+    dispatcher.register::<diagnostics_list::DiagnosticsListOp>(|_, _| Ok(samples::diagnostics_list_result()));
     dispatcher
 }
 
@@ -65,7 +68,7 @@ pub(crate) mod samples {
         IndexState, TruncationReason as GraphTruncationReason,
     };
     use super::project_context::{
-        ActiveDocument, DeniedClass, DocumentsSummary, FilesReadLimits, FilesSearchLimits, GraphQueryLimits,
+        ActiveDocument, DeniedClass, DiagnosticsListLimits, DocumentsSummary, FilesReadLimits, FilesSearchLimits, GraphQueryLimits,
         LanguageCapabilities, LanguageServer, PolicySummary, ProjectContextLimits, ProjectContextResult,
         ProjectSummary, SelectionSummary, ServerLimits,
     };
@@ -221,6 +224,12 @@ pub(crate) mod samples {
                     max_nodes: 100,
                     max_edges: 500,
                     max_symbols_per_edge: 50,
+                },
+                diagnostics: DiagnosticsListLimits {
+                    max_paths: 100,
+                    max_diagnostics_per_file: 100,
+                    max_diagnostics_per_response: 1_000,
+                    max_message_chars: 1_000,
                 },
             },
             policy: PolicySummary {
@@ -380,6 +389,93 @@ pub(crate) mod samples {
                 GraphTruncationReason::Symbols,
                 GraphTruncationReason::ResponseSize,
             ],
+        }
+    }
+
+    pub(crate) fn diagnostics_list_result() -> super::diagnostics_list::DiagnosticsListResult {
+        use super::diagnostics_list::{
+            Diagnostic, DiagnosticRange, DiagnosticsListResult, FileDiagnostics, Freshness, FreshnessReason,
+            RelatedLocation, Severity, TruncationReason, UnavailableReason,
+        };
+        let range = |line: u32, start: u32, end: u32| DiagnosticRange {
+            start_line: line,
+            start_column: start,
+            end_line: line,
+            end_column: end,
+        };
+        DiagnosticsListResult {
+            files: vec![
+                FileDiagnostics::Available {
+                    path: "src/auth.ts".into(),
+                    producer: "typescript-language-server".into(),
+                    freshness: Freshness::Unknown,
+                    freshness_reason: Some(FreshnessReason::ProducerOmitsVersion),
+                    diagnostics: vec![
+                        Diagnostic {
+                            severity: Severity::Error,
+                            message: "Cannot find module '[denied]' or its corresponding type declarations.".into(),
+                            range: range(3, 20, 28),
+                            code: Some("2307".into()),
+                            producer: "typescript-language-server".into(),
+                            related: Vec::new(),
+                        },
+                        Diagnostic {
+                            severity: Severity::Warning,
+                            message: "'token' is declared but its value is never read.".into(),
+                            range: range(7, 9, 14),
+                            code: Some("6133".into()),
+                            producer: "typescript-language-server".into(),
+                            related: vec![RelatedLocation {
+                                path: "src/session.ts".into(),
+                                range: range(2, 1, 6),
+                                message: "The declaration is here.".into(),
+                            }],
+                        },
+                    ],
+                    truncated: false,
+                },
+                FileDiagnostics::Available {
+                    path: "app/main.py".into(),
+                    producer: "pyright-langserver".into(),
+                    freshness: Freshness::Current,
+                    freshness_reason: None,
+                    diagnostics: Vec::new(),
+                    truncated: false,
+                },
+                FileDiagnostics::Available {
+                    path: "app/models.py".into(),
+                    producer: "pyright-langserver".into(),
+                    freshness: Freshness::Stale,
+                    freshness_reason: Some(FreshnessReason::OlderVersion),
+                    diagnostics: vec![Diagnostic {
+                        severity: Severity::Information,
+                        message: "Import \"x\" could not be resolved from source.".into(),
+                        range: range(1, 8, 9),
+                        code: None,
+                        producer: "pyright-langserver".into(),
+                        related: Vec::new(),
+                    }],
+                    truncated: true,
+                },
+                FileDiagnostics::Unavailable {
+                    path: "package.json".into(),
+                    reason: UnavailableReason::NotBridged,
+                },
+                FileDiagnostics::Unavailable {
+                    path: "src/main.rs".into(),
+                    reason: UnavailableReason::ProducerNotRunning,
+                },
+                FileDiagnostics::Unavailable {
+                    path: "src/closed.ts".into(),
+                    reason: UnavailableReason::NotAnalyzed,
+                },
+                FileDiagnostics::NoProducer { path: "README.md".into() },
+                FileDiagnostics::Denied { path: ".env".into() },
+                FileDiagnostics::InvalidPath { path: "../outside.ts".into() },
+                FileDiagnostics::Skipped { path: "src/later.ts".into() },
+            ],
+            truncated: true,
+            truncated_by: vec![TruncationReason::PerFile, TruncationReason::ResponseSize],
         }
     }
 }

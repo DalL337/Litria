@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DiagnosticsListRequest",
+  "type": "object",
+  "properties": {
+    "minSeverity": {
+      "description": "The least severe diagnostics to include. Defaults to `hint` (all).",
+      "$ref": "#/$defs/Severity",
+      "default": "hint"
+    },
+    "paths": {
+      "description": "Files to report on (project-relative, forward slashes). Absent means\nevery file that has diagnostics at or above `minSeverity`.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "default": null,
+      "items": {
+        "type": "string",
+        "maxLength": 1024,
+        "minLength": 1
+      },
+      "maxItems": 100,
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Severity": {
+      "description": "LSP severities, most severe first.",
+      "type": "string",
+      "enum": [
+        "error",
+        "warning",
+        "information",
+        "hint"
+      ]
+    }
+  }
+}

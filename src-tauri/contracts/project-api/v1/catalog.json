@@ -34,6 +34,14 @@
       "request": "litria_graph_query.request.schema.json",
       "resultIn": "litria_graph_query.result.in.schema.json",
       "resultOut": "litria_graph_query.result.out.schema.json"
+    },
+    {
+      "capability": "project.diagnostics.read",
+      "description": "Return the diagnostics language servers have reported, per file: for the given project-relative paths, or for every file with diagnostics at or above minSeverity. Each file is available (with its producer, its diagnostics and a freshness of current, stale or unknown, with a reason), unavailable (the producer is not bridged, not running, or has not analysed the file), or noProducer. Unavailable is not the same as no errors. Denied files are never reported, and denied or out-of-project references inside a message are replaced with [denied] or [path]. Lines and columns are 1-based. A response that reaches a ceiling says so in truncatedBy.",
+      "name": "litria_diagnostics_list",
+      "request": "litria_diagnostics_list.request.schema.json",
+      "resultIn": "litria_diagnostics_list.result.in.schema.json",
+      "resultOut": "litria_diagnostics_list.result.out.schema.json"
     }
   ],
   "status": "draft"

@@ -108,6 +108,12 @@ export function buildCapabilityMatrix(languageSupport) {
         languageServer,
         documentAccess: true,
         diagnostics,
+        // Where diagnostics come from, and which server pack (Project API P5b:
+        // `litria_diagnostics_list` tells a server language whose server is
+        // not running from an editor-only one, and maps JavaScript to the
+        // typescript server, from this one table).
+        diagnosticsSource: features.diagnostics,
+        server: features.server,
         navigation: features.navigation,
         symbols: features.symbols,
         relationshipDiscovery: group.relationshipDiscovery,

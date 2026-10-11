@@ -273,6 +273,10 @@ mod outbound {
         let graph = assert_conforms("graph query", &samples::graph_query_result());
         assert_eq!(graph["nodes"][0]["kind"], "file");
         assert_eq!(graph["edges"][0]["provenance"]["kind"], "sourceDerived");
+        let diagnostics = assert_conforms("diagnostics list", &samples::diagnostics_list_result());
+        assert_eq!(diagnostics["files"][0]["state"], "available");
+        assert_eq!(diagnostics["files"][0]["freshnessReason"], "producerOmitsVersion");
+        assert!(diagnostics["files"][1].get("freshnessReason").is_none(), "an absent reason is omitted");
         let files_read = assert_conforms("files read", &samples::files_read_result());
         let empty = &files_read["documents"][2];
         assert_eq!(empty["kind"], "read");
@@ -306,6 +310,10 @@ mod outbound {
         check::<ProjectContextResult>("project_context.result.json", &samples::project_context_result());
         check::<FilesSearchResult>("files_search.result.json", &samples::files_search_result());
         check::<GraphQueryResult>("graph_query.result.json", &samples::graph_query_result());
+        check::<crate::contracts::project_api::diagnostics_list::DiagnosticsListResult>(
+            "diagnostics_list.result.json",
+            &samples::diagnostics_list_result(),
+        );
     }
 }
 

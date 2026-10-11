@@ -773,6 +773,35 @@ pub(crate) fn session_request(
         .map_err(|e| CommandError::internal(&format!("{language_id}.request.failed"), e))
 }
 
+/// A live session, as the Project API sees it (P5b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiveSession {
+    pub language_id: String,
+    pub project_id: String,
+    pub session_id: String,
+}
+
+/// The live sessions serving `canonical_root` (P5b `litria_diagnostics_list`
+/// reads their diagnostics). Matched on the canonical root `start_session`
+/// stored — the Project API's bound root is canonicalized the same way — so
+/// no project-id mapping is needed; the start quotas allow one server per root
+/// and language.
+pub(crate) fn live_sessions_for_root(canonical_root: &Path) -> Vec<LiveSession> {
+    let mut live: Vec<LiveSession> = sessions()
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|session| session.canonical_root == canonical_root)
+        .map(|session| LiveSession {
+            language_id: session.language_id.clone(),
+            project_id: session.project_id.clone(),
+            session_id: session.session_id.clone(),
+        })
+        .collect();
+    live.sort_by(|a, b| a.language_id.cmp(&b.language_id));
+    live
+}
+
 /// Send a notification on an active session.
 ///
 /// The sessions mutex is held only to clone the stdin Arc — not across the

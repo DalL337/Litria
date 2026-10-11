@@ -106,6 +106,37 @@
         }
       ]
     },
+    "DiagnosticsListLimits": {
+      "type": "object",
+      "properties": {
+        "maxDiagnosticsPerFile": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxDiagnosticsPerResponse": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxMessageChars": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxPaths": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxPaths",
+        "maxDiagnosticsPerFile",
+        "maxDiagnosticsPerResponse",
+        "maxMessageChars"
+      ]
+    },
     "DocumentsSummary": {
       "type": "object",
       "properties": {
@@ -469,6 +500,9 @@
       "description": "The server's ceilings (contract brief §10). Server ceilings are\nauthoritative: a request over one is refused or answered in part.",
       "type": "object",
       "properties": {
+        "diagnostics": {
+          "$ref": "#/$defs/DiagnosticsListLimits"
+        },
         "filesRead": {
           "$ref": "#/$defs/FilesReadLimits"
         },
@@ -507,7 +541,8 @@
         "filesRead",
         "filesSearch",
         "projectContext",
-        "graph"
+        "graph",
+        "diagnostics"
       ]
     }
   }

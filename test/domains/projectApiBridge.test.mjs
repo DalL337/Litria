@@ -657,6 +657,25 @@ test('the capability matrix matches the language tiers', () => {
   ]);
 });
 
+test('each capability row names where its diagnostics come from, and which server (P5b)', () => {
+  const rows = buildCapabilityMatrix(null).map((row) => `${row.language} ${row.diagnosticsSource} ${row.server}`);
+  assert.deepEqual([...new Set(rows)], [
+    // JavaScript is served by the typescript pack.
+    'javascript server typescript',
+    'typescript server typescript',
+    // Monaco's own workers: never bridged to the Project API.
+    'json editor null',
+    'css editor null',
+    'html none null',
+    'markdown none null',
+    'python server python',
+    'rust server rust',
+    'c server cpp',
+    'cpp server cpp',
+    'go server go'
+  ]);
+});
+
 test('installing a language server turns on its diagnostics, and nothing else', () => {
   const before = buildCapabilityMatrix(languageSupport({}));
   const after = buildCapabilityMatrix(languageSupport({ rust: ['Installed', true] }));

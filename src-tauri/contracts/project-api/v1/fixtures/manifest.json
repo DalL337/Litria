@@ -475,6 +475,59 @@
       "expect": "reject",
       "note": "depth is 1 or 2.",
       "errorCode": "invalidParams"
+    },
+    {
+      "file": "diagnostics_list.result.json",
+      "operation": "litria_diagnostics_list",
+      "message": "result",
+      "expect": "accept",
+      "note": "Every file state, every freshness kind with its reason, a redacted message, a related location, and both a per-file and an encoded-size truncation, exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "diagnostics_list.request.minimal.json",
+      "operation": "litria_diagnostics_list",
+      "message": "request",
+      "expect": "accept",
+      "note": "No fields: every file with diagnostics, at every severity."
+    },
+    {
+      "file": "diagnostics_list.request.full.json",
+      "operation": "litria_diagnostics_list",
+      "message": "request",
+      "expect": "accept",
+      "note": "Named paths and a minimum severity."
+    },
+    {
+      "file": "diagnostics_list.request.unknown-field.json",
+      "operation": "litria_diagnostics_list",
+      "message": "request",
+      "expect": "reject",
+      "note": "Unknown fields are rejected.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "diagnostics_list.request.empty-paths.json",
+      "operation": "litria_diagnostics_list",
+      "message": "request",
+      "expect": "reject",
+      "note": "paths, when given, names at least one file (absent means every file).",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "diagnostics_list.request.too-many-paths.json",
+      "operation": "litria_diagnostics_list",
+      "message": "request",
+      "expect": "reject",
+      "note": "paths names at most 100 files.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "diagnostics_list.request.unknown-severity.json",
+      "operation": "litria_diagnostics_list",
+      "message": "request",
+      "expect": "reject",
+      "note": "minSeverity is error, warning, information or hint.",
+      "errorCode": "invalidParams"
     }
   ]
 }

@@ -10,6 +10,8 @@
         "languageServer": "none",
         "documentAccess": true,
         "diagnostics": false,
+        "diagnosticsSource": "server",
+        "server": "rust",
         "navigation": false,
         "relationshipDiscovery": false,
         "sourceTransformations": false
