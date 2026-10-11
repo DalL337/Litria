@@ -42,7 +42,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The agent's own approval is enough; Litria's review is off by default (owner) |
-| W3 | Native conditional disk operations (create-if-absent, replace-if-expected-revision) | P1 | Outline |
+| W3 | Native conditional disk operations: create-if-absent, agent-created files, edits to files that are not open | P1, W2 | In progress: W3a create-if-absent (see [W3 section](#w3-agent-files-on-disk), [W3a record](#w3a-record)). Replace-if-the-disk-revision-matches deferred: no consumer (owner rulings) |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
 
@@ -1512,13 +1512,186 @@ All tests and standard checks pass, plus the live pass. No transport, listener o
 > **Not covered live:** expiry, which is covered by tests with an injected
 > clock.
 
+## W3. Agent files on disk
+
+### Goal
+
+Agents can create new files, and can edit files that are not open, without
+Litria ever replacing anything on disk. This is the rest of the Project API
+proposal's R2 that has a consumer: native create-if-absent, with its
+fault-injection proofs.
+
+### Owner rulings (2026-10-11)
+
+- **An agent's edit to a file that is not open opens it as an unsaved edit.**
+  The file opens in the editor session with the edit applied: undoable, and
+  nothing reaches the disk until the user saves.
+- **A file an agent creates is created on disk and shown on the canvas**, not
+  opened in the editor. It is created only if nothing has its name: never an
+  overwrite.
+
+### What the rulings change
+
+- **Agents never overwrite a file on disk.** Edits go through buffers the user
+  saves (W2), and creation never replaces anything.
+- **So replace-if-the-disk-revision-matches has no consumer, and is
+  deferred.** Revisit it if user saves become conditional on the revision the
+  editor loaded, or if a disk-edit path is ruled in.
+- **Effects are reported per change.** A plan that edits buffers and creates
+  files can end `partial`. Litria never claims a disk change and a buffer
+  change happened together (agent brief).
+
+### Tasks
+
+**W3a: create-if-absent (native).**
+
+- `write_ops::create_new_string`: the content is written and fsynced beside
+  the target, then committed in one step that fails if anything has the name.
+  - Windows: `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` (every
+    Windows filesystem).
+  - Linux and macOS: `link(2)`, then the temp's name is dropped. Where hard
+    links are unsupported (FAT32, exFAT, some shares): an exclusive create in
+    place, which still never clobbers.
+- `project_ops::create_project_file` and the command `create_project_file`
+  (`"created"` | `"exists"`):
+  - the path is taken exactly;
+  - missing directories are created;
+  - the file's directory must lie within the root, and is checked again
+    immediately before the commit.
+- The write manager's `createFile` (`fs.exists` on a taken name), used by
+  the drawer's New file and by New Node.
+- The adversarial check (security policy Rule 1: a new Tauri command that
+  touches the filesystem).
+
+**W3b: `file.create` for agents.**
+
+- A change kind `file.create` (`path`, `text`) beside `text.edit`.
+- **Prepare** applies the path policy first, so a withheld path answers
+  `denied` whether or not it exists. Then it checks the name is free on disk.
+- **Apply** runs in this order:
+  1. re-check every create's name;
+  2. apply the buffer edits, all or none;
+  3. create the files through the write manager;
+  4. put each created file on the canvas (`createPieceFromFile`, no tab).
+- Effects are reported per change; `partial` when only some land.
+
+**W3c: edits to files that are not open.**
+
+- A `text.edit` whose file is not in the session is checked against the disk
+  revision the agent read.
+- At apply it opens into the session with the edit applied: unsaved, dirty,
+  undoable.
+- The design is still open: whether the file gets a canvas piece and a tab,
+  and how a disk read fits the single-turn all-or-none apply.
+
+### Tests
+
+The Project API proposal's R2 proofs, as they apply to creates. Each race is
+performed in its exact window through a test seam:
+
+- a file or link takes the name between preparation and the commit;
+- the commit fails;
+- the process ends before the commit;
+- the file's directory is swapped for a link to elsewhere before the write,
+  and before the commit;
+- the no-hard-link fallback.
+
+W3b and W3c add the plan-level cases: a name taken at prepare and at apply,
+a withheld path, mixed plans ending `partial`, and a closed file changed on
+disk after the agent read it.
+
+### Acceptance
+
+- No create replaces anything, from any process, at any moment up to the
+  commit.
+- No create leaves a file outside the project, or a partial file, except the
+  named fallback.
+- Every refusal is visible.
+- Live passes on a throwaway project for each slice.
+
+### W3a record
+
+> **Built 2026-10-11.**
+>
+> **The defect it fixes, found while tracing how new files reach the
+> canvas.** The drawer's New file and New Node wrote new files with the
+> overwriting write.
+>
+> - New file's only guard was a silent check against the visible tree. That
+>   tree never shows `litria.toml`, OS-hidden files or ignored folders, and
+>   it is stale until it refreshes.
+> - New Node's check only saw canvas pieces.
+> - So New file named `litria.toml` replaced the project configuration with
+>   an empty file, and New Node named `package.json` replaced `package.json`.
+>
+> **Built:**
+>
+> - The native primitive and command described in the tasks.
+> - Windows needed one detail: `windows::core::Error` converts to
+>   `io::Error` by its HRESULT, which `io::ErrorKind` cannot classify, so
+>   the Win32 code is recovered first.
+> - `createFile` in the write manager. New file and New Node now create, and
+>   say `"<path>" already exists` in a pill (New file's refusals were silent
+>   before).
+>
+> **Adversarial check** (journal
+> `.research/2026-10-11-project-api-w3-conditional-disk.md`):
+>
+> - **Reproduced, then verified fixed, on Windows: a stream name.** `a.ts:evil`
+>   names a stream of `a.ts`. Creating it failed with an internal error and
+>   left a stray `.a.ts` behind; `a.ts` itself was untouched. Windows
+>   creates now refuse `:`. Linux and macOS have no such window.
+> - **Reproduced by a planted mistake: the escape the last check stops.**
+>   Without the directory re-check, a directory swapped for a link before the
+>   write put the new file outside the project. With it, the create is
+>   refused and nothing stays outside (verified, Windows).
+> - **A second planted mistake:** a commit that replaces. Three race tests
+>   fail (a file and a link taking the name, and the platform commit).
+> - **Residual risks,** all needing another process racing the create (the
+>   app's write lock covers only this process):
+>   - a swap between the last check and the commit;
+>   - a link planted where a missing directory will be created, which can
+>     leave empty directories outside before the refusal;
+>   - a temp written outside the project before the refusal removes it.
+> - **For W3b:** `exists` reveals that a name exists, so the path policy
+>   must answer `denied` before any create is tried.
+>
+> **Found in passing, reported, not fixed here.** Rename and drag-move can
+> replace an existing file.
+>
+> - `move_project_path` uses `fs::rename`, which replaces on every platform.
+> - Rename's guard is the same visible-tree check, and the drop handler has
+>   none.
+> - Status: suspected, confirmed by inspection.
+>
+> **Evidence:**
+>
+> - **Rust:** 24 new tests (13 for the primitive, 11 for the command,
+>   including the stream test, which runs on Windows only).
+>   - `cargo test`: 675 passed, zero warnings.
+>   - `cargo check --release` is clean.
+> - **JavaScript:** 6 new tests for `createFile`. `test:domains`: 1548
+>   passed. All seven guards pass, and the build passes.
+> - **Live pass** (`tauri dev`, throwaway project;
+>   `.research/2026-10-11-w3-live/w3a-live.mjs`):
+>   - The tree never lists `litria.toml`.
+>   - The old write on an existing file left it empty; the create answered
+>     `exists` and kept it.
+>   - New file `litria.toml`: refused in a pill, configuration unchanged.
+>   - New file `src/fresh.ts`: created, in the tree; a second time,
+>     refused.
+>   - New Node `package.json` (on disk, no piece): refused, file unchanged,
+>     no piece.
+>   - New Node `src/node.py`: created with its header, and a piece.
+>   - No console errors.
+
 ## W-track outline
 
 The brief §13 holds the direction. Slices are detailed when the write contract is written.
 
 - **W1: compare-and-apply.** Detailed in [W1](#w1-compare-and-apply).
 - **W2: buffer edits.** Detailed in [W2](#w2-buffer-edits).
-- **W3: native conditional operations.** Create-if-absent and replace-if-the-disk-revision-matches. These are the remainder of R2, with fault-injection proofs from the [Project API proposal](../ideas/brief-project-api-mcp.md) R2.
+- **W3: agent files on disk.** Detailed in [W3](#w3-agent-files-on-disk).
 - **W4: durable operations.** Per-effect receipts, `litria_operations_get`, and recovery without replay (R5).
 
 ## Track T: runtime and transport (separate plan)

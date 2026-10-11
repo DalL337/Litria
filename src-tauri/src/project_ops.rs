@@ -55,6 +55,85 @@ pub(crate) fn write_project_file(root_path: &str, relative_path: &str, contents:
     })
 }
 
+/// What `create_project_file` did.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum CreateFileOutcome {
+    Created,
+    /// Something already has the name. Nothing was written.
+    Exists,
+}
+
+/// Create a project file only if nothing has its name. Unlike
+/// `write_project_file` it never overwrites (Project API build plan W3a: the
+/// drawer's New file and New Node, and agent-created files).
+///
+/// The path is taken exactly as given. Missing directories are created; the
+/// file's directory is then canonicalized and must lie within the root, and
+/// it is checked again immediately before the commit, so a directory swapped
+/// for a link to elsewhere in between is refused. Residual risks, all needing
+/// another process racing the create (the app's write lock covers only this
+/// process): a swap between that last check and the commit; a link planted in
+/// a missing directory's place before it is created, which can leave empty
+/// directories outside the root before the create is refused; and a swap
+/// before the temp file is written, which puts the temp outside the root
+/// until the refusal removes it.
+pub(crate) fn create_project_file(
+    root_path: &str,
+    relative_path: &str,
+    contents: &str,
+) -> CommandResult<CreateFileOutcome> {
+    write_ops::with_write_lock(|| create_project_file_with(root_path, relative_path, contents, &mut |_| Ok(())))
+}
+
+/// The windows a create crosses after its directory is resolved, for tests to
+/// act in (adversarial-check Rule 4, question 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateWindow {
+    /// The directory is resolved; the content is not written yet.
+    BeforeWrite,
+    /// The content is written beside the target; the last check and the
+    /// commit come next.
+    BeforeCommit,
+}
+
+fn create_project_file_with(
+    root_path: &str,
+    relative_path: &str,
+    contents: &str,
+    window: &mut dyn FnMut(CreateWindow) -> Result<(), String>,
+) -> CommandResult<CreateFileOutcome> {
+    let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
+    let (directory, name) = path_guard::resolve_new_file(&root, relative_path).map_err(CommandError::from_text)?;
+    fs::create_dir_all(&directory).map_err(|error| {
+        CommandError::from_io("project_file.create", &error, "Unable to create file directory")
+    })?;
+    let directory = fs::canonicalize(&directory)
+        .map_err(|error| CommandError::from_text(format!("Unable to resolve path: {error}")))?;
+    if !directory.starts_with(&root) {
+        return Err(CommandError::from_text("Path is not within project root."));
+    }
+    let target = directory.join(&name);
+    window(CreateWindow::BeforeWrite).map_err(CommandError::from_text)?;
+    let mut still_the_same_directory = || {
+        window(CreateWindow::BeforeCommit)?;
+        match fs::canonicalize(&directory) {
+            Ok(now) if now == directory => Ok(()),
+            _ => Err("The file's directory changed while the file was being created.".to_string()),
+        }
+    };
+    match write_ops::create_new_string(&target, contents, &mut still_the_same_directory) {
+        Ok(()) => Ok(CreateFileOutcome::Created),
+        Err(write_ops::CreateError::Exists) => Ok(CreateFileOutcome::Exists),
+        Err(write_ops::CreateError::Failed(message)) => {
+            Err(CommandError::from_text(format!("Unable to create project file: {message}")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod create_tests;
+
 pub(crate) fn list_project_tree(root_path: &str) -> CommandResult<Vec<ProjectTreeEntry>> {
     let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
     project_tree::collect_project_tree(&root).map_err(CommandError::from_text)

@@ -2,7 +2,9 @@ import { useCallback } from 'react';
 
 export function useScaffoldOperations({
   projectRootPath,
-  fsManager
+  fsManager,
+  pillDomain,
+  projectInstanceId
 }) {
   const handleScaffoldDrop = useCallback(async (dropResult) => {
     if (!projectRootPath || !dropResult || !fsManager) return;
@@ -65,10 +67,23 @@ export function useScaffoldOperations({
   const handleContextNewFile = useCallback(async (parentPath, name) => {
     if (!projectRootPath || !fsManager) return;
     const filePath = parentPath ? `${parentPath}/${name}` : name;
+    // createFile, never writeFile: "New file" must not replace a file that
+    // already has the name. The drawer's own sibling check sees only the
+    // visible tree, so `litria.toml`, OS-hidden files and anything created
+    // since the last refresh used to be overwritten (W3a, 2026-10-11).
     // notify:false — a brand-new empty file has nothing for the syntax
     // domain yet; discovery registers it on the manager's scaffold refresh.
-    await fsManager.writeFile(filePath, '', { notify: false });
-  }, [projectRootPath, fsManager]);
+    const created = await fsManager.createFile(filePath, '', { notify: false });
+    if (created?.success !== true) {
+      pillDomain?.commands?.addPill({
+        projectId: projectInstanceId,
+        message: created?.code === 'fs.exists'
+          ? `"${filePath}" already exists`
+          : `Failed to create "${filePath}"`,
+        severity: 'error'
+      });
+    }
+  }, [projectRootPath, fsManager, pillDomain, projectInstanceId]);
 
   const handleContextNewFolder = useCallback(async (parentPath, name) => {
     if (!projectRootPath || !fsManager) return;

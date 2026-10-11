@@ -431,7 +431,8 @@ function App() {
   const {
     managerRef: fsManagerRef,
     writeContentFile,
-    writeContentFileWithResult
+    writeContentFileWithResult,
+    createContentFile
   } = useManagerFileWriter();
 
   // Launcher "New File": Save As resolver that materializes the project root
@@ -858,7 +859,9 @@ function App() {
     handleContextNewFolder
   } = useScaffoldOperations({
     projectRootPath: projectInstance?.rootPath,
-    fsManager
+    fsManager,
+    pillDomain,
+    projectInstanceId: projectInstance?.instanceId
   });
 
   const {
@@ -872,7 +875,7 @@ function App() {
     addPiece,
     pieces,
     projectRootPath: projectInstance?.rootPath,
-    writeProjectFile: writeContentFile,
+    createProjectFile: createContentFile,
     bumpScaffoldRefresh,
     pillDomain,
     projectInstanceId: projectInstance?.instanceId,

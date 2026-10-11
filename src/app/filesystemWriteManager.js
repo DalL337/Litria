@@ -11,7 +11,9 @@
  * deps), and useUntitledSaveAs — a ratified exception: it bootstraps the
  * project root itself, so there is no project scope for the manager to
  * operate in yet (see that hook's header). Everything else goes through
- * moveFile / moveOrWriteFile / writeFile / deleteFile / batch here.
+ * moveFile / moveOrWriteFile / writeFile / createFile / deleteFile / batch
+ * here. A NEW file is created with createFile, never writeFile: only
+ * createFile refuses a name that is already taken (W3a, 2026-10-11).
  *
  * Two distinct post-op pipelines:
  *   Move:   fs op → piece filenames → tabs → groups → syntax → SQLite → scaffold
@@ -254,13 +256,14 @@ export function collectEmptiedFolderGroups(groups, removals) {
  * Create a new FilesystemWriteManager instance.
  *
  * @param {object} deps - All external dependencies (Tauri wrappers, domains, utilities)
- * @returns {{ moveFile, moveFolder, deleteFile, deleteFolder, deleteEmptyFolder, writeFile, createDirectory, batch }}
+ * @returns {{ moveFile, moveFolder, deleteFile, deleteFolder, deleteEmptyFolder, writeFile, createFile, createDirectory, batch }}
  */
 export function createFilesystemWriteManager(deps) {
   const {
     // Tauri invoke wrappers (from storage.js)
     moveProjectPath,
     writeProjectFile,
+    createProjectFile,
     removeEmptyDirectory,
     createProjectDirectory,
     deleteProjectPath,
@@ -1036,6 +1039,34 @@ export function createFilesystemWriteManager(deps) {
   }
 
   /**
+   * Create a file only if nothing has its name: never an overwrite (Project
+   * API build plan W3a). `writeFile` replaces; this is the verb for every
+   * NEW file. A taken name answers `fs.exists` and nothing is written: the
+   * drawer's sibling check sees only the visible tree, so "New file" named
+   * `litria.toml` used to replace the project configuration.
+   *
+   * @param {string} filePath - relative path (forward slashes), taken exactly
+   * @param {string} contents
+   * @param {object} [opts] - { notify = true, skipScaffold = false }
+   */
+  async function createFile(filePath, contents, opts = {}) {
+    const { notify = true, skipScaffold = false } = opts;
+    const rootPath = getRootPath();
+    if (!rootPath) return fail('No project root path available', 'fs.no_root');
+
+    const reserved = reservedNameFailure(filePath);
+    if (reserved) return reserved;
+
+    const outcome = await createProjectFile(rootPath, filePath, contents);
+    if (outcome === 'exists') return fail(`"${filePath}" already exists`, 'fs.exists');
+    if (outcome !== 'created') return fail(`Cannot create "${filePath}"`, 'fs.create_failed');
+
+    if (notify) notifySyntaxFile(normalizePath(filePath), contents);
+    if (!skipScaffold) bumpScaffoldRefresh();
+    return ok('none');
+  }
+
+  /**
    * Create a directory. No piece sync needed.
    *
    * @param {string} dirPath - relative path (forward slashes)
@@ -1126,6 +1157,7 @@ export function createFilesystemWriteManager(deps) {
     deleteEmptyFolder,
     removeFromCanvas,
     writeFile,
+    createFile,
     createDirectory: createDir,
     batch,
   };

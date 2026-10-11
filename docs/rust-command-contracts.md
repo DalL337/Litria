@@ -6,7 +6,7 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
 
 ## Command inventory
 
-89 commands are registered; 6 of them exist only in debug builds.
+90 commands are registered; 6 of them exist only in debug builds.
 
 **Every release-build command has a frontend caller.**
 - Any registered command can be invoked from the webview, so a command with no caller is surface with no purpose.
@@ -25,6 +25,7 @@ The debug-only `crash_test_panic`, `project_api_dev_call` and `project_api_dev_r
 | `read_project_file_with_revision` | `src-tauri/src/commands.rs` | `src/project/storage.js` | Returns `{ text, revision }`, the revision minted by `project_api::reader::disk_revision` over the exact bytes read (Project API build plan P4c). Used on the syntax registration paths; `read_project_file` is unchanged. |
 | `open_file_dialog` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
 | `write_project_file` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
+| `create_project_file` | `src-tauri/src/commands.rs` | `src/project/storage.js` | Creates a file only if nothing has its name; it never overwrites. Returns `"created"` or `"exists"`. The path is taken exactly (no trimming), and missing directories are created. Callers: the write manager's `createFile` (drawer New file, New Node). Project API build plan W3a. |
 | `list_project_tree` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
 | `move_project_path` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |
 | `create_project_directory` | `src-tauri/src/commands.rs` | `src/project/storage.js` |  |

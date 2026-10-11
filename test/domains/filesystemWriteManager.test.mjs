@@ -19,6 +19,7 @@ function createMockDeps(overrides = {}) {
   const calls = {
     moveProjectPath: [],
     writeProjectFile: [],
+    createProjectFile: [],
     removeEmptyDirectory: [],
     createProjectDirectory: [],
     deleteProjectPath: [],
@@ -86,6 +87,10 @@ function createMockDeps(overrides = {}) {
     writeProjectFile: async (rootPath, path, contents) => {
       calls.writeProjectFile.push({ rootPath, path, contents });
       return overrides.writeProjectFileResult ?? true;
+    },
+    createProjectFile: async (rootPath, path, contents) => {
+      calls.createProjectFile.push({ rootPath, path, contents });
+      return 'createProjectFileResult' in overrides ? overrides.createProjectFileResult : 'created';
     },
     removeEmptyDirectory: async (rootPath, path) => {
       calls.removeEmptyDirectory.push({ rootPath, path });
@@ -620,6 +625,82 @@ test('writeFile — failed write returns error without notify or refresh', async
   assert.equal(result.code, 'fs.write_failed');
   assert.equal(calls.notifyFileChanged.length, 0);
   assert.equal(calls.bumpScaffoldRefresh.length, 0);
+});
+
+// createFile (W3a): the verb for NEW files never overwrites. A taken name is
+// `fs.exists` and nothing else happens; the overwrite path is never used.
+
+test('createFile — creates the file, notifies syntax and refreshes the tree', async () => {
+  const { deps, calls } = createMockDeps({});
+  const mgr = createFilesystemWriteManager(deps);
+
+  const result = await mgr.createFile('src/new.py', 'print("hello")');
+
+  assert.equal(result.success, true);
+  assert.deepEqual(calls.createProjectFile, [{ rootPath: '/test/project', path: 'src/new.py', contents: 'print("hello")' }]);
+  assert.equal(calls.writeProjectFile.length, 0, 'never the overwriting write');
+  assert.deepEqual(calls.notifyFileChanged, [{ path: '/test/project/src/new.py', text: 'print("hello")' }]);
+  assert.equal(calls.bumpScaffoldRefresh.length, 1);
+});
+
+test('createFile — a taken name is fs.exists and changes nothing', async () => {
+  const { deps, calls } = createMockDeps({ createProjectFileResult: 'exists' });
+  const mgr = createFilesystemWriteManager(deps);
+
+  const result = await mgr.createFile('litria.toml', '');
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'fs.exists');
+  assert.match(result.error, /litria.toml" already exists/);
+  assert.equal(calls.writeProjectFile.length, 0, 'never falls back to the overwriting write');
+  assert.equal(calls.notifyFileChanged.length, 0);
+  assert.equal(calls.bumpScaffoldRefresh.length, 0);
+});
+
+test('createFile — a failed create is fs.create_failed', async () => {
+  const { deps, calls } = createMockDeps({ createProjectFileResult: null });
+  const mgr = createFilesystemWriteManager(deps);
+
+  const result = await mgr.createFile('src/new.py', 'x');
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'fs.create_failed');
+  assert.equal(calls.writeProjectFile.length, 0);
+  assert.equal(calls.notifyFileChanged.length, 0);
+  assert.equal(calls.bumpScaffoldRefresh.length, 0);
+});
+
+test('createFile — opts skip syntax notify and scaffold refresh', async () => {
+  const { deps, calls } = createMockDeps({});
+  const mgr = createFilesystemWriteManager(deps);
+
+  const result = await mgr.createFile('src/node.py', '# node', { notify: false, skipScaffold: true });
+
+  assert.equal(result.success, true);
+  assert.equal(calls.createProjectFile.length, 1);
+  assert.equal(calls.notifyFileChanged.length, 0);
+  assert.equal(calls.bumpScaffoldRefresh.length, 0);
+});
+
+test('createFile — rejects reserved device names before touching disk', async () => {
+  const { deps, calls } = createMockDeps({});
+  const mgr = createFilesystemWriteManager(deps);
+
+  const result = await mgr.createFile('src/aux.py', 'x');
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'fs.reserved_name');
+  assert.equal(calls.createProjectFile.length, 0);
+});
+
+test('createFile — no project root', async () => {
+  const { deps, calls } = createMockDeps({ rootPath: null });
+  const mgr = createFilesystemWriteManager(deps);
+
+  const result = await mgr.createFile('a.py', 'x');
+
+  assert.equal(result.code, 'fs.no_root');
+  assert.equal(calls.createProjectFile.length, 0);
 });
 
 test('createDirectory — creates directory', async () => {

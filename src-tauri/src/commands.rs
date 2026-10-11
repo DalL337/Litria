@@ -82,6 +82,17 @@ pub(crate) fn write_project_file(root_path: &str, relative_path: &str, contents:
     project_ops::write_project_file(root_path, relative_path, contents)
 }
 
+/// Create a file only if nothing has its name: never an overwrite (Project
+/// API build plan W3a). Answers `"created"` or `"exists"`.
+#[tauri::command]
+pub(crate) fn create_project_file(
+    root_path: &str,
+    relative_path: &str,
+    contents: &str,
+) -> CommandResult<project_ops::CreateFileOutcome> {
+    project_ops::create_project_file(root_path, relative_path, contents)
+}
+
 #[tauri::command]
 pub(crate) fn list_project_tree(root_path: &str) -> CommandResult<Vec<ProjectTreeEntry>> {
     project_ops::list_project_tree(root_path)
