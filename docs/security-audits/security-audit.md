@@ -1119,6 +1119,26 @@ language-server launch itself, scaffold `where`/`which`) opened a console window
 `windowsHiddenSpawns.test.mjs` fails on a bare `Command::new` in non-test Rust.
 Residual: verified by the flag, not yet by a run of the 1.0.4 release build.
 
+**Addendum 2026-10-11 — one spawn escaped the guard.** On the installed 1.1.1
+release build, opening a JS file still flashed a console. A process trace taken
+while the file opened named the spawn: `resolve_cmd_to_node` in
+`lsp/transport.rs` ran `where <server>.cmd` through
+`use std::process::Command as WhereCmd`, with no `CREATE_NO_WINDOW`. It runs
+on every JS/TS language-server start when the server resolves from a global
+npm install, and it has been there since 1.0.0. The guard missed it for two
+independent reasons:
+
+1. It cut each file at the first `#[cfg(test)]`, so production code below a
+   mid-file test module was never scanned.
+2. It matched only the literal `Command::new(`, so the alias got through.
+
+Fix: the spawn goes through `hidden_command`. The guard now blanks only the
+`#[cfg(test)]` items themselves, matching braces and skipping strings,
+characters and comments. It skips files declared as `#[cfg(test)] mod x;` and
+follows `Command as Alias` imports. Fixture tests reproduce both holes. Run
+against the unfixed tree, the new guard fails, naming this one line and
+nothing else.
+
 ### ISSUE 24: CI actions referenced by mutable tag
 **Severity:** Medium (supply chain) · **Found:** 2026-09-07 · **Status:** merged PR #33 (2026-09-07)
 `actions/checkout@v7` etc. resolve at run time; a moved tag runs foreign code with
