@@ -18,6 +18,7 @@ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 // server lives. hidden_command carries CREATE_NO_WINDOW.
 use crate::platform::hidden_command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -319,6 +320,16 @@ pub(crate) fn spawn_server(
         .map_err(|e| format!("Failed to start LSP stderr thread: {e}"))?;
 
     let stdin_arc = Arc::new(Mutex::new(stdin));
+    // Server→client requests are answered on the same stdin, but by their
+    // own thread: the read thread only queues the reply (see `queue_reply`).
+    // The reply thread ends when the read thread drops the sender.
+    let (replies, queued_replies) = mpsc::sync_channel::<String>(MAX_QUEUED_REPLIES);
+    let reply_sink = Arc::clone(&stdin_arc);
+    thread::Builder::new()
+        .name(format!("lsp-reply:{}", pack.language_id))
+        .spawn(move || write_replies(queued_replies, &reply_sink))
+        .map_err(|e| format!("Failed to start LSP reply thread: {e}"))?;
+    let workspace_uri = crate::lsp::session::path_to_uri(project_root);
     let child_arc = Arc::new(Mutex::new(child));
     let is_stopping = Arc::new(AtomicBool::new(false));
     let is_stopping_cb = Arc::clone(&is_stopping);
@@ -327,7 +338,7 @@ pub(crate) fn spawn_server(
     let reader = BufReader::new(stdout);
     thread::Builder::new()
         .name(format!("lsp-read:{}", pack.language_id))
-        .spawn(move || read_loop(reader, app, is_stopping_cb, on_message, on_crash))
+        .spawn(move || read_loop(reader, app, is_stopping_cb, replies, workspace_uri, on_message, on_crash))
         .map_err(|e| format!("Failed to start LSP read thread: {e}"))?;
 
     Ok(LspTransport {
@@ -429,6 +440,8 @@ fn read_loop<R: BufRead + Read>(
     mut reader: R,
     app: AppHandle,
     is_stopping: Arc<AtomicBool>,
+    replies: SyncSender<String>,
+    workspace_uri: String,
     on_message: impl Fn(AppHandle, IncomingMessage),
     on_crash: impl FnOnce(),
 ) {
@@ -456,7 +469,60 @@ fn read_loop<R: BufRead + Read>(
             }
         };
 
+        if let Some((method, body)) = reply_to_request(&msg, &workspace_uri) {
+            queue_reply(&replies, method, body);
+            continue;
+        }
         on_message(app.clone(), msg);
+    }
+}
+
+/// Replies waiting for the reply thread. A server keeps only a handful of
+/// requests open at once; past this many, the reply thread is stuck on a
+/// stdin the server is not reading, and a further reply is dropped (logged).
+const MAX_QUEUED_REPLIES: usize = 64;
+
+/// The method and the reply body when `msg` is a server→client request
+/// (`id` and `method` both present); `None` for responses and
+/// notifications, which are forwarded instead. A request left unanswered can
+/// stall a server for good: Pyright never published a diagnostic while its
+/// `workspace/configuration` request went unanswered (2026-10-11).
+pub(crate) fn reply_to_request(msg: &IncomingMessage, workspace_uri: &str) -> Option<(String, String)> {
+    let (Some(id), Some(method)) = (msg.id.as_ref(), msg.method.as_deref()) else {
+        return None;
+    };
+    let body = crate::lsp::server_requests::reply(id, method, msg.params.as_ref(), workspace_uri).to_string();
+    Some((method.to_string(), body))
+}
+
+/// Hand a reply to the reply thread without waiting. The read thread must
+/// never block on stdin: another thread can hold the stdin lock while it
+/// writes a large `didChange` the server is not reading yet, because the
+/// server is itself blocked writing to stdout, which only the read thread
+/// drains. Waiting here would close that loop for good.
+pub(crate) fn queue_reply(replies: &SyncSender<String>, method: String, body: String) {
+    match replies.try_send(body) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => {
+            eprintln!("[lsp transport] reply queue full; dropped the reply to {method}");
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            eprintln!("[lsp transport] reply thread gone; dropped the reply to {method}");
+        }
+    }
+}
+
+/// The reply thread: write each queued reply to the server's stdin, in
+/// order. Ends when the read thread drops its sender (server gone).
+pub(crate) fn write_replies<W: Write>(queued: Receiver<String>, sink: &Mutex<W>) {
+    for body in queued {
+        let written = sink
+            .lock()
+            .map_err(|_| "stdin lock poisoned".to_string())
+            .and_then(|mut stdin| write_message_to(&mut *stdin, &body));
+        if let Err(error) = written {
+            eprintln!("[lsp transport] could not write a reply to a server request: {error}");
+        }
     }
 }
 
@@ -469,6 +535,76 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::io::Cursor;
+
+    fn incoming(value: serde_json::Value) -> IncomingMessage {
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// Every framed message in `bytes`, read back through the real framing.
+    fn framed(bytes: Vec<u8>) -> Vec<serde_json::Value> {
+        let mut cursor = Cursor::new(bytes);
+        let mut messages = Vec::new();
+        while let Ok(raw) = read_message(&mut cursor) {
+            messages.push(serde_json::from_str(&raw).unwrap());
+        }
+        messages
+    }
+
+    /// Pyright's first request, which went unanswered before 2026-10-11 and
+    /// kept it from ever publishing a diagnostic.
+    #[test]
+    fn a_server_request_gets_a_reply() {
+        let request = incoming(json!({
+            "jsonrpc": "2.0", "id": 3, "method": "workspace/configuration",
+            "params": { "items": [{ "section": "python" }] }
+        }));
+        let (method, body) = reply_to_request(&request, "file:///C:/proj").unwrap();
+        assert_eq!(method, "workspace/configuration");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body, json!({ "jsonrpc": "2.0", "id": 3, "result": [null] }));
+    }
+
+    #[test]
+    fn notifications_and_responses_are_not_answered() {
+        let notification = incoming(json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {} }));
+        let response = incoming(json!({ "jsonrpc": "2.0", "id": 1, "result": {} }));
+        assert!(reply_to_request(&notification, "file:///C:/proj").is_none());
+        assert!(reply_to_request(&response, "file:///C:/proj").is_none());
+    }
+
+    /// The read thread queues a reply even while another thread holds the
+    /// stdin lock (say, mid-way through a large `didChange`); the reply
+    /// thread writes it, framed and in order, once the lock is free.
+    #[test]
+    fn queuing_a_reply_never_waits_on_the_stdin_lock() {
+        let sink = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let (replies, queued) = mpsc::sync_channel(MAX_QUEUED_REPLIES);
+        let writer = {
+            let sink = Arc::clone(&sink);
+            thread::spawn(move || write_replies(queued, &*sink))
+        };
+        let held = sink.lock().unwrap();
+        for id in 1..=2 {
+            let request = incoming(json!({ "jsonrpc": "2.0", "id": id, "method": "client/registerCapability" }));
+            let (method, body) = reply_to_request(&request, "file:///C:/proj").unwrap();
+            queue_reply(&replies, method, body); // returns with the lock still held
+        }
+        drop(held);
+        drop(replies); // the read thread ends, so the reply thread ends
+        writer.join().unwrap();
+        let ids: Vec<_> = framed(sink.lock().unwrap().clone()).into_iter().map(|m| m["id"].clone()).collect();
+        assert_eq!(ids, vec![json!(1), json!(2)]);
+    }
+
+    /// Past the queue bound a reply is dropped, never waited on.
+    #[test]
+    fn a_full_reply_queue_drops_instead_of_blocking() {
+        let (replies, queued) = mpsc::sync_channel(1);
+        queue_reply(&replies, "a".into(), "{}".into());
+        queue_reply(&replies, "b".into(), "{}".into()); // full: dropped, returns
+        drop(replies);
+        assert_eq!(queued.iter().count(), 1);
+    }
 
     fn transport_for_test_child(mut command: Command) -> LspTransport {
         command

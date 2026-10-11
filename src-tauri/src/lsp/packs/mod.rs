@@ -172,6 +172,13 @@ pub(crate) struct LanguagePack {
     pub client_capabilities: Value,
     /// Server-specific options sent as `initializationOptions` in `initialize`.
     pub initialization_options: Value,
+    /// Settings pushed with `workspace/didChangeConfiguration` right after
+    /// `initialized`, or `None` to push nothing. Some servers do not analyse
+    /// until settings arrive: Pyright 1.1.408 waits for this push before it
+    /// even asks for `workspace/configuration` (1.1.414 asks on its own).
+    /// Only for packs whose server treats an empty push as "use defaults" —
+    /// it is not sent to servers that read settings from it destructively.
+    pub initial_settings: Option<Value>,
 
     // --- Timing / behaviour ---
     /// How long to wait for the `initialize` response before timing out (ms).
