@@ -49,6 +49,7 @@ fn stored(line: u32, severity: Option<u8>, message: &str) -> StoredDiagnostic {
         code: Some("2322".into()),
         source: None,
         related: Vec::new(),
+        clipped: false,
     }
 }
 
@@ -415,6 +416,12 @@ fn freshness_is_reported_with_its_reason() {
             Some(FreshnessReason::ProducerOmitsVersion),
         ),
         ("e.ts", StoreFreshness::Unknown(UnknownReason::ClosedFile), Freshness::Unknown, Some(FreshnessReason::ClosedFile)),
+        (
+            "f.ts",
+            StoreFreshness::Unknown(UnknownReason::ReusedVersion),
+            Freshness::Unknown,
+            Some(FreshnessReason::ReusedVersion),
+        ),
     ];
     for (path, ..) in &cases {
         put(&root, path);
@@ -451,6 +458,7 @@ fn related_locations_in_denied_files_or_outside_the_project_are_dropped() {
             end: Position { line: 0, character: 1 },
         },
         message: message.into(),
+        clipped: false,
     };
     let mut diagnostic = stored(0, Some(1), "bad");
     diagnostic.related = vec![
@@ -540,6 +548,206 @@ fn messages_are_bounded_after_redaction() {
     let long = format!("{} {}", "é".repeat(1_500), "./.env");
     let out = redact_message(&long, &root, "");
     assert_eq!(out.chars().count(), MAX_MESSAGE_CHARS as usize);
+    let _ = fs::remove_dir_all(&root);
+}
+
+// --- Codex review of P5 (2026-10-11) -------------------------------------------
+
+/// A live session over a real store snapshot.
+fn live(language: &str, snapshot: Option<SessionSnapshot>) -> Scripted {
+    Scripted {
+        sessions: vec![SessionDiagnostics {
+            session: LiveSession {
+                language_id: language.into(),
+                project_id: "p".into(),
+                session_id: format!("p::{language}::1"),
+            },
+            producer: producer_name(language),
+            snapshot,
+        }],
+        ..Scripted::default()
+    }
+}
+
+/// Review F1: the policy withholds some names only as directories — a folder
+/// named `.env.example` (only the FILE is a readable template) or a user
+/// pattern like `private/`. A server that publishes for, or relates to, such
+/// a directory must not get it past a file-only check.
+#[test]
+fn a_withheld_directory_is_never_reported() {
+    let _user = crate::project_api::policy::tests::Withholding::patterns("private/");
+    let root = temp_root("withheld-dir");
+    put(&root, "a.py");
+    fs::create_dir_all(root.join(".env.example")).unwrap();
+    fs::create_dir_all(root.join("private")).unwrap();
+    let mut on_a = stored(0, Some(1), "allowed document");
+    on_a.related = vec![StoreRelated {
+        uri: uri(&root, ".env.example"),
+        range: Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 0, character: 1 },
+        },
+        message: "withheld directory related message".into(),
+        clipped: false,
+    }];
+    let docs = || {
+        vec![
+            document(&root, ".env.example", FRESH, vec![stored(0, Some(1), "withheld directory diagnostic")]),
+            document(&root, "private", FRESH, vec![stored(0, Some(1), "user-withheld directory diagnostic")]),
+            document(&root, "a.py", FRESH, vec![on_a.clone()]),
+        ]
+    };
+    let mut sources = Scripted {
+        sessions: vec![session("python", docs())],
+        ..Scripted::default()
+    };
+    let all = run(&root, &request(json!({})), &mut sources, MAX_RESPONSE_BYTES).unwrap();
+    assert_eq!(paths_and_states(&all), ["a.py available 1"]);
+    let text = serde_json::to_string(&all).unwrap();
+    assert!(!text.contains("withheld directory"), "a withheld directory leaked: {text}");
+    let mut sources = Scripted {
+        sessions: vec![session("python", docs())],
+        ..Scripted::default()
+    };
+    let named = run(&root, &request(json!({ "paths": [".env.example", "private"] })), &mut sources, MAX_RESPONSE_BYTES)
+        .unwrap();
+    assert_eq!(paths_and_states(&named), [".env.example denied", "private denied"]);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Review F4: when the store evicts documents to stay bounded, an absent file
+/// no longer proves the server never reported on it. The answer must say it
+/// may be incomplete. Driven through the real store's eviction.
+#[test]
+fn store_eviction_is_reported_not_hidden() {
+    use crate::lsp::diagnostics_cache::{Cache, MAX_DOCUMENTS_PER_SESSION};
+    let root = temp_root("evicted");
+    put(&root, "a.py");
+    let mut cache = Cache::default();
+    cache.begin_session("p::python::1", "p", "python");
+    cache.record_publish(
+        "p::python::1",
+        &json!({ "uri": uri(&root, "a.py"), "diagnostics": [{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 4 } },
+            "severity": 1, "message": "real error"
+        }]}),
+    );
+    // Enough other documents to evict a.py (closed, least recently touched).
+    for i in 0..MAX_DOCUMENTS_PER_SESSION {
+        cache.record_sent(
+            "p::python::1",
+            "textDocument/didOpen",
+            &json!({ "textDocument": { "uri": format!("file:///elsewhere/{i}.py"), "languageId": "python", "version": 1, "text": "" } }),
+        );
+    }
+    let snapshot = cache.snapshot("p", "python", "p::python::1");
+    assert!(snapshot.as_ref().unwrap().documents_evicted, "precondition: the store evicted");
+
+    let all = run(&root, &request(json!({})), &mut live("python", snapshot.clone()), MAX_RESPONSE_BYTES).unwrap();
+    assert!(all.files.is_empty());
+    assert!(all.truncated, "an empty enumeration after eviction must not look complete");
+    assert_eq!(all.truncated_by, [TruncationReason::StoreEvicted]);
+
+    let named = run(&root, &request(json!({ "paths": ["a.py"] })), &mut live("python", snapshot), MAX_RESPONSE_BYTES).unwrap();
+    assert_eq!(paths_and_states(&named), ["a.py unavailable NotAnalyzed"]);
+    assert!(named.truncated, "notAnalyzed after eviction must say the store is incomplete");
+    assert_eq!(named.truncated_by, [TruncationReason::StoreEvicted]);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Review F3: a publish whose entries could not all be read is incomplete.
+/// Enumeration lists it (flagged) instead of dropping it as "no errors".
+#[test]
+fn an_incomplete_publish_is_listed_even_when_nothing_could_be_kept() {
+    let root = temp_root("incomplete");
+    put(&root, "a.py");
+    let mut incomplete = document(&root, "a.py", FRESH, vec![]);
+    incomplete.store_truncated = true;
+    let mut sources = Scripted {
+        sessions: vec![session("python", vec![incomplete])],
+        ..Scripted::default()
+    };
+    let all = run(&root, &request(json!({})), &mut sources, MAX_RESPONSE_BYTES).unwrap();
+    assert_eq!(paths_and_states(&all), ["a.py available 0"]);
+    assert!(matches!(&all.files[0], FileDiagnostics::Available { truncated: true, .. }));
+    assert!(all.truncated);
+    assert_eq!(all.truncated_by, [TruncationReason::PerFile]);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Review F5: a message cut to the 1,000-character bound is not complete, and
+/// the answer must say so; one that fits exactly is complete.
+#[test]
+fn a_shortened_message_is_reported_as_truncated() {
+    let root = temp_root("clip");
+    put(&root, "fits.ts");
+    put(&root, "cut.ts");
+    let mut sources = Scripted {
+        sessions: vec![session(
+            "typescript",
+            vec![
+                document(&root, "fits.ts", FRESH, vec![stored(0, Some(1), &"m".repeat(1_000))]),
+                document(&root, "cut.ts", FRESH, vec![stored(0, Some(1), &"m".repeat(1_001))]),
+            ],
+        )],
+        ..Scripted::default()
+    };
+    let result = run(&root, &request(json!({ "paths": ["fits.ts", "cut.ts"] })), &mut sources, MAX_RESPONSE_BYTES).unwrap();
+    let flags: Vec<(bool, usize)> = result
+        .files
+        .iter()
+        .map(|file| match file {
+            FileDiagnostics::Available { truncated, diagnostics, .. } => (*truncated, diagnostics[0].message.chars().count()),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(flags, [(false, 1_000), (true, 1_000)]);
+    assert!(result.truncated);
+    assert_eq!(result.truncated_by, [TruncationReason::Details]);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// What the store cut is reported too — but a related location the policy
+/// removes never sets a flag, whatever was cut of it: the flag would hint that
+/// a denied file is involved.
+#[test]
+fn store_cuts_are_reported_but_never_for_a_removed_related_location() {
+    let root = temp_root("store-cuts");
+    for path in ["cut.ts", "hidden.ts", ".env"] {
+        put(&root, path);
+    }
+    let mut cut = stored(0, Some(1), "code was cut");
+    cut.clipped = true;
+    let mut hidden = stored(0, Some(1), "related to a denied file");
+    hidden.related = vec![StoreRelated {
+        uri: uri(&root, ".env"),
+        range: Range {
+            start: Position { line: 0, character: 0 },
+            end: Position { line: 0, character: 1 },
+        },
+        message: "a long message about the secret, cut by the store".into(),
+        clipped: true,
+    }];
+    let mut sources = Scripted {
+        sessions: vec![session(
+            "typescript",
+            vec![
+                document(&root, "cut.ts", FRESH, vec![cut]),
+                document(&root, "hidden.ts", FRESH, vec![hidden]),
+            ],
+        )],
+        ..Scripted::default()
+    };
+    let result = run(&root, &request(json!({ "paths": ["cut.ts", "hidden.ts"] })), &mut sources, MAX_RESPONSE_BYTES).unwrap();
+    let flags: Vec<bool> = result
+        .files
+        .iter()
+        .map(|file| matches!(file, FileDiagnostics::Available { truncated: true, .. }))
+        .collect();
+    assert_eq!(flags, [true, false]);
+    assert_eq!(result.truncated_by, [TruncationReason::Details]);
+    let FileDiagnostics::Available { diagnostics, .. } = &result.files[1] else { panic!() };
+    assert!(diagnostics[0].related.is_empty());
     let _ = fs::remove_dir_all(&root);
 }
 

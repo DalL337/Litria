@@ -131,16 +131,49 @@ fn closed_file_diagnostics_are_kept_with_unknown_freshness() {
 }
 
 #[test]
-fn reopening_resets_versions_but_never_revives_old_diagnostics() {
+fn reopening_never_revives_old_diagnostics() {
     let mut c = cache_with(S1);
     open(&mut c, S1, A, 1);
     publish(&mut c, S1, A, Some(1), vec![diag(0, "first opening")]);
     assert_eq!(freshness_of(&c, S1, A), Freshness::Current);
     close(&mut c, S1, A);
-    // The webview restarts the version at 1 on reopen: version 1 again.
-    open(&mut c, S1, A, 1);
+    open(&mut c, S1, A, 2);
     assert_eq!(freshness_of(&c, S1, A), Freshness::Stale(StaleReason::Reopened));
-    publish(&mut c, S1, A, Some(1), vec![]);
+    publish(&mut c, S1, A, Some(2), vec![]);
+    assert_eq!(freshness_of(&c, S1, A), Freshness::Current);
+}
+
+/// Codex review F2: a publish carries no opening, only a version. If a reopen
+/// starts the versions over, a late publish for the EARLIER opening's
+/// version 1 arrives looking exactly like one for the new opening's version 1.
+/// It must not be reported current.
+#[test]
+fn a_late_publish_from_an_earlier_opening_is_never_current() {
+    let mut c = cache_with(S1);
+    open(&mut c, S1, A, 1);
+    close(&mut c, S1, A);
+    open(&mut c, S1, A, 1); // a client that starts versions over on reopen
+    publish(&mut c, S1, A, Some(1), vec![diag(0, "computed for the first opening")]);
+    assert_eq!(freshness_of(&c, S1, A), Freshness::Unknown(UnknownReason::ReusedVersion));
+    // Once this opening passes every version an earlier one used, a publish
+    // for it is provably current again.
+    change(&mut c, S1, A, 2);
+    publish(&mut c, S1, A, Some(2), vec![]);
+    assert_eq!(freshness_of(&c, S1, A), Freshness::Current);
+}
+
+/// What Litria's webview does since the review: versions keep counting across
+/// a reopen, so a late publish is plainly older and a new one is current.
+#[test]
+fn versions_that_keep_counting_tell_a_late_publish_from_a_new_one() {
+    let mut c = cache_with(S1);
+    open(&mut c, S1, A, 1);
+    change(&mut c, S1, A, 2);
+    close(&mut c, S1, A);
+    open(&mut c, S1, A, 3);
+    publish(&mut c, S1, A, Some(2), vec![diag(0, "late, from the first opening")]);
+    assert_eq!(freshness_of(&c, S1, A), Freshness::Stale(StaleReason::OlderVersion));
+    publish(&mut c, S1, A, Some(3), vec![diag(0, "for this opening")]);
     assert_eq!(freshness_of(&c, S1, A), Freshness::Current);
 }
 
@@ -218,6 +251,28 @@ fn a_malformed_publish_is_ignored_not_read_as_no_errors() {
     assert_eq!(d.diagnostics[0].message, "real");
 }
 
+/// Codex review F3: entries the store cannot read are not "no errors". A
+/// publish that lost any is marked incomplete, so a list of only unreadable
+/// entries can never replace real errors with a clean, complete empty list.
+#[test]
+fn a_publish_with_unreadable_entries_is_marked_incomplete() {
+    let mut c = cache_with(S1);
+    open(&mut c, S1, A, 1);
+    publish(&mut c, S1, A, Some(1), vec![diag(0, "real")]);
+    publish(&mut c, S1, A, Some(1), vec![json!({ "message": "no range", "severity": 1 })]);
+    let d = doc(&c, S1, A).unwrap();
+    assert!(d.diagnostics.is_empty());
+    assert!(d.store_truncated, "only unreadable entries: incomplete, not a clean empty list");
+
+    publish(&mut c, S1, A, Some(1), vec![diag(0, "kept"), json!({ "message": "no range" })]);
+    let d = doc(&c, S1, A).unwrap();
+    assert_eq!(d.diagnostics.len(), 1);
+    assert!(d.store_truncated, "a mixed list is incomplete too");
+
+    publish(&mut c, S1, A, Some(1), vec![]);
+    assert!(!doc(&c, S1, A).unwrap().store_truncated, "an empty list is complete");
+}
+
 #[test]
 fn invalid_entries_are_skipped_and_fields_are_sanitized() {
     let mut c = cache_with(S1);
@@ -239,6 +294,7 @@ fn invalid_entries_are_skipped_and_fields_are_sanitized() {
     assert_eq!(odd.severity, None, "severity outside 1..=4 is dropped");
     assert_eq!(odd.code, None);
     assert_eq!(odd.source, None);
+    assert!(d.store_truncated, "three entries could not be read (Codex review F3)");
 }
 
 #[test]
@@ -266,6 +322,45 @@ fn storage_is_bounded() {
     assert!(d.store_truncated);
     assert_eq!(d.diagnostics[0].message.chars().count(), MAX_STORED_MESSAGE_CHARS);
     assert_eq!(d.diagnostics[0].related.len(), MAX_RELATED_PER_DIAGNOSTIC);
+    assert!(d.diagnostics[0].clipped, "a cut message and dropped related locations are marked");
+    assert!(!d.diagnostics[1].clipped);
+}
+
+/// Codex review F5: whatever the store cuts or leaves out is marked, so the
+/// tool can say the diagnostic is not complete.
+#[test]
+fn what_the_store_cuts_is_marked() {
+    let mut c = cache_with(S1);
+    let range = json!({ "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } });
+    let entry = |code: Value, related: Vec<Value>| {
+        json!({ "range": range, "severity": 1, "message": "m", "code": code, "relatedInformation": related })
+    };
+    let related = |uri: String, message: String| json!({ "location": { "uri": uri, "range": range }, "message": message });
+    let entries = vec![
+        entry(json!("c".repeat(MAX_SHORT_FIELD_CHARS + 1)), vec![]),
+        entry(json!(1), vec![related("file:///proj/b.py".into(), "r".repeat(MAX_STORED_RELATED_MESSAGE_CHARS + 1))]),
+        entry(json!(1), vec![related(format!("file:///proj/{}.py", "u".repeat(MAX_STORED_URI_CHARS)), "here".into())]),
+        entry(json!(1), vec![json!({ "message": "no location" })]),
+        entry(json!("c".repeat(MAX_SHORT_FIELD_CHARS)), vec![related("file:///proj/b.py".into(), "here".into())]),
+    ];
+    publish(&mut c, S1, A, None, entries);
+    let d = doc(&c, S1, A).unwrap();
+    let marks: Vec<(bool, Vec<bool>)> = d
+        .diagnostics
+        .iter()
+        .map(|x| (x.clipped, x.related.iter().map(|r| r.clipped).collect()))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (true, vec![]),      // code cut
+            (false, vec![true]), // related message cut: marked on that location
+            (true, vec![]),      // related URI too long: dropped, not cut
+            (true, vec![]),      // unreadable related location: dropped
+            (false, vec![false]),
+        ]
+    );
+    assert!(!d.store_truncated, "every entry was read; only details were cut");
 }
 
 /// Adversarial F2: what a misbehaving server can make the store hold is
@@ -273,7 +368,7 @@ fn storage_is_bounded() {
 fn heavy(line: u64) -> Value {
     let related: Vec<Value> = (0..20)
         .map(|i| json!({
-            "location": { "uri": format!("file:///proj/{}{i}.py", "r".repeat(3_000)),
+            "location": { "uri": format!("file:///proj/{}{i}.py", "r".repeat(2_000)),
                           "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } } },
             "message": "m".repeat(3_000)
         }))

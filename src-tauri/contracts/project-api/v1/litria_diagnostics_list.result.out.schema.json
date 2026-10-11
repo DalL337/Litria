@@ -135,7 +135,7 @@
               "const": "available"
             },
             "truncated": {
-              "description": "More diagnostics exist than were returned for this file.",
+              "description": "The list is not complete: more diagnostics exist than were\nreturned for this file, or some were shortened (see `truncatedBy`).",
               "type": "boolean"
             }
           },
@@ -290,6 +290,11 @@
           "description": "Unknown: no version was recorded for this opening.",
           "type": "string",
           "const": "noSentVersion"
+        },
+        {
+          "description": "Unknown: an earlier opening of the document used the same version, so\nwhich opening the producer diagnosed cannot be told apart.",
+          "type": "string",
+          "const": "reusedVersion"
         }
       ]
     },
@@ -323,10 +328,10 @@
       ]
     },
     "TruncationReason": {
-      "description": "A limit that ended the response.",
+      "description": "Why the response is not complete.",
       "oneOf": [
         {
-          "description": "A file had more than 100 diagnostics (that file says `truncated`).",
+          "description": "A file has more diagnostics than it lists: over 100, or more than the\nstore could keep or read (that file says `truncated`).",
           "type": "string",
           "const": "perFile"
         },
@@ -339,6 +344,16 @@
           "description": "The encoded response ceiling was reached.",
           "type": "string",
           "const": "responseSize"
+        },
+        {
+          "description": "The store dropped some files' diagnostics to stay within its bounds, so\na file missing from the list, or `notAnalyzed`, may have had some.",
+          "type": "string",
+          "const": "storeEvicted"
+        },
+        {
+          "description": "A diagnostic's message, code or related locations were shortened (that\nfile says `truncated`).",
+          "type": "string",
+          "const": "details"
         }
       ]
     },

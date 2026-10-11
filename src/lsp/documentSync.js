@@ -14,7 +14,11 @@
 
 import { lspNotify } from './lspClient.js';
 
-// URI → version counter map.  Survives for the lifetime of the app.
+// URI → version counter map.  Survives for the lifetime of the app, across
+// close and reopen: a server's publishDiagnostics names a version, not an
+// opening, so a version must never repeat for a document. When a reopen
+// started over at 1, a late publish for the earlier opening looked current to
+// the Project API (Codex review of P5, F2).
 const _versions = new Map();
 
 // Per-URI pending debounce timer IDs.
@@ -78,7 +82,6 @@ export function didClose(languageId, projectId, uri) {
     clearTimeout(_debounceTimers.get(uri));
     _debounceTimers.delete(uri);
   }
-  _versions.delete(uri);
   lspNotify(languageId, projectId, 'textDocument/didClose', {
     textDocument: { uri },
   });

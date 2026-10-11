@@ -18,12 +18,17 @@
 //!   older opening of the document, so any race errs toward "not current".
 //! - [`record_publish`] for `textDocument/publishDiagnostics`, parsed into
 //!   bounded, typed entries. A server's output is not trusted to be small or
-//!   well formed; a malformed publish is ignored rather than read as "no errors".
+//!   well formed; a malformed publish is ignored rather than read as "no
+//!   errors", and a publish with entries that cannot be read is marked
+//!   incomplete (`store_truncated`), never stored as a clean list.
 //!
-//! The webview resets a document's version to 1 on every reopen
-//! (`src/lsp/documentSync.js`), so a version number alone can repeat inside one
-//! session. Every document therefore counts its openings (`open_generation`),
-//! and a diagnostic is only current for the opening it arrived in.
+//! Every document counts its openings (`open_generation`), and a diagnostic is
+//! only current for the opening it arrived in. A publish names a version, not
+//! an opening, so the webview keeps counting a document's versions across a
+//! close and reopen (`src/lsp/documentSync.js`, since the Codex review of P5).
+//! A client that starts them over would make a late publish for the earlier
+//! opening look like one for the new opening; the store then reports that
+//! version `Unknown(ReusedVersion)`, never current.
 //!
 //! Some servers publish no `version` (typescript-language-server sends only
 //! `uri` + `diagnostics`). Their freshness is `Unknown(ProducerOmitsVersion)`
@@ -79,6 +84,8 @@ pub(crate) struct RelatedLocation {
     pub uri: String,
     pub range: Range,
     pub message: String,
+    /// The message was cut to the stored bound.
+    pub clipped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +97,10 @@ pub(crate) struct StoredDiagnostic {
     pub code: Option<String>,
     pub source: Option<String>,
     pub related: Vec<RelatedLocation>,
+    /// Something of this diagnostic was cut or dropped to fit the store: its
+    /// message or code was shortened, or related locations were left out
+    /// (too many, unreadable, or a URI too long to trust).
+    pub clipped: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +122,9 @@ pub(crate) enum UnknownReason {
     VersionAhead,
     /// Open, but no version was recorded for this opening.
     NoSentVersion,
+    /// An earlier opening sent the same version, so which opening the server
+    /// diagnosed cannot be told apart.
+    ReusedVersion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +182,11 @@ struct DocState {
     open_generation: u64,
     is_open: bool,
     sent_version: Option<i64>,
+    /// The highest version sent in any opening this session.
+    highest_sent: Option<i64>,
+    /// Set when this opening started at a version an earlier opening had
+    /// already reached: versions up to it are ambiguous.
+    reused_up_to: Option<i64>,
     published: Option<Published>,
     /// Store-wide sequence of the last touch; drives eviction.
     touched: u64,
@@ -234,10 +253,15 @@ impl Cache {
                 doc.open_generation += 1;
                 doc.is_open = true;
                 doc.sent_version = version;
+                doc.reused_up_to = doc
+                    .highest_sent
+                    .filter(|&earlier| version.is_some_and(|v| v <= earlier));
+                doc.highest_sent = doc.highest_sent.max(version);
             }
             SentKind::Change => {
                 if version.is_some() {
                     doc.sent_version = version;
+                    doc.highest_sent = doc.highest_sent.max(version);
                 }
             }
             SentKind::Close => {
@@ -275,15 +299,18 @@ impl Cache {
                 store_truncated = true;
                 break;
             }
-            if let Some(d) = parse_diagnostic(item) {
-                let size = approx_bytes(&d);
-                if bytes + size > MAX_STORED_BYTES_PER_DOCUMENT {
-                    store_truncated = true;
-                    break;
-                }
-                bytes += size;
-                diagnostics.push(d);
+            // An entry that cannot be read is not "no error" (Codex review F3).
+            let Some(d) = parse_diagnostic(item) else {
+                store_truncated = true;
+                continue;
+            };
+            let size = approx_bytes(&d);
+            if bytes + size > MAX_STORED_BYTES_PER_DOCUMENT {
+                store_truncated = true;
+                break;
             }
+            bytes += size;
+            diagnostics.push(d);
         }
         self.seq += 1;
         let seq = self.seq;
@@ -412,6 +439,11 @@ fn freshness(doc: &DocState, published: &Published) -> Freshness {
         return Freshness::Unknown(UnknownReason::ProducerOmitsVersion);
     };
     match doc.sent_version {
+        // The same number may also have been an earlier opening's (Codex
+        // review F2): the publish carries no opening to tell them apart.
+        Some(sent) if version == sent && doc.reused_up_to.is_some_and(|earlier| version <= earlier) => {
+            Freshness::Unknown(UnknownReason::ReusedVersion)
+        }
         Some(sent) if version == sent => Freshness::Current,
         Some(sent) if version < sent => Freshness::Stale(StaleReason::OlderVersion),
         Some(_) => Freshness::Unknown(UnknownReason::VersionAhead),
@@ -425,43 +457,60 @@ fn freshness(doc: &DocState, published: &Published) -> Freshness {
 
 fn parse_diagnostic(value: &Value) -> Option<StoredDiagnostic> {
     let range = parse_range(value.get("range")?)?;
-    let message = bounded(value.get("message")?.as_str()?, MAX_STORED_MESSAGE_CHARS);
+    let raw_message = value.get("message")?.as_str()?;
+    let message = bounded(raw_message, MAX_STORED_MESSAGE_CHARS);
+    let mut clipped = message.len() < raw_message.len();
     let severity = value
         .get("severity")
         .and_then(Value::as_u64)
         .filter(|s| (1..=4).contains(s))
         .map(|s| s as u8);
     let code = match value.get("code") {
-        Some(Value::String(s)) => Some(bounded(s, MAX_SHORT_FIELD_CHARS)),
-        Some(Value::Number(n)) => Some(bounded(&n.to_string(), MAX_SHORT_FIELD_CHARS)),
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
         _ => None,
-    };
+    }
+    .map(|code| {
+        let kept = bounded(&code, MAX_SHORT_FIELD_CHARS);
+        clipped |= kept.len() < code.len();
+        kept
+    });
     let source = value
         .get("source")
         .and_then(Value::as_str)
         .map(|s| bounded(s, MAX_SHORT_FIELD_CHARS));
-    let related = value
-        .get("relatedInformation")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|r| {
-                    let location = r.get("location")?;
-                    Some(RelatedLocation {
-                        uri: bounded(location.get("uri")?.as_str()?, MAX_STORED_URI_CHARS),
-                        range: parse_range(location.get("range")?)?,
-                        message: bounded(
-                            r.get("message").and_then(Value::as_str).unwrap_or(""),
-                            MAX_STORED_RELATED_MESSAGE_CHARS,
-                        ),
-                    })
-                })
-                .take(MAX_RELATED_PER_DIAGNOSTIC)
-                .collect()
-        })
-        .unwrap_or_default();
-    Some(StoredDiagnostic { severity, message, range, code, source, related })
+    let mut related = Vec::new();
+    if let Some(items) = value.get("relatedInformation").and_then(Value::as_array) {
+        for item in items {
+            if related.len() == MAX_RELATED_PER_DIAGNOSTIC {
+                clipped = true;
+                break;
+            }
+            match parse_related(item) {
+                Some(location) => related.push(location),
+                None => clipped = true,
+            }
+        }
+    }
+    Some(StoredDiagnostic { severity, message, range, code, source, related, clipped })
+}
+
+/// `None` for an entry that cannot be read, or whose URI is too long to keep
+/// whole: a cut URI could name some other file, so it is dropped, not cut.
+fn parse_related(value: &Value) -> Option<RelatedLocation> {
+    let location = value.get("location")?;
+    let uri = location.get("uri")?.as_str()?;
+    if uri.chars().nth(MAX_STORED_URI_CHARS).is_some() {
+        return None;
+    }
+    let raw_message = value.get("message").and_then(Value::as_str).unwrap_or("");
+    let message = bounded(raw_message, MAX_STORED_RELATED_MESSAGE_CHARS);
+    Some(RelatedLocation {
+        uri: uri.to_string(),
+        range: parse_range(location.get("range")?)?,
+        clipped: message.len() < raw_message.len(),
+        message,
+    })
 }
 
 /// What one stored diagnostic costs, approximately: its strings plus a fixed

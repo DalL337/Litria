@@ -10,9 +10,12 @@
 //!
 //! Disclosure (brief §7.5): a published document is mapped to a project path
 //! through its CANONICAL location, so a link cannot smuggle a denied file in
-//! under an allowed name; denied files are never reported (omitted and
-//! uncounted when enumerating, `denied` when named); related locations in
-//! denied files or outside the project are dropped; path-like tokens in
+//! under an allowed name; only regular files are reported, so a name the
+//! policy withholds only as a directory (`.env.example/`, a user's
+//! `private/`) cannot pass a file check (Codex review F1); denied files are
+//! never reported (omitted and uncounted when enumerating, `denied` when
+//! named); related locations in denied files, outside the project, or that
+//! are not files are dropped; path-like tokens in
 //! messages that name a denied file become `[denied]`, and ones outside the
 //! project become `[path]`. Token redaction is heuristic and tested — not a
 //! guarantee that free text never mentions a denied file.
@@ -134,6 +137,11 @@ pub(crate) fn run(
     let sessions = sources.sessions(root);
     let published = published_files(root, &sessions);
     let mut out = Output::new(ceiling);
+    // The store dropped some documents to stay bounded (Codex review F4): a
+    // file it no longer holds is indistinguishable from one never analysed.
+    let evicted = sessions
+        .iter()
+        .any(|source| source.snapshot.as_ref().is_some_and(|snapshot| snapshot.documents_evicted));
 
     match &request.paths {
         Some(paths) => {
@@ -165,6 +173,14 @@ pub(crate) fn run(
                         }
                     },
                 };
+                if evicted
+                    && matches!(
+                        &entry,
+                        Some(FileDiagnostics::Unavailable { reason: UnavailableReason::NotAnalyzed, .. })
+                    )
+                {
+                    out.reason(TruncationReason::StoreEvicted);
+                }
                 match entry {
                     Some(entry) => out.push_or_skip(entry, path, tail[index]),
                     None => {
@@ -175,6 +191,9 @@ pub(crate) fn run(
             }
         }
         None => {
+            if evicted {
+                out.reason(TruncationReason::StoreEvicted);
+            }
             for (key, file) in &published {
                 if out.stopped {
                     break;
@@ -185,8 +204,11 @@ pub(crate) fn run(
                 }
                 match available(root, key, key, file, request.min_severity, &mut out) {
                     Some(entry) => {
-                        let has_any =
-                            matches!(&entry, FileDiagnostics::Available { diagnostics, .. } if !diagnostics.is_empty());
+                        // A file whose list is incomplete is listed even when
+                        // nothing could be kept: never dropped as "no errors"
+                        // (Codex review F3).
+                        let has_any = matches!(&entry, FileDiagnostics::Available { diagnostics, truncated, .. }
+                            if !diagnostics.is_empty() || *truncated);
                         if has_any {
                             out.push_or_stop(entry);
                         }
@@ -216,6 +238,11 @@ fn published_files(root: &Path, sessions: &[SessionDiagnostics]) -> BTreeMap<Str
             if document.canonical_at_publish.as_deref() != Some(now.as_path()) {
                 continue;
             }
+            // Diagnostics are about files. A directory is judged by other
+            // rules (`.env.example/`, `private/`) that a file check would miss.
+            if !is_regular_file(&now) {
+                continue;
+            }
             let Some(key) = canonical_relative(root, &now) else { continue };
             if classify(&key) == Class::Denied {
                 continue;
@@ -243,6 +270,7 @@ fn public_freshness(freshness: diagnostics_cache::Freshness) -> (Freshness, Opti
         F::Unknown(U::ClosedFile) => (Freshness::Unknown, Some(FreshnessReason::ClosedFile)),
         F::Unknown(U::VersionAhead) => (Freshness::Unknown, Some(FreshnessReason::VersionAhead)),
         F::Unknown(U::NoSentVersion) => (Freshness::Unknown, Some(FreshnessReason::NoSentVersion)),
+        F::Unknown(U::ReusedVersion) => (Freshness::Unknown, Some(FreshnessReason::ReusedVersion)),
     }
 }
 
@@ -280,10 +308,19 @@ fn available(
         truncated = true;
         out.stop(TruncationReason::Diagnostics);
     }
+    let mut shortened = false;
     let diagnostics: Vec<Diagnostic> = matching
         .into_iter()
-        .map(|d| public_diagnostic(root, file_dir, d, &file.producer))
+        .map(|d| {
+            let (diagnostic, clipped) = public_diagnostic(root, file_dir, d, &file.producer);
+            shortened |= clipped;
+            diagnostic
+        })
         .collect();
+    if shortened {
+        truncated = true;
+        out.reason(TruncationReason::Details);
+    }
     out.count_diagnostics(diagnostics.len());
     Some(FileDiagnostics::Available {
         path: path.to_string(),
@@ -347,32 +384,46 @@ fn severity_of(diagnostic: &StoredDiagnostic) -> Severity {
     }
 }
 
-fn public_diagnostic(root: &Path, file_dir: &str, diagnostic: &StoredDiagnostic, producer: &str) -> Diagnostic {
-    let related = diagnostic
-        .related
-        .iter()
-        .filter_map(|related| {
-            let path = project_path_of_uri(root, &related.uri)?;
-            if classify(&path) == Class::Denied {
-                return None;
-            }
-            Some(RelatedLocation {
-                path,
-                range: public_range(related.range),
-                message: redact_message(&related.message, root, file_dir),
-            })
-        })
-        .take(MAX_RELATED_PER_DIAGNOSTIC as usize)
-        .collect();
-    Diagnostic {
+/// The public diagnostic, and whether any of it was shortened or left out to
+/// fit a bound (Codex review F5). Related locations the POLICY removes never
+/// count: a flag for them would hint that a denied file is involved.
+fn public_diagnostic(root: &Path, file_dir: &str, diagnostic: &StoredDiagnostic, producer: &str) -> (Diagnostic, bool) {
+    let mut clipped = diagnostic.clipped;
+    let mut related = Vec::new();
+    for location in &diagnostic.related {
+        let Some(path) = project_file_of_uri(root, &location.uri) else { continue };
+        if classify(&path) == Class::Denied {
+            continue;
+        }
+        if related.len() == MAX_RELATED_PER_DIAGNOSTIC as usize {
+            clipped = true;
+            break;
+        }
+        let (message, cut) = redact_bounded(&location.message, root, file_dir);
+        clipped |= cut || location.clipped;
+        related.push(RelatedLocation {
+            path,
+            range: public_range(location.range),
+            message,
+        });
+    }
+    let (message, cut) = redact_bounded(&diagnostic.message, root, file_dir);
+    clipped |= cut;
+    // Free server text like the message (adversarial F3).
+    let code = diagnostic.code.as_deref().map(|code| {
+        let (code, cut) = redact_bounded(code, root, file_dir);
+        clipped |= cut;
+        code
+    });
+    let public = Diagnostic {
         severity: severity_of(diagnostic),
-        message: redact_message(&diagnostic.message, root, file_dir),
+        message,
         range: public_range(diagnostic.range),
-        // Free server text like the message (adversarial F3).
-        code: diagnostic.code.as_deref().map(|code| redact_message(code, root, file_dir)),
+        code,
         producer: producer.to_string(),
         related,
-    }
+    };
+    (public, clipped)
 }
 
 /// LSP positions are 0-based UTF-16 offsets; the API's are 1-based (brief §5).
@@ -389,13 +440,21 @@ fn public_range(range: diagnostics_cache::Range) -> DiagnosticRange {
 // Paths
 // ---------------------------------------------------------------------------
 
-/// The canonical project path of a published document or related location:
-/// decoded, canonicalized (resolving links to what they name), and inside the
-/// root. `None` for anything that is not, or no longer, there.
-fn project_path_of_uri(root: &Path, uri: &str) -> Option<String> {
+/// The canonical project path of a related location: decoded, canonicalized
+/// (resolving links to what they name), a regular file, and inside the root.
+/// `None` for anything that is not, or no longer, there.
+fn project_file_of_uri(root: &Path, uri: &str) -> Option<String> {
     let path = uri_to_path(uri)?;
     let canonical = fs::canonicalize(path).ok()?;
+    if !is_regular_file(&canonical) {
+        return None;
+    }
     canonical_relative(root, &canonical)
+}
+
+/// A canonical path (no links left to follow) that names a regular file.
+fn is_regular_file(canonical: &Path) -> bool {
+    fs::metadata(canonical).is_ok_and(|metadata| metadata.is_file())
 }
 
 fn canonical_relative(root: &Path, target: &Path) -> Option<String> {
@@ -414,11 +473,18 @@ fn canonical_relative(root: &Path, target: &Path) -> Option<String> {
 // Message redaction (brief §7.5): heuristic, conservative, tested.
 // ---------------------------------------------------------------------------
 
+/// The redacted text alone (tests).
+#[cfg(test)]
+pub(crate) fn redact_message(message: &str, root: &Path, file_dir: &str) -> String {
+    redact_bounded(message, root, file_dir).0
+}
+
 /// Replace path-like tokens that name a denied file with `[denied]`, and
 /// absolute paths outside the project (or relative ones that climb out of it)
 /// with `[path]`; an absolute path inside the project becomes its project
-/// path. Then bound the message to 1,000 characters.
-pub(crate) fn redact_message(message: &str, root: &Path, file_dir: &str) -> String {
+/// path. Then bound the text to 1,000 characters, and say whether that cut
+/// it: shortened text must be reported as such (Codex review F5).
+fn redact_bounded(message: &str, root: &Path, file_dir: &str) -> (String, bool) {
     let mut out = String::with_capacity(message.len());
     let mut rest = message;
     while !rest.is_empty() {
@@ -433,7 +499,9 @@ pub(crate) fn redact_message(message: &str, root: &Path, file_dir: &str) -> Stri
         out.push_str(&redact_token(&rest[..token_end], root, file_dir));
         rest = &rest[token_end..];
     }
-    bounded(&out, MAX_MESSAGE_CHARS as usize)
+    let kept = bounded(&out, MAX_MESSAGE_CHARS as usize);
+    let cut = kept.len() < out.len();
+    (kept, cut)
 }
 
 fn redact_token(token: &str, root: &Path, file_dir: &str) -> String {
