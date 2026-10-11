@@ -33,6 +33,7 @@ impl Operation for DiagnosticsListOp {
          out-of-project references inside a message are replaced with [denied] or [path]. Lines and columns are \
          1-based. A response that reaches a ceiling says so in truncatedBy.";
     const CAPABILITY: &'static str = "project.diagnostics.read";
+    const READ_ONLY: bool = true;
     type Request = DiagnosticsListRequest;
     type Result = DiagnosticsListResult;
 }

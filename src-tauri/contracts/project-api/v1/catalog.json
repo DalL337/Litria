@@ -7,6 +7,7 @@
       "capability": "project.files.read",
       "description": "Read project documents by project-relative path, optionally by line range. Returns the editor's buffer when the document is open or unsaved, otherwise the saved file (source: effective), or the saved file only (source: disk). Every document reports its source, dirty state and revision.",
       "name": "litria_files_read",
+      "readOnly": true,
       "request": "litria_files_read.request.schema.json",
       "resultIn": "litria_files_read.result.in.schema.json",
       "resultOut": "litria_files_read.result.out.schema.json"
@@ -15,6 +16,7 @@
       "capability": "project.context.read",
       "description": "Orientation for this project: its name, what is selected on the canvas, which documents the editor holds open or unsaved, what Litria can do for each kind of file, the operations this connection may call, the server's limits, and a summary of what the disclosure policy withholds. Paths are project-relative; withheld paths are never listed or counted.",
       "name": "litria_project_context",
+      "readOnly": true,
       "request": "litria_project_context.request.schema.json",
       "resultIn": "litria_project_context.result.in.schema.json",
       "resultOut": "litria_project_context.result.out.schema.json"
@@ -23,6 +25,7 @@
       "capability": "project.files.search",
       "description": "Search project files for a literal string, in their text (target: text) or in their project-relative paths (target: path). Searches what the editor holds for documents that are open or unsaved, and the saved file otherwise. Matching is literal; case folding, when on, is ASCII only. Denied and unindexed paths are never searched and links are not followed. Files a .gitignore excludes are skipped and counted in skipped.ignoredFiles and skipped.ignoredDirectories unless includeIgnored is true; documents open in the editor are searched either way. Results are ordered by path, then line; a search that stops early says why in truncatedBy.",
       "name": "litria_files_search",
+      "readOnly": true,
       "request": "litria_files_search.request.schema.json",
       "resultIn": "litria_files_search.result.in.schema.json",
       "resultOut": "litria_files_search.result.out.schema.json"
@@ -31,6 +34,7 @@
       "capability": "project.graph.read",
       "description": "Return a bounded neighbourhood of import relationships around a focus (a project-relative path, or the current canvas selection), out to a depth of 1 or 2, in a direction (imports, importedBy or both). File nodes carry their folder group and whether they are on the canvas; folder nodes stand for the folder groups the file nodes belong to. Edges run from importer to exporter, with the imported symbols, a provenance (sourceDerived with the syntax status, or manual) and whether the wire is drawn. Denied and unindexed paths are never nodes and edges touching them are dropped. Each node carries its freshness (current, stale or unknown); the summary is current only when every node is, otherwise partial or unavailable with reasons. A walk that hits maxNodes, the edge ceiling or the symbol ceiling says so in truncatedBy.",
       "name": "litria_graph_query",
+      "readOnly": true,
       "request": "litria_graph_query.request.schema.json",
       "resultIn": "litria_graph_query.result.in.schema.json",
       "resultOut": "litria_graph_query.result.out.schema.json"
@@ -39,6 +43,7 @@
       "capability": "project.diagnostics.read",
       "description": "Return the diagnostics language servers have reported, per file: for the given project-relative paths, or for every file with diagnostics at or above minSeverity. Each file is available (with its producer, its diagnostics and a freshness of current, stale or unknown, with a reason), unavailable (the producer is not bridged, not running, or has not analysed the file), or noProducer. Unavailable is not the same as no errors. Denied files are never reported, and denied or out-of-project references inside a message are replaced with [denied] or [path]. Lines and columns are 1-based. A response that reaches a ceiling says so in truncatedBy.",
       "name": "litria_diagnostics_list",
+      "readOnly": true,
       "request": "litria_diagnostics_list.request.schema.json",
       "resultIn": "litria_diagnostics_list.result.in.schema.json",
       "resultOut": "litria_diagnostics_list.result.out.schema.json"

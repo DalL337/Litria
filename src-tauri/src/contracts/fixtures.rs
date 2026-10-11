@@ -81,6 +81,33 @@ fn fixture_bytes(fixture: &Fixture) -> Vec<u8> {
     fixture_bytes_in(&family_dir(), fixture)
 }
 
+/// One request fixture of the family, as the MCP proof sends it (build plan
+/// P6): every request the contract accepts or rejects, by its own verdict.
+pub(crate) struct RequestFixture {
+    /// The fixture's file, or the name of the generated one.
+    pub label: String,
+    pub operation: String,
+    pub accept: bool,
+    /// The code a rejection must carry, where the manifest names one.
+    pub error_code: Option<ErrorCode>,
+    pub raw: Vec<u8>,
+}
+
+pub(crate) fn request_fixtures() -> Vec<RequestFixture> {
+    manifest()
+        .fixtures
+        .iter()
+        .filter(|fixture| fixture.message == Message::Request)
+        .map(|fixture| RequestFixture {
+            label: fixture.file.clone().or_else(|| fixture.generated.clone()).unwrap_or_default(),
+            operation: fixture.operation.clone(),
+            accept: fixture.expect == Expect::Accept,
+            error_code: fixture.error_code,
+            raw: fixture_bytes(fixture),
+        })
+        .collect()
+}
+
 fn fixture_bytes_in(dir: &Path, fixture: &Fixture) -> Vec<u8> {
     match (&fixture.file, &fixture.generated) {
         (Some(file), None) => fs::read(dir.join(FIXTURES_DIR).join(file))

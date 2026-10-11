@@ -146,6 +146,7 @@ pub(crate) fn generate() -> BTreeMap<String, String> {
             "name": operation.name,
             "description": operation.description,
             "capability": operation.capability,
+            "readOnly": operation.read_only,
             "request": request,
             "resultOut": result_out,
             "resultIn": result_in,
@@ -169,6 +170,11 @@ fn render(value: &impl Serialize) -> String {
     let mut text = serde_json::to_string_pretty(value).expect("contract artifact serializes");
     text.push('\n');
     text
+}
+
+/// The project-api family's committed top-level files, as text.
+pub(crate) fn committed_files_of_family() -> BTreeMap<String, String> {
+    committed_files(&family_dir())
 }
 
 /// Top-level files of the family directory (the hand-written `fixtures/`
@@ -199,11 +205,6 @@ fn write_all(dir: &Path, generated: &BTreeMap<String, String>) {
     for (name, text) in generated {
         fs::write(dir.join(name), text).expect("write artifact");
     }
-}
-
-/// Parsed committed artifact, as a transport would embed it.
-pub(crate) fn committed_json(name: &str) -> Value {
-    committed_json_in(&family_dir(), name)
 }
 
 pub(crate) fn committed_json_in(dir: &Path, name: &str) -> Value {

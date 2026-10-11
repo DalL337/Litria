@@ -33,6 +33,7 @@ impl Operation for FilesSearchOp {
          open in the editor are searched either way. Results are ordered by path, then line; a search that stops \
          early says why in truncatedBy.";
     const CAPABILITY: &'static str = "project.files.search";
+    const READ_ONLY: bool = true;
     type Request = FilesSearchRequest;
     type Result = FilesSearchResult;
 }
