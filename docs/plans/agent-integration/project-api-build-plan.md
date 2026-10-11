@@ -41,7 +41,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)). Codex review: five findings, all fixed (see [P5 review record](#p5-review-record)) |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
-| W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b review and apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The review surface waits for track T (owner) |
+| W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The agent's own approval is enough; Litria's review is off by default (owner) |
 | W3 | Native conditional disk operations (create-if-absent, replace-if-expected-revision) | P1 | Outline |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
@@ -1250,17 +1250,40 @@ All tests and standard checks pass, plus a live pass for each part.
 
 ### Goal
 
-An agent proposes exact-text edits to open documents, a person reviews them, and Litria applies the approved ones to the editor buffers through W1's compare-and-apply. Buffer effects only: saving stays the user's (disk is W3, durable receipts W4).
+An agent proposes exact-text edits to open documents, and Litria applies them to the editor buffers through W1's compare-and-apply when the agent asks. Buffer effects only: saving stays the user's (disk is W3, durable receipts W4).
 
 ### Owner rulings (2026-10-11)
 
 - **Approve applies it now.** One decision; the edit lands as an unsaved, undoable buffer change; the agent learns it applied. Saving stays the user's.
-- **Every agent edit needs review.** Reads never ask. A "trust this agent" switch may come later; until then no edit applies without a decision.
+- ~~**Every agent edit needs review.**~~ Superseded the same day: see below.
 - **An unanswered proposal expires after 10 minutes**, and goes out of date the moment a file changes under it.
 - **Where the review appears is decided with the agent surface (track T).**
   - **Why:** agent clients already ask permission in their own thread, in the terminal or an IDE panel. Claude Code asks before each MCP tool by default, but does not promise a diff for one. The user can also switch those prompts off.
   - **So:** Litria's own review is the only gate Litria controls and can show a real diff in. Its place follows wherever the conversation lives: a Litria panel, or an outside agent's thread through MCP elicitation.
   - **Until then,** the review is a seam that tests and a debug-only command drive.
+
+### Owner rulings, later the same day (2026-10-11)
+
+- **"We don't want to hijack agents. We want as little friction as possible."**
+  - **Asked about:** whether Litria should make its review total by running
+    agents with their own write and shell tools turned off.
+  - **Ruling:** Litria never restricts an agent's own tools. Its tools are
+    an offer, not a cage.
+- **The agent's own approval is enough.** This supersedes "every agent edit
+  needs review".
+  - The agent's client already asked the person, so Litria does not stack a
+    second prompt on it.
+  - `litria_changes_apply` applies a prepared plan.
+  - **Litria's own review stays off by default.** It remains in the code
+    (`ReviewPolicy::PersonReview`, the review seam) and gets its preference
+    with the track T surface.
+  - Rules for sensitive files are not defined yet.
+- **Safety now comes from guarantees that cost no prompt:**
+  - an edit applies only to the revision the agent read;
+  - all of a plan's documents change, or none do;
+  - changes are unsaved and undoable;
+  - withheld paths are never written;
+  - a plan applies at most once.
 
 ### Tasks
 
@@ -1277,12 +1300,12 @@ An agent proposes exact-text edits to open documents, a person reviews them, and
 - **The plan store (Rust, in memory).**
   - A plan's id is unguessable (`plan-` plus 128 random bits). It is bound to the requester and the workspace epoch.
   - The plan is immutable: its changes, and a hash of them.
-  - It starts in state `pendingReview` and expires 10 minutes after preparation.
+  - It starts in state `prepared` (or `pendingReview` when Litria's review is on) and expires 10 minutes after preparation if it is not applied.
   - **Deduplicated:** the same requester proposing the same changes while a plan is pending gets that plan back, not a second review request.
   - **Bounded:** 16 pending plans per requester. More are refused with `busy` ("proposals await review"), never by silently expiring older ones.
 - **Not in a read-only workspace.** When the workspace database is read-only (safety mode), proposing is refused with `notReady` and a reason.
 
-**W2b: review and apply.**
+**W2b: apply (and the review seam).**
 
 - **The review seam.** `changes::review(planId, approve | reject)` drives the plan's state.
   - Approving is an atomic claim, `pendingReview` → `applying`; only the winner executes.
@@ -1292,7 +1315,7 @@ An agent proposes exact-text edits to open documents, a person reviews them, and
 - **The callers of the seam:** tests, and a debug-only command for live passes. The track T surface will call it too.
 - **`litria_changes_apply`** (capability `project.changes.apply`): `{ planId }`.
   - It returns the plan's state and, once applied, each change's new revision. Effects are reported as `buffer`: not saved.
-  - Under the every-edit-needs-review ruling it never executes a pending plan itself; it answers `pendingReview` until a person decides. A future trust switch would let it claim the plan, through the same single claim.
+  - It claims the requester's `prepared` plan and applies it, through the same single claim the review seam uses. With Litria's review on, it answers `pendingReview` until a person decides, and never applies.
   - **Idempotent:** asking again returns the same outcome.
   - A plan of another requester or workspace, or an unknown id, is `unknown`. That reveals nothing about whether it exists.
 - **Terminal states:** `applied`, `rejected`, `expired`, `conflict`, `failed`. There is no replay.
@@ -1399,93 +1422,95 @@ All tests and standard checks pass, plus the live pass. No transport, listener o
 
 ### W2b record
 
-> **Built 2026-10-11, as specified above.**
+> **Built 2026-10-11, then reworked the same day to the owner's second
+> ruling (the agent's own approval is enough).**
 >
 > **Contract.**
 >
 > - `litria_changes_apply` (`contracts/project_api/changes_apply.rs`;
->   capability `project.changes.apply`; not read-only).
-> - The plan states grew into one shared enum: `pendingReview`,
->   `applying`, `applied`, `rejected`, `expired`, `conflict`, `failed`,
->   `needsReview` and `unknown`.
+>   capability `project.changes.apply`; not read-only) applies a prepared
+>   plan, all or none.
+> - One shared plan state enum: `prepared`, `pendingReview` (only with
+>   Litria's own review on), `applying`, `applied`, `rejected`,
+>   `expired`, `conflict`, `failed`, `needsReview` and `unknown`.
 > - Bridge operation `editor.applyChanges`. Its request is the plan's
->   changes, as `editor.checkChanges` takes them; its reply is
->   `{ applied, changes }`.
-> - JSON Schema cannot tie the `applied` flag to every entry, so the two
->   all-or-none reply fixtures are marked as ones the boundary alone rejects.
+>   changes; its reply is `{ applied, changes }`. JSON Schema cannot tie
+>   the flag to every entry, so the two all-or-none reply fixtures are
+>   marked as ones the boundary alone rejects.
 >
 > **Service.** `project_api/changes.rs`:
 >
-> - **The review seam,** `review(planId, approve | reject, epoch)`.
->   - **Approving is an atomic claim,** `pendingReview` → `applying`, under
->     the store's lock. The lock is released while the editor works.
->   - **A plan whose outcome cannot be known is never `failed`.** The bridge
->     gained `call_reporting`, which says whether a request was delivered
->     before it failed.
->     - Never delivered, or refused by the editor before it acted (the
->       workspace moved on): `failed`, since nothing applied.
->     - Delivered and then lost (no answer in time, an answer about other
->       documents, an internal failure): `needsReview`. The editor may have
->       applied it, and it is never retried (R5).
->   - A reviewer of another workspace finds nothing.
-> - **The apply tool** answers the requester's plan state, its effect
->   (`buffer`) and the outcome per document. It never applies a plan that
->   awaits review.
-> - **Deduplication and the pending bound** count only plans still awaiting
->   review.
+> - **`ReviewPolicy`,** a field of the plan store.
+>   - `AgentApproval` is the default: plans start `prepared` and
+>     `litria_changes_apply` applies them.
+>   - `PersonReview`: plans start `pendingReview` and only a person's
+>     approval applies them. It stays off: with no review surface, it would
+>     block every agent edit. Its preference arrives with the track T
+>     surface.
+> - **Claims are atomic, to `applying`, so a plan executes at most once.**
+>   - An agent can claim only its own `prepared` plan.
+>   - A person, through the review seam, can claim or reject any waiting
+>     plan of the workspace.
+>   - One `execute` serves both. The store's lock is not held while the
+>     editor works.
+> - **Honest outcomes.** The bridge gained `call_reporting`, which says
+>   whether a request was delivered.
+>   - Never delivered, or refused before the editor acted: `failed`.
+>   - Delivered and then lost: `needsReview`, never retried (R5).
 > - **The debug-only command `project_api_dev_review`** is the seam's
 >   caller for live passes. It is listed in `docs/rust-command-contracts.md`.
 >
 > **Editor.** `answerApplyChanges` checks every change and, only if all are
 > ready, applies all of them with the session's `applyBufferEdit`, in one
-> synchronous turn. An apply that somehow fails after its check is reported
-> as an internal failure, which Rust records as `needsReview`.
+> synchronous turn.
 >
-> **Found by the tests: a deadlock.** The double-approval test hung. The
-> store's guard, created in a `match` scrutinee, lived through the
-> already-decided arm, which locked again. The claim is now bound first.
+> **Found by the tests: a deadlock.** A store guard created in a `match`
+> scrutinee lived through the arm that locked again. Claims are now bound
+> first.
 >
 > **Evidence:**
 >
-> - **Rust:** 10 new tests.
->   - Approving applies once, and approving again asks the editor nothing.
->   - Four simultaneous approvals: exactly one application.
+> - **Rust:** 12 W2b tests.
+>   - The agent's apply applies its prepared plan once; another requester's
+>     plan, or a guessed id, is `unknown`.
+>   - With Litria's review on, the agent's apply waits, and a person's
+>     approval applies the plan.
+>   - An agent's apply racing a person's approval, and four simultaneous
+>     approvals, each apply once.
 >   - Rejection; expiry; a conflict.
->   - Each case of uncertainty is `needsReview` and never retried.
+>   - Every case of uncertainty is `needsReview`, never retried.
 >   - "Never delivered" and "workspace moved on" are `failed`.
 >   - Another workspace's reviewer finds nothing.
->   - A reviewed plan no longer counts as pending.
->   - The apply tool reports and never applies.
-> - **MCP proof:** a real-catalog test runs the whole loop. The proposal
->   leads to `pendingReview` with nothing applied, a person approves through
->   the seam, and the agent then sees `applied` and `buffer` with the new
->   revision. Every answer conforms to the schema.
-> - **JavaScript:** 4 new tests.
->   - The committed request gets the committed reply, and nothing applies.
->   - All ready, so all apply with real revisions.
->   - One not ready, so none apply, the ready document included.
->   - A malformed request is refused.
+>   - A reviewed plan no longer counts as waiting.
+> - **MCP proof:** a real-catalog test runs the loop through the production
+>   dispatcher.
+>   - Propose, then apply: `applied` / `buffer` with the new revision.
+>   - Applying again returns the same outcome.
+>   - A plan a person rejects first is answered `rejected`.
+> - **JavaScript:** 4 tests for `editor.applyChanges`: the committed request
+>   gets the committed reply; all ready, all apply; one not ready, none
+>   apply; a malformed request is refused.
 > - **Checks:**
->   - `cargo test`: 649 passed, zero warnings, and `cargo check --release`
+>   - `cargo test`: 651 passed, zero warnings, and `cargo check --release`
 >     is clean.
 >   - `test:domains`: 1542 passed.
 >   - All seven guards pass, and the build passes.
-> - **Live pass** (`tauri dev`, throwaway project, the dev call and the
->   review command; `.research/2026-10-11-w2-live/w2b-live.mjs`):
->   - **Before review:** `pendingReview`, with both buffers unchanged.
->   - **After approval:** both documents changed together and are dirty. The
->     agent sees `applied` and `buffer`, and the revisions it is given equal
->     fresh reads.
->   - **A second approval** applied nothing more.
->   - **Rejecting:** `rejected`, for the reviewer and the agent alike, and
->     nothing changed.
->   - **After typing in one of two documents,** approving gives a `conflict`:
->     that document is in conflict, the other was ready, and neither
->     changed.
+> - **Live pass, under the final ruling** (`tauri dev`, throwaway project,
+>   the dev call and the review command;
+>   `.research/2026-10-11-w2-live/w2b-live.mjs`):
+>   - **Proposing:** `prepared`, with both buffers unchanged.
+>   - **The agent's apply:** both documents changed together and are dirty.
+>     The result is `applied` / `buffer`, and its revisions equal fresh
+>     reads.
+>   - **Applying again** returned the same outcome and changed nothing.
+>   - **A person's rejection first:** the agent's apply answers `rejected`
+>     and nothing changes.
+>   - **After typing in one of two documents,** applying gives a
+>     `conflict`, and neither document changed.
 >   - No console errors.
 >
-> **Not covered live:** expiry, since ten minutes is long for a live pass. It
-> is covered by tests with an injected clock.
+> **Not covered live:** expiry, which is covered by tests with an injected
+> clock.
 
 ## W-track outline
 
