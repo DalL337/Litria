@@ -57,6 +57,10 @@ pub(crate) fn pack() -> LanguagePack {
         ],
         client_capabilities: pyright_client_capabilities(),
         initialization_options: json!({}),
+        // Pyright waits for settings before analysing (see the field's docs);
+        // an empty push means "defaults". Without it, no Python diagnostic
+        // ever arrived (2026-10-11).
+        initial_settings: Some(json!({})),
         startup_timeout_ms: 10_000,
         document_sync_kind: SyncKind::Full,
         error_prefix: "python_lsp",
@@ -156,5 +160,15 @@ mod tests {
         assert!(p.env_allowlist.contains(&"VIRTUAL_ENV"));
         assert!(p.env_allowlist.contains(&"CONDA_PREFIX"));
         assert!(p.env_allowlist.contains(&"PATH"));
+    }
+
+    #[test]
+    fn pyright_is_sent_empty_settings_after_initialized() {
+        // Without this push Pyright 1.1.408 never asks for configuration and
+        // never publishes a diagnostic (2026-10-11).
+        assert_eq!(pack().initial_settings, Some(json!({})));
+        // Only Python opts in; the TypeScript server reads its preferences
+        // from this push, so an empty one is never sent to it.
+        assert_eq!(crate::lsp::packs::typescript::pack().initial_settings, None);
     }
 }

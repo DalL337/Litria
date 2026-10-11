@@ -74,6 +74,9 @@ pub(crate) fn pack() -> LanguagePack {
                 "logVerbosity": "off"
             }
         }),
+        // typescript-language-server reads its preferences from this push; an
+        // empty one could reset them. It analyses without one.
+        initial_settings: None,
         // typescript-language-server spawns tsserver as a child process;
         // allow extra time for the tsserver handshake on first start.
         startup_timeout_ms: 15_000,

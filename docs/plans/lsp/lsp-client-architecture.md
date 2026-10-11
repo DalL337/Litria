@@ -84,6 +84,7 @@ The transport layer lives in `src-tauri/src/lsp/`. It is the only place in the c
 - Deserializes each incoming message and routes it:
   - If it has an `id` field and is a response: resolves the matching pending request
   - If it has no `id` or is a notification: dispatches to the registered notification handler
+  - If it has both an `id` and a `method` (a request from the server): answers it and forwards nothing (`server_requests.rs`). The read thread only queues the reply; a per-session reply thread writes it to stdin, so the read thread never waits on stdin (it is the only thing draining the server's stdout). The answers never act: `workspace/configuration` gets one `null` per item (the server uses its defaults), registrations, progress tokens and refreshes are accepted without effect, `workspace/applyEdit` is declined, and anything else gets JSON-RPC MethodNotFound. Until 2026-10-11 these requests were ignored, and Pyright, which waits on its configuration answer, never published a diagnostic.
 - Manages a `pending_requests` map: `HashMap<u64, oneshot::Sender<Value>>`
 - Emits Tauri events for server-pushed notifications so the frontend can react
 
@@ -130,8 +131,8 @@ struct LspNotification {
     params: Value,
 }
 
-// Incoming: can be response or notification
-// Discriminate by presence of `id` field
+// Incoming: response, notification, or a request from the server
+// Discriminate by presence of `id` and `method`
 ```
 
 ### Session Lifecycle
@@ -141,6 +142,8 @@ spawn process
     → send initialize request (with client capabilities from pack)
     → await initialize response
     → send initialized notification
+    → push the pack's initial settings, if it has any
+      (workspace/didChangeConfiguration; Python only — Pyright waits for it)
     → session is ready: begin accepting provider requests and document sync
 
 (while active)

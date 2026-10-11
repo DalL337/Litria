@@ -48,6 +48,7 @@ pub(crate) fn pack() -> LanguagePack {
         ],
         client_capabilities: rust_analyzer::native_server_client_capabilities(),
         initialization_options: json!({}),
+        initial_settings: None,
         // First start loads the module graph via the go toolchain; allow the
         // same cold-cache headroom as rust-analyzer.
         startup_timeout_ms: 15_000,

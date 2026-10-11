@@ -42,6 +42,7 @@ pub(crate) fn pack() -> LanguagePack {
         ],
         client_capabilities: native_server_client_capabilities(),
         initialization_options: json!({}),
+        initial_settings: None,
         // First start indexes the crate graph; initialize itself answers
         // quickly but allow headroom on cold caches.
         startup_timeout_ms: 15_000,

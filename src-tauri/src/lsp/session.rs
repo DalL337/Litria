@@ -982,7 +982,8 @@ fn extract_version(raw: &str) -> Option<String> {
 ///
 /// - Response (`id` present, no `method`): resolve the matching pending request.
 /// - Notification (`method` present, no `id`): forward to `ipc_bridge`.
-/// - Server-initiated requests (both fields): ignored in MVP.
+/// - Server-initiated requests (both fields) never get here: the transport
+///   answers them first (`transport::reply_to_request`, `server_requests`).
 fn on_message(
     app: &AppHandle,
     msg: IncomingMessage,
@@ -1034,6 +1035,9 @@ fn perform_initialize(
     )?;
 
     session.notify("initialized", json!({}))?;
+    if let Some(settings) = &pack.initial_settings {
+        session.notify("workspace/didChangeConfiguration", json!({ "settings": settings }))?;
+    }
     Ok(())
 }
 
@@ -1048,7 +1052,7 @@ fn crash_owns_registry_entry(registered_session_id: Option<&str>, crashed_sessio
     registered_session_id == Some(crashed_session_id)
 }
 
-fn path_to_uri(path: &str) -> String {
+pub(crate) fn path_to_uri(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     if normalized.starts_with('/') {
         format!("file://{normalized}")

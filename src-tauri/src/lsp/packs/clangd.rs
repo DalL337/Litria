@@ -30,6 +30,7 @@ pub(crate) fn pack() -> LanguagePack {
         ],
         client_capabilities: rust_analyzer::native_server_client_capabilities(),
         initialization_options: json!({}),
+        initial_settings: None,
         startup_timeout_ms: 10_000,
         document_sync_kind: SyncKind::Full,
         error_prefix: "cpp_lsp",
