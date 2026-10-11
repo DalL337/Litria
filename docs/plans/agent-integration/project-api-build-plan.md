@@ -38,7 +38,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Done: PR #89, merged 2026-09-30 (see [P2 record](#p2-record)) |
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Done: PR #90 (see [P3 record](#p3-record)) |
 | P4 | `litria_graph_query` | P2 | Done: PR #108, merged 2026-10-03 (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
-| P5 | `litria_diagnostics_list` and its detail store | P2 | In progress: P5a detail store (PR #122, see [P5a record](#p5a-record)); P5b the tool, stacked on it (see [P5b record](#p5b-record)); P5c the live pass |
+| P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)) |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Outline |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
@@ -887,6 +887,49 @@ All tests and standard checks pass, plus a live pass with a real language server
 >
 > `cargo test` 595 with zero warnings, architecture guards 7/7,
 > `test:domains` 1514, and the build all pass.
+
+### P5c record
+
+> **The live pass (2026-10-11).** Setup:
+>
+> - A `tauri dev` build, driven over WebView2 remote debugging.
+> - App data redirected to a scratch folder; throwaway projects only.
+> - Both language servers resolved from the owner's global installs (the PATH tier).
+>
+> The driver and its outputs are in `.research/2026-10-11-p5c-live/`.
+>
+> - **TypeScript (main at `d7151b5`):** `src/a.ts` came back `available` with
+>   two errors. One error's message names the `./.env` import, and it arrived
+>   with that path redacted to `[denied]`. Freshness was `unknown`
+>   (`producerOmitsVersion`), as ruled. The editor's own store agreed: 2 errors.
+> - **The other states, live:**
+>   - an unopened file: `notAnalyzed`;
+>   - `package.json`: `notBridged`;
+>   - `README.md`: `noProducer`;
+>   - both `.env` files: `denied`;
+>   - `../x.ts`: `invalidPath`.
+> - **Session lifecycle:** a new session's first publish made the file
+>   `available`. Stopping the session made it `producerNotRunning`, and nothing
+>   from the stopped session was served.
+> - **Python was blocked, then fixed in PR #124 (merged 2026-10-11).**
+>   - **Symptom:** `src/b.py` came back `notAnalyzed`, and the editor showed no
+>     Python errors either. The defect predated P5.
+>   - **Cause 1:** Litria ignored the requests a language server sends to the
+>     client. Pyright waits for the answer to its `workspace/configuration`
+>     request before it publishes anything.
+>   - **Cause 2:** Pyright 1.1.408 also needs a settings push after
+>     `initialized` before it even asks.
+>   - **Fix:** #124 answers every server request, without acting on any, and
+>     pushes empty settings to Pyright.
+> - **Python after the fix:**
+>   - `src/b.py` was `available`, freshness `current`, with one error, and the
+>     editor showed it.
+>   - 300 ms after a second bad line was typed, the list reported the old
+>     result as `stale` (`olderVersion`).
+>   - About 4 s later it was `current`, with both errors.
+>
+> **Noted, not P5:** once, the frontend stopped the TypeScript session on its
+> own while both tabs stayed open. It is not investigated here.
 
 ## P6. MCP conformance over the read catalog
 
