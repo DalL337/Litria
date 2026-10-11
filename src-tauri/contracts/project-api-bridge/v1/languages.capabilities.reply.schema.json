@@ -93,6 +93,10 @@
         "diagnostics": {
           "type": "boolean"
         },
+        "diagnosticsSource": {
+          "description": "Where the language's diagnostics come from in the editor (P5b).",
+          "$ref": "#/$defs/DiagnosticsSource"
+        },
         "documentAccess": {
           "type": "boolean"
         },
@@ -122,6 +126,15 @@
         "relationshipDiscovery": {
           "type": "boolean"
         },
+        "server": {
+          "description": "The language-server pack that serves the row (`typescript` also serves\nJavaScript); `null` when the language has no server.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 32,
+          "minLength": 1
+        },
         "sourceTransformations": {
           "type": "boolean"
         },
@@ -136,10 +149,31 @@
         "languageServer",
         "documentAccess",
         "diagnostics",
+        "diagnosticsSource",
         "navigation",
         "symbols",
         "relationshipDiscovery",
         "sourceTransformations"
+      ]
+    },
+    "DiagnosticsSource": {
+      "description": "Where a language's diagnostics come from (P5b). Only `server` diagnostics\nreach the Project API: the editor's own (Monaco's JSON/CSS workers) are\nnot bridged, so `litria_diagnostics_list` reports them `unavailable`.",
+      "oneOf": [
+        {
+          "description": "A language server (named by `server`).",
+          "type": "string",
+          "const": "server"
+        },
+        {
+          "description": "The editor itself.",
+          "type": "string",
+          "const": "editor"
+        },
+        {
+          "description": "Nothing produces diagnostics for this language.",
+          "type": "string",
+          "const": "none"
+        }
       ]
     },
     "LanguageServerState": {

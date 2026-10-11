@@ -167,6 +167,7 @@ pub(crate) struct ServerLimits {
     pub files_search: FilesSearchLimits,
     pub project_context: ProjectContextLimits,
     pub graph: GraphQueryLimits,
+    pub diagnostics: DiagnosticsListLimits,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -214,6 +215,16 @@ pub(crate) struct GraphQueryLimits {
     pub max_nodes: u32,
     pub max_edges: u32,
     pub max_symbols_per_edge: u32,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiagnosticsListLimits {
+    pub max_paths: u32,
+    pub max_diagnostics_per_file: u32,
+    pub max_diagnostics_per_response: u32,
+    pub max_message_chars: u32,
 }
 
 /// What the disclosure policy withholds, by class — never a list of files.

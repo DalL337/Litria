@@ -31,6 +31,8 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Diagnostics kept per document. The tool returns at most 100 per file, but
@@ -39,31 +41,37 @@ pub(crate) const MAX_STORED_DIAGNOSTICS_PER_DOCUMENT: usize = 1_000;
 /// Stored message length. The tool's output bound (1,000) is applied later.
 pub(crate) const MAX_STORED_MESSAGE_CHARS: usize = 2_000;
 pub(crate) const MAX_RELATED_PER_DIAGNOSTIC: usize = 16;
+/// A related location's message ("declared here") is short; the cap is lower.
+pub(crate) const MAX_STORED_RELATED_MESSAGE_CHARS: usize = 500;
+/// URIs (document and related) kept per entry.
+pub(crate) const MAX_STORED_URI_CHARS: usize = 2_048;
 /// Documents tracked per session before the least recently touched is evicted.
 pub(crate) const MAX_DOCUMENTS_PER_SESSION: usize = 10_000;
+/// Approximate stored bytes per document; beyond it the rest is dropped and
+/// the document says `store_truncated` (adversarial F2).
+pub(crate) const MAX_STORED_BYTES_PER_DOCUMENT: usize = 2 * 1024 * 1024;
+/// Approximate stored bytes per session; beyond it whole documents are evicted,
+/// least recently touched and closed first (adversarial F2).
+pub(crate) const MAX_STORED_BYTES_PER_SESSION: usize = 32 * 1024 * 1024;
 const MAX_SHORT_FIELD_CHARS: usize = 128;
 
 // ---------------------------------------------------------------------------
-// Read-side types. Their consumer is the P5b `litria_diagnostics_list` handler
-// (project_api); until it lands only this module's tests read them, hence the
-// per-item allow(dead_code) (implementation-policy Rule 5).
+// Read-side types, consumed by the P5b `litria_diagnostics_list` handler
+// (`project_api::diagnostics`).
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Position {
     pub line: u32,
     pub character: u32,
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Range {
     pub start: Position,
     pub end: Position,
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelatedLocation {
     /// As the server spelled it. P5b maps it to a project path and removes it
@@ -73,7 +81,6 @@ pub(crate) struct RelatedLocation {
     pub message: String,
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredDiagnostic {
     /// LSP DiagnosticSeverity 1 (error) ..= 4 (hint); `None` when absent or invalid.
@@ -85,7 +92,6 @@ pub(crate) struct StoredDiagnostic {
     pub related: Vec<RelatedLocation>,
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StaleReason {
     /// The server diagnosed an earlier version than the one Litria last sent.
@@ -94,7 +100,6 @@ pub(crate) enum StaleReason {
     Reopened,
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UnknownReason {
     /// The server publishes no document version (typescript-language-server).
@@ -108,7 +113,6 @@ pub(crate) enum UnknownReason {
     NoSentVersion,
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Freshness {
     Current,
@@ -116,7 +120,6 @@ pub(crate) enum Freshness {
     Unknown(UnknownReason),
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DocumentDiagnostics {
     /// As the server published it.
@@ -124,12 +127,14 @@ pub(crate) struct DocumentDiagnostics {
     /// Normalized key ([`document_key`]).
     pub key: String,
     pub diagnostics: Vec<StoredDiagnostic>,
-    /// The server sent more than [`MAX_STORED_DIAGNOSTICS_PER_DOCUMENT`].
+    /// The server sent more than the store keeps (count or byte cap).
     pub store_truncated: bool,
     pub freshness: Freshness,
+    /// Where the URI led when the server published (links resolved). A reader
+    /// reports the document only if it still leads there (adversarial F1).
+    pub canonical_at_publish: Option<PathBuf>,
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionSnapshot {
     pub session_id: String,
@@ -153,6 +158,9 @@ struct Published {
     version: Option<i64>,
     /// The document's opening this publish arrived in.
     open_generation: u64,
+    canonical: Option<PathBuf>,
+    /// Approximate stored bytes (see [`approx_bytes`]).
+    bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -171,6 +179,7 @@ struct SessionEntry {
     language_id: String,
     docs: HashMap<String, DocState>,
     evicted: bool,
+    stored_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -190,6 +199,7 @@ impl Cache {
                 language_id: language_id.to_string(),
                 docs: HashMap::new(),
                 evicted: false,
+                stored_bytes: 0,
             },
         );
     }
@@ -237,7 +247,17 @@ impl Cache {
         }
     }
 
+    /// Test entry point; production goes through the process-wide wrapper,
+    /// which resolves the canonical path before taking the lock.
+    #[cfg(test)]
     pub(crate) fn record_publish(&mut self, session_id: &str, params: &Value) {
+        let canonical = canonical_of_publish(params);
+        self.record_publish_at(session_id, params, canonical);
+    }
+
+    /// [`Cache::record_publish`] with the URI's canonical path already resolved
+    /// (the process-wide store resolves it before taking its lock).
+    fn record_publish_at(&mut self, session_id: &str, params: &Value, canonical: Option<PathBuf>) {
         let Some(uri) = params.get("uri").and_then(Value::as_str) else {
             return;
         };
@@ -247,6 +267,8 @@ impl Cache {
         };
         let version = params.get("version").and_then(Value::as_i64);
         let mut diagnostics = Vec::with_capacity(raw.len().min(MAX_STORED_DIAGNOSTICS_PER_DOCUMENT));
+        let uri = bounded(uri, MAX_STORED_URI_CHARS);
+        let mut bytes = uri.len();
         let mut store_truncated = false;
         for item in raw {
             if diagnostics.len() == MAX_STORED_DIAGNOSTICS_PER_DOCUMENT {
@@ -254,6 +276,12 @@ impl Cache {
                 break;
             }
             if let Some(d) = parse_diagnostic(item) {
+                let size = approx_bytes(&d);
+                if bytes + size > MAX_STORED_BYTES_PER_DOCUMENT {
+                    store_truncated = true;
+                    break;
+                }
+                bytes += size;
                 diagnostics.push(d);
             }
         }
@@ -262,17 +290,36 @@ impl Cache {
         let Some(session) = self.sessions.get_mut(session_id) else {
             return;
         };
-        let doc = session.doc_mut(document_key(uri), seq);
+        let key = document_key(&uri);
+        let doc = session.doc_mut(key.clone(), seq);
+        let replaced = doc.published.as_ref().map_or(0, |p| p.bytes);
         doc.published = Some(Published {
-            uri: bounded(uri, 4_096),
+            uri,
             diagnostics,
             store_truncated,
             version,
             open_generation: doc.open_generation,
+            canonical,
+            bytes,
         });
+        session.stored_bytes = session.stored_bytes - replaced + bytes;
+        session.enforce_byte_budget(&key);
     }
 
-    #[allow(dead_code)] // consumer: P5b litria_diagnostics_list
+    /// Approximate bytes a session's stored diagnostics occupy (strings plus a
+    /// fixed per-entry overhead). The memory bound is enforced on this measure.
+    #[cfg(test)]
+    pub(crate) fn approx_session_bytes(&self, session_id: &str) -> usize {
+        self.sessions.get(session_id).map_or(0, |session| {
+            session
+                .docs
+                .values()
+                .filter_map(|doc| doc.published.as_ref())
+                .map(|p| p.uri.len() + p.diagnostics.iter().map(approx_bytes).sum::<usize>())
+                .sum()
+        })
+    }
+
     pub(crate) fn snapshot(&self, project_id: &str, language_id: &str, session_id: &str) -> Option<SessionSnapshot> {
         let session = self.sessions.get(session_id)?;
         if session.project_id != project_id || session.language_id != language_id {
@@ -289,6 +336,7 @@ impl Cache {
                     diagnostics: published.diagnostics.clone(),
                     store_truncated: published.store_truncated,
                     freshness: freshness(doc, published),
+                    canonical_at_publish: published.canonical.clone(),
                 })
             })
             .collect();
@@ -320,13 +368,34 @@ impl SessionEntry {
                 .min_by_key(|(_, d)| (d.is_open, d.touched))
                 .map(|(k, _)| k.clone());
             if let Some(victim) = victim {
-                self.docs.remove(&victim);
+                if let Some(removed) = self.docs.remove(&victim) {
+                    self.stored_bytes -= removed.published.map_or(0, |p| p.bytes);
+                }
                 self.evicted = true;
             }
         }
         let doc = self.docs.entry(key).or_default();
         doc.touched = seq;
         doc
+    }
+
+    /// Over the session budget: drop the stored diagnostics of other documents,
+    /// least recently touched and closed first, until it fits. A document keeps
+    /// its sent-version state; only what the server published goes.
+    fn enforce_byte_budget(&mut self, keep: &str) {
+        while self.stored_bytes > MAX_STORED_BYTES_PER_SESSION {
+            let victim = self
+                .docs
+                .iter()
+                .filter(|(key, doc)| key.as_str() != keep && doc.published.is_some())
+                .min_by_key(|(_, doc)| (doc.is_open, doc.touched))
+                .map(|(key, _)| key.clone());
+            let Some(victim) = victim else { break };
+            if let Some(published) = self.docs.get_mut(&victim).and_then(|doc| doc.published.take()) {
+                self.stored_bytes -= published.bytes;
+            }
+            self.evicted = true;
+        }
     }
 }
 
@@ -380,9 +449,12 @@ fn parse_diagnostic(value: &Value) -> Option<StoredDiagnostic> {
                 .filter_map(|r| {
                     let location = r.get("location")?;
                     Some(RelatedLocation {
-                        uri: bounded(location.get("uri")?.as_str()?, 4_096),
+                        uri: bounded(location.get("uri")?.as_str()?, MAX_STORED_URI_CHARS),
                         range: parse_range(location.get("range")?)?,
-                        message: bounded(r.get("message").and_then(Value::as_str).unwrap_or(""), MAX_STORED_MESSAGE_CHARS),
+                        message: bounded(
+                            r.get("message").and_then(Value::as_str).unwrap_or(""),
+                            MAX_STORED_RELATED_MESSAGE_CHARS,
+                        ),
                     })
                 })
                 .take(MAX_RELATED_PER_DIAGNOSTIC)
@@ -390,6 +462,22 @@ fn parse_diagnostic(value: &Value) -> Option<StoredDiagnostic> {
         })
         .unwrap_or_default();
     Some(StoredDiagnostic { severity, message, range, code, source, related })
+}
+
+/// What one stored diagnostic costs, approximately: its strings plus a fixed
+/// overhead for the struct and the vectors that hold it.
+fn approx_bytes(diagnostic: &StoredDiagnostic) -> usize {
+    const ENTRY_OVERHEAD: usize = 64;
+    const RELATED_OVERHEAD: usize = 32;
+    ENTRY_OVERHEAD
+        + diagnostic.message.len()
+        + diagnostic.code.as_ref().map_or(0, String::len)
+        + diagnostic.source.as_ref().map_or(0, String::len)
+        + diagnostic
+            .related
+            .iter()
+            .map(|r| RELATED_OVERHEAD + r.uri.len() + r.message.len())
+            .sum::<usize>()
 }
 
 fn parse_range(value: &Value) -> Option<Range> {
@@ -450,6 +538,29 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// A `file:` URI (as a server spells it) to a native path; `None` for any
+/// other scheme.
+pub(crate) fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let decoded = percent_decode(rest);
+    let bytes = decoded.as_bytes();
+    // file:///C:/x -> C:/x ; file:///home/x -> /home/x ; file://server/share -> //server/share
+    let path = if bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':' {
+        decoded[1..].to_string()
+    } else if decoded.starts_with('/') {
+        decoded
+    } else {
+        format!("//{decoded}")
+    };
+    Some(PathBuf::from(path))
+}
+
+/// Where a publish's URI leads right now, links resolved (adversarial F1).
+fn canonical_of_publish(params: &Value) -> Option<PathBuf> {
+    let uri = params.get("uri").and_then(Value::as_str)?;
+    fs::canonicalize(uri_to_path(uri)?).ok()
+}
+
 // ---------------------------------------------------------------------------
 // Process-wide store
 // ---------------------------------------------------------------------------
@@ -482,10 +593,11 @@ pub(crate) fn record_sent(session_id: &str, method: &str, params: &Value) {
 }
 
 pub(crate) fn record_publish(session_id: &str, params: &Value) {
-    store().record_publish(session_id, params);
+    // Resolved before the lock: a filesystem call never blocks readers.
+    let canonical = canonical_of_publish(params);
+    store().record_publish_at(session_id, params, canonical);
 }
 
-#[allow(dead_code)] // consumer: P5b litria_diagnostics_list
 pub(crate) fn snapshot(project_id: &str, language_id: &str, session_id: &str) -> Option<SessionSnapshot> {
     store().snapshot(project_id, language_id, session_id)
 }

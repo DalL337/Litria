@@ -82,6 +82,12 @@
     }
   ],
   "limits": {
+    "diagnostics": {
+      "maxDiagnosticsPerFile": 100,
+      "maxDiagnosticsPerResponse": 1000,
+      "maxMessageChars": 1000,
+      "maxPaths": 100
+    },
     "filesRead": {
       "defaultBytesPerDocument": 65536,
       "maxBytesPerDocument": 262144,

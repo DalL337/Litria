@@ -1,0 +1,115 @@
+{
+  "files": [
+    {
+      "diagnostics": [
+        {
+          "code": "2307",
+          "message": "Cannot find module '[denied]' or its corresponding type declarations.",
+          "producer": "typescript-language-server",
+          "range": {
+            "endColumn": 28,
+            "endLine": 3,
+            "startColumn": 20,
+            "startLine": 3
+          },
+          "severity": "error"
+        },
+        {
+          "code": "6133",
+          "message": "'token' is declared but its value is never read.",
+          "producer": "typescript-language-server",
+          "range": {
+            "endColumn": 14,
+            "endLine": 7,
+            "startColumn": 9,
+            "startLine": 7
+          },
+          "related": [
+            {
+              "message": "The declaration is here.",
+              "path": "src/session.ts",
+              "range": {
+                "endColumn": 6,
+                "endLine": 2,
+                "startColumn": 1,
+                "startLine": 2
+              }
+            }
+          ],
+          "severity": "warning"
+        }
+      ],
+      "freshness": "unknown",
+      "freshnessReason": "producerOmitsVersion",
+      "path": "src/auth.ts",
+      "producer": "typescript-language-server",
+      "state": "available",
+      "truncated": false
+    },
+    {
+      "diagnostics": [],
+      "freshness": "current",
+      "path": "app/main.py",
+      "producer": "pyright-langserver",
+      "state": "available",
+      "truncated": false
+    },
+    {
+      "diagnostics": [
+        {
+          "message": "Import \"x\" could not be resolved from source.",
+          "producer": "pyright-langserver",
+          "range": {
+            "endColumn": 9,
+            "endLine": 1,
+            "startColumn": 8,
+            "startLine": 1
+          },
+          "severity": "information"
+        }
+      ],
+      "freshness": "stale",
+      "freshnessReason": "olderVersion",
+      "path": "app/models.py",
+      "producer": "pyright-langserver",
+      "state": "available",
+      "truncated": true
+    },
+    {
+      "path": "package.json",
+      "reason": "notBridged",
+      "state": "unavailable"
+    },
+    {
+      "path": "src/main.rs",
+      "reason": "producerNotRunning",
+      "state": "unavailable"
+    },
+    {
+      "path": "src/closed.ts",
+      "reason": "notAnalyzed",
+      "state": "unavailable"
+    },
+    {
+      "path": "README.md",
+      "state": "noProducer"
+    },
+    {
+      "path": ".env",
+      "state": "denied"
+    },
+    {
+      "path": "../outside.ts",
+      "state": "invalidPath"
+    },
+    {
+      "path": "src/later.ts",
+      "state": "skipped"
+    }
+  ],
+  "truncated": true,
+  "truncatedBy": [
+    "perFile",
+    "responseSize"
+  ]
+}

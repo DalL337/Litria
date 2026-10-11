@@ -1,0 +1,7 @@
+{
+  "paths": [
+    "src/auth.ts",
+    "README.md"
+  ],
+  "minSeverity": "warning"
+}

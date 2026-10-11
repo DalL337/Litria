@@ -61,6 +61,12 @@ pub(crate) struct CapabilityRow {
     pub language_server: LanguageServerState,
     pub document_access: bool,
     pub diagnostics: bool,
+    /// Where the language's diagnostics come from in the editor (P5b).
+    pub diagnostics_source: DiagnosticsSource,
+    /// The language-server pack that serves the row (`typescript` also serves
+    /// JavaScript); `null` when the language has no server.
+    #[cfg_attr(test, schemars(length(min = 1, max = MAX_LANGUAGE_ID_LENGTH)))]
+    pub server: Option<String>,
     pub navigation: bool,
     pub symbols: bool,
     pub relationship_discovery: bool,
@@ -82,6 +88,21 @@ pub(crate) enum LanguageServerState {
     None,
 }
 
+/// Where a language's diagnostics come from (P5b). Only `server` diagnostics
+/// reach the Project API: the editor's own (Monaco's JSON/CSS workers) are
+/// not bridged, so `litria_diagnostics_list` reports them `unavailable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum DiagnosticsSource {
+    /// A language server (named by `server`).
+    Server,
+    /// The editor itself.
+    Editor,
+    /// Nothing produces diagnostics for this language.
+    None,
+}
+
 impl Validate for CapabilitiesResult {
     fn validate(&self) -> Result<(), ContractError> {
         if self.languages.len() > MAX_LANGUAGE_ROWS {
@@ -98,6 +119,14 @@ impl Validate for CapabilitiesResult {
                 if !(2..=MAX_EXTENSION_LENGTH).contains(&schema_length(extension)) {
                     return Err(invalid(format!("extensions: each 2 to {MAX_EXTENSION_LENGTH} characters")));
                 }
+            }
+            if let Some(server) = &row.server {
+                if !(1..=MAX_LANGUAGE_ID_LENGTH).contains(&schema_length(server)) {
+                    return Err(invalid(format!("server: 1 to {MAX_LANGUAGE_ID_LENGTH} characters")));
+                }
+            }
+            if row.diagnostics_source == DiagnosticsSource::Server && row.server.is_none() {
+                return Err(invalid("server: required when diagnosticsSource is server"));
             }
         }
         Ok(())

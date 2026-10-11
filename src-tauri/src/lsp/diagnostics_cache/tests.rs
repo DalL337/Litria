@@ -268,6 +268,47 @@ fn storage_is_bounded() {
     assert_eq!(d.diagnostics[0].related.len(), MAX_RELATED_PER_DIAGNOSTIC);
 }
 
+/// Adversarial F2: what a misbehaving server can make the store hold is
+/// bounded in aggregate, not just per item.
+fn heavy(line: u64) -> Value {
+    let related: Vec<Value> = (0..20)
+        .map(|i| json!({
+            "location": { "uri": format!("file:///proj/{}{i}.py", "r".repeat(3_000)),
+                          "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } } },
+            "message": "m".repeat(3_000)
+        }))
+        .collect();
+    json!({
+        "range": { "start": { "line": line, "character": 0 }, "end": { "line": line, "character": 1 } },
+        "severity": 1, "message": "x".repeat(5_000), "relatedInformation": related
+    })
+}
+
+#[test]
+fn one_document_is_bounded_in_bytes() {
+    let mut c = cache_with(S1);
+    publish(&mut c, S1, A, None, (0..400).map(heavy).collect());
+    let d = doc(&c, S1, A).unwrap();
+    assert!(d.store_truncated, "a document over the byte cap is truncated and says so");
+    assert!(c.approx_session_bytes(S1) <= MAX_STORED_BYTES_PER_DOCUMENT + 4_096);
+}
+
+#[test]
+fn a_session_is_bounded_in_bytes_and_evicts_closed_documents_first() {
+    let mut c = cache_with(S1);
+    let kept_open = "file:///proj/open.py";
+    open(&mut c, S1, kept_open, 1);
+    publish(&mut c, S1, kept_open, Some(1), (0..400).map(heavy).collect());
+    for i in 0..40 {
+        publish(&mut c, S1, &format!("file:///proj/big{i}.py"), None, (0..400).map(heavy).collect());
+    }
+    assert!(c.approx_session_bytes(S1) <= MAX_STORED_BYTES_PER_SESSION);
+    let s = snap(&c, S1);
+    assert!(s.documents_evicted);
+    assert!(s.documents.iter().any(|d| d.key == document_key(kept_open)), "the open document survives");
+    assert!(s.documents.iter().any(|d| d.key == document_key("file:///proj/big39.py")), "the newest survives");
+}
+
 #[test]
 fn eviction_at_the_cap_prefers_closed_documents_and_is_reported() {
     let mut c = cache_with(S1);

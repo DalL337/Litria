@@ -19,13 +19,14 @@ use super::{workspace, LIMITS, MAX_RESPONSE_BYTES};
 use crate::contracts::boundary::MAX_REQUEST_BYTES;
 use crate::contracts::context::CallContext;
 use crate::contracts::error::{ContractError, ErrorCode};
+use crate::contracts::project_api::diagnostics_list;
 use crate::contracts::project_api::files_read::{DEFAULT_BYTES_PER_DOCUMENT, MAX_BYTES_PER_DOCUMENT, MAX_DOCUMENTS};
 use crate::contracts::project_api::files_search::{DEFAULT_RESULTS, MAX_QUERY_LENGTH, MAX_RESULTS, PREVIEW_LENGTH};
 use crate::contracts::project_api::graph_query::{
     DEFAULT_DEPTH, DEFAULT_MAX_NODES, MAX_DEPTH, MAX_EDGES, MAX_NODES, MAX_SYMBOLS_PER_EDGE,
 };
 use crate::contracts::project_api::project_context::{
-    ActiveDocument, DocumentsSummary, FilesReadLimits, FilesSearchLimits, GraphQueryLimits, LanguageCapabilities,
+    ActiveDocument, DiagnosticsListLimits, DocumentsSummary, FilesReadLimits, FilesSearchLimits, GraphQueryLimits, LanguageCapabilities,
     LanguageServer, PolicySummary, ProjectContextLimits, ProjectContextRequest, ProjectContextResult, ProjectSummary,
     SelectionSummary, ServerLimits, MAX_LISTED_PATHS,
 };
@@ -267,6 +268,12 @@ fn limits() -> ServerLimits {
             max_edges: MAX_EDGES,
             max_symbols_per_edge: MAX_SYMBOLS_PER_EDGE,
         },
+        diagnostics: DiagnosticsListLimits {
+            max_paths: diagnostics_list::MAX_PATHS as u32,
+            max_diagnostics_per_file: diagnostics_list::MAX_DIAGNOSTICS_PER_FILE,
+            max_diagnostics_per_response: diagnostics_list::MAX_DIAGNOSTICS_PER_RESPONSE,
+            max_message_chars: diagnostics_list::MAX_MESSAGE_CHARS,
+        },
     }
 }
 
@@ -276,11 +283,12 @@ mod tests {
     use crate::contracts::context::{Grant, Principal};
     use crate::contracts::project_api::files_read::FilesReadOp;
     use crate::contracts::project_api::files_search::FilesSearchOp;
+    use crate::contracts::project_api::diagnostics_list::DiagnosticsListOp;
     use crate::contracts::project_api::graph_query::GraphQueryOp;
     use crate::contracts::project_api::project_context::{DeniedClass, ProjectContextOp};
     use crate::contracts::catalog::Operation;
     use crate::contracts::project_api_bridge::editor::BufferIndexEntry;
-    use crate::contracts::project_api_bridge::languages::CapabilityRow;
+    use crate::contracts::project_api_bridge::languages::{CapabilityRow, DiagnosticsSource};
     use crate::contracts::project_api_bridge::workspace::ActiveDocument as SelectedActive;
     use std::fs;
     use std::path::PathBuf;
@@ -332,6 +340,8 @@ mod tests {
             language_server: server,
             document_access: flags[0],
             diagnostics: flags[1],
+            diagnostics_source: DiagnosticsSource::Server,
+            server: Some(language.into()),
             navigation: flags[2],
             symbols: flags[3],
             relationship_discovery: flags[4],
@@ -584,6 +594,7 @@ mod tests {
         assert_eq!(
             dispatcher.operations_for(&Grant::of(dispatcher.capabilities())),
             [
+                DiagnosticsListOp::NAME,
                 FilesReadOp::NAME,
                 FilesSearchOp::NAME,
                 GraphQueryOp::NAME,
@@ -624,7 +635,8 @@ mod tests {
                 ], "omitted": 0 }),
                 "languages.capabilities" => serde_json::json!({ "languages": [{
                     "language": "typescript", "extensions": [".ts"], "languageServer": "unknown",
-                    "documentAccess": true, "diagnostics": false, "navigation": true, "symbols": true,
+                    "documentAccess": true, "diagnostics": false, "diagnosticsSource": "server",
+                    "server": "typescript", "navigation": true, "symbols": true,
                     "relationshipDiscovery": true, "sourceTransformations": true
                 }]}),
                 other => panic!("unexpected {other}"),
