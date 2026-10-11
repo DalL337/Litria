@@ -287,6 +287,7 @@ mod tests {
     use crate::contracts::project_api::changes_prepare::ChangesPrepareOp;
     use crate::contracts::project_api::diagnostics_list::DiagnosticsListOp;
     use crate::contracts::project_api::graph_query::GraphQueryOp;
+    use crate::contracts::project_api::operations_get::OperationsGetOp;
     use crate::contracts::project_api::project_context::{DeniedClass, ProjectContextOp};
     use crate::contracts::catalog::Operation;
     use crate::contracts::project_api_bridge::editor::BufferIndexEntry;
@@ -602,6 +603,7 @@ mod tests {
                 FilesReadOp::NAME,
                 FilesSearchOp::NAME,
                 GraphQueryOp::NAME,
+                OperationsGetOp::NAME,
                 ProjectContextOp::NAME
             ]
         );

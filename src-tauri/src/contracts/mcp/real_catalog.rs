@@ -498,3 +498,43 @@ fn an_edit_to_a_closed_file_opens_it_through_the_real_catalog() {
     assert_eq!(conflict["state"], "conflict");
     assert!(conflict["changes"][0]["revision"].as_str().unwrap().starts_with("d1-"));
 }
+
+/// `litria_operations_get` through the real catalog (build plan W4a): a
+/// read-only tool that reports an applied plan's standing and receipts, never
+/// applies one, and answers `unknown` for an id that is not the requester's.
+#[test]
+fn an_operation_is_read_back_through_the_real_catalog() {
+    let bound = Bound::new("operations");
+    let dispatcher = crate::project_api::dispatcher();
+    let context = bound.context(Grant::of(dispatcher.capabilities()));
+    let list = tools_list();
+    let output = validator(&tool(&list, "litria_operations_get")["outputSchema"]);
+    assert_eq!(tool(&list, "litria_operations_get")["annotations"]["readOnlyHint"], true);
+    let call = |name: &str, arguments: Value| {
+        let reply = tools_call(dispatcher, &context, &json!({ "name": name, "arguments": arguments })).unwrap();
+        reply["structuredContent"].clone()
+    };
+    let prepared = call("litria_changes_prepare", json!({ "changes": [{
+        "kind": "text.edit", "path": "src/auth.ts", "expectedRevision": "b1-x",
+        "edits": [{ "oldText": "signIn", "newText": "logIn" }]
+    }]}));
+    let plan_id = prepared["plan"]["planId"].as_str().unwrap().to_string();
+
+    // Before it is applied, reading it never applies it.
+    let waiting = call("litria_operations_get", json!({ "operationId": plan_id }));
+    assert!(output.is_valid(&waiting), "{waiting}");
+    assert_eq!(waiting["state"], "prepared");
+    let still = call("litria_operations_get", json!({ "operationId": plan_id }));
+    assert_eq!(still["state"], "prepared", "reading twice applied nothing");
+
+    let applied = call("litria_changes_apply", json!({ "planId": plan_id }));
+    let read = call("litria_operations_get", json!({ "operationId": plan_id }));
+    assert!(output.is_valid(&read), "{read}");
+    assert_eq!(read["state"], "applied");
+    assert_eq!(read["changes"], applied["changes"]);
+    assert_eq!(read["effects"], json!(["buffer"]));
+    assert!(read.get("interrupted").is_none());
+
+    let unknown = call("litria_operations_get", json!({ "operationId": "plan-00000000000000000000000000000000" }));
+    assert_eq!(unknown, json!({ "operationId": "plan-00000000000000000000000000000000", "state": "unknown" }));
+}

@@ -395,7 +395,8 @@ fn all_applied(paths: &[String]) -> Option<Value> {
 }
 
 fn store_with_plan(epoch: &str, now: Instant) -> (Mutex<PlanStore>, String) {
-    let mut store = PlanStore::default();
+    // Its epochs name no open workspace: the bare store, without the journal.
+    let mut store = PlanStore::without_journal();
     let plan = store
         .propose(Principal::Test, epoch, [planned("src/a.ts", "b1-x"), planned("src/b.ts", "b1-y")].concat(), now)
         .unwrap();
@@ -1187,4 +1188,150 @@ fn a_folder_swapped_for_a_link_after_a_disk_edit_proposal_opens_nothing() {
     assert_eq!(result.state, PlanState::Conflict, "{result:?}");
     assert_eq!(result.changes, [ChangeOutcome::Denied { path: "sub/x.ts".into() }]);
     assert!(asked.lock().unwrap().is_empty(), "the withheld text never reached the frontend");
+}
+
+// --- W4a: durable operations ------------------------------------------------------
+
+use crate::contracts::project_api::operations_get::OperationsGetRequest;
+
+impl Session {
+    fn get(&self, epoch: &str, principal: Principal, id: &str, store: &Mutex<PlanStore>) -> OperationsGetResult {
+        let context = CallContext { principal, grant: Grant::default(), epoch: epoch.to_string() };
+        handle_operations_get_with(&context, OperationsGetRequest { operation_id: id.into() }, store, Instant::now()).unwrap()
+    }
+
+    /// Close the project and open it again: a new epoch, as after a restart.
+    fn reopen(&self) -> String {
+        db::close_workspace_db().unwrap();
+        db::open_workspace_db(&self.root).unwrap().1
+    }
+}
+
+#[test]
+fn an_applied_plan_is_recorded_and_read_back() {
+    let session = Session::new("ops-applied", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts")], &store);
+    let (editor, _) = applying_editor(&session.epoch, Duration::from_secs(5), all_applied);
+    let applied = session.apply(&id, editor, &store);
+    assert_eq!(applied.state, PlanState::Applied);
+
+    let record = operations::load(&session.epoch, &id, Principal::Test).unwrap().expect("recorded");
+    assert_eq!(record.state, PlanState::Applied);
+    assert_eq!(record.changes[0].phase, Phase::Confirmed);
+    let read = session.get(&session.epoch, Principal::Test, &id, &store);
+    assert_eq!(read.state, PlanState::Applied);
+    assert_eq!(read.effects, [Effect::Buffer]);
+    assert_eq!(read.changes, applied.changes);
+    assert!(!read.interrupted);
+    assert_eq!(session.get(&session.epoch, Principal::Dev, &id, &store).state, PlanState::Unknown, "another requester's");
+}
+
+/// R5: the intent and the start are on disk before the editor is asked.
+#[test]
+fn the_record_shows_a_change_started_before_its_owner_is_asked() {
+    static SEEN: Mutex<Option<(PlanState, Phase)>> = Mutex::new(None);
+    fn observing(paths: &[String]) -> Option<Value> {
+        let (epoch, _) = db::workspace_binding().unwrap();
+        let ids: Vec<String> = db::with_workspace_db(&epoch, |conn| {
+            let mut statement = conn.prepare("SELECT id FROM api_operations").map_err(crate::db::DbError::sqlite("ids"))?;
+            let ids = statement.query_map([], |row| row.get(0)).map_err(crate::db::DbError::sqlite("ids"))?;
+            Ok(ids.flatten().collect())
+        })
+        .unwrap();
+        let record = operations::load(&epoch, &ids[0], Principal::Test).unwrap().unwrap();
+        *SEEN.lock().unwrap() = Some((record.state, record.changes[0].phase));
+        all_applied(paths)
+    }
+    let session = Session::new("ops-started", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts")], &store);
+    let (editor, _) = applying_editor(&session.epoch, Duration::from_secs(5), observing);
+    assert_eq!(session.apply(&id, editor, &store).state, PlanState::Applied);
+    assert_eq!(*SEEN.lock().unwrap(), Some((PlanState::Applying, Phase::Started)));
+}
+
+/// R5: no intent on record, no effect.
+#[test]
+fn a_plan_whose_intent_cannot_be_recorded_does_nothing() {
+    let mut store = PlanStore::default();
+    let now = Instant::now();
+    let plan = store.propose(Principal::Test, "ws-nowhere", planned("src/a.ts", "b1-x"), now).unwrap();
+    let store = Mutex::new(store);
+    let _serial = db::serial_guard();
+    let (editor, calls) = applying_editor("ws-nowhere", Duration::from_secs(5), all_applied);
+    let reviewed = review_with(&plan.plan_id, Decision::Approve, "ws-nowhere", editor, &store, now);
+    assert_eq!(reviewed.state, PlanState::Failed);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "the editor was never asked");
+}
+
+/// R5: the process stops after the change started and before the editor
+/// answered. After a restart the operation is interrupted and needs review;
+/// asking to apply it again reads the record and never applies it.
+#[test]
+fn a_restart_mid_apply_reads_as_interrupted_and_is_never_replayed() {
+    let session = Session::new("ops-crash", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts"), create("src/new.ts", "N\n")], &store);
+    // What execute records, up to the moment the process ends.
+    let changes = lock(&store).claim(&id, &session.epoch, Instant::now(), Claimant::Agent(Principal::Test)).unwrap();
+    let mut journal = Journal::new(&id, Some(Principal::Test), &session.epoch, &changes);
+    assert!(journal.intend());
+    assert!(journal.start(&[RecordedKind::Edit, RecordedKind::Open]));
+
+    let epoch = session.reopen();
+    let after = Mutex::new(PlanStore::default());
+    let read = session.get(&epoch, Principal::Test, &id, &after);
+    assert_eq!(read.state, PlanState::NeedsReview);
+    assert!(read.interrupted);
+    assert!(read.changes.is_empty(), "no outcome is known");
+
+    let (editor, calls) = applying_editor(&epoch, Duration::from_secs(5), all_applied);
+    let context = CallContext { principal: Principal::Test, grant: Grant::default(), epoch: epoch.clone() };
+    let again = handle_apply_with(&context, ChangesApplyRequest { plan_id: id.clone() }, editor, &after, Instant::now()).unwrap();
+    assert_eq!(again.state, PlanState::NeedsReview);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "never replayed");
+    assert!(!session.root.join("src/new.ts").exists());
+}
+
+/// R5: the process stops after the intent and before anything started: after a
+/// restart the operation reads as interrupted, and nothing was done.
+#[test]
+fn a_restart_after_the_intent_alone_reads_as_failed() {
+    let session = Session::new("ops-intent", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts")], &store);
+    let changes = lock(&store).claim(&id, &session.epoch, Instant::now(), Claimant::Agent(Principal::Test)).unwrap();
+    assert!(Journal::new(&id, Some(Principal::Test), &session.epoch, &changes).intend());
+    let epoch = session.reopen();
+    let read = session.get(&epoch, Principal::Test, &id, &Mutex::new(PlanStore::default()));
+    assert_eq!(read.state, PlanState::Failed);
+    assert!(read.interrupted);
+    assert_eq!(read.changes, [ChangeOutcome::Ready { path: "src/a.ts".into() }]);
+}
+
+/// A finished operation is read back after a restart exactly as it finished.
+#[test]
+fn a_finished_operation_survives_a_restart() {
+    let session = Session::new("ops-finished", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts")], &store);
+    let (editor, _) = applying_editor(&session.epoch, Duration::from_secs(5), all_applied);
+    let applied = session.apply(&id, editor, &store);
+    let epoch = session.reopen();
+    let read = session.get(&epoch, Principal::Test, &id, &Mutex::new(PlanStore::default()));
+    assert_eq!((read.state, read.changes, read.interrupted), (PlanState::Applied, applied.changes, false));
+}
+
+/// A lost answer is recorded as such: needs review, the change still started.
+#[test]
+fn a_lost_answer_is_recorded_as_needing_review() {
+    let session = Session::new("ops-lost", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts")], &store);
+    let (editor, _) = applying_editor(&session.epoch, Duration::from_millis(40), |_| None);
+    assert_eq!(session.apply(&id, editor, &store).state, PlanState::NeedsReview);
+    let record = operations::load(&session.epoch, &id, Principal::Test).unwrap().unwrap();
+    assert_eq!(record.state, PlanState::NeedsReview);
+    assert_eq!((record.changes[0].phase, record.changes[0].outcome.clone()), (Phase::Started, None));
 }

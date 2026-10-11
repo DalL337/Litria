@@ -71,6 +71,8 @@ pub(crate) mod embedded {
         "litria_changes_prepare.result.out.schema.json",
         "litria_changes_apply.request.schema.json",
         "litria_changes_apply.result.out.schema.json",
+        "litria_operations_get.request.schema.json",
+        "litria_operations_get.result.out.schema.json",
     ];
 
     pub(crate) fn text(name: &str) -> Option<&'static str> {

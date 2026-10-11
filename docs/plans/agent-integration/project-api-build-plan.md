@@ -43,7 +43,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The agent's own approval is enough; Litria's review is off by default (owner) |
 | W3 | Native conditional disk operations: create-if-absent, agent-created files, edits to files that are not open | P1, W2 | Done 2026-10-11: W3a create-if-absent (PR #132), W3b agents' new files (PR #133), W3c edits to files that are not open (see [W3 section](#w3-agent-files-on-disk), [W3a record](#w3a-record), [W3b record](#w3b-record), [W3c record](#w3c-record)). Replace-if-the-disk-revision-matches deferred: no consumer (owner rulings) |
-| W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
+| W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | In progress: W4a durable records, recovery and `litria_operations_get` (see [W4 section](#w4-durable-operations), [W4a record](#w4a-record)); W4b the reopen pill next |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
 
 P4 and P5 can run alongside P3 and alongside each other. W-slices get their Tasks, Tests and Acceptance when the write contract is written, after P3 lands (brief §13).
@@ -1877,6 +1877,127 @@ disk after the agent read it.
 >   - Save All wrote the edit; nothing reached the disk before it.
 >   - No console errors.
 
+## W4. Durable operations
+
+### Goal
+
+An agent's applied change survives a restart of Litria. The agent can look up
+what it did without applying anything, and work that a restart interrupted is
+reported honestly, never replayed (Project API proposal R5).
+
+### Owner rulings (2026-10-11)
+
+- **Build W4's core now.** Durable operation records go in the project
+  database, which moves from schema v4 to v5. Older Litria versions still open
+  the project: migrations only go up, and they ignore the extra table.
+  - Also in the core: `litria_operations_get` and restart recovery.
+  - Re-binding a reconnecting agent to its old receipts comes with track T,
+    which brings real identities.
+- **Receipts are kept 30 days**, then pruned automatically. They hold
+  identifiers and outcomes only, never file text.
+- **Interrupted work is reported with a pill when the project reopens.** The
+  pill names the files that may have changed. The work is never replayed and
+  never spends tokens.
+
+### Tasks
+
+**W4a: durable records, recovery, `litria_operations_get`.**
+
+- Schema v5: table `api_operations`. The id is the plan id: one operation per
+  plan.
+- Each change's phases are written as the plan applies:
+  1. intended (before anything is done; if this cannot be recorded, nothing
+     is done);
+  2. started (before its owner is asked);
+  3. confirmed (its owner's answer).
+- **Recovery is read from the record.** An operation still applying from an
+  earlier open was interrupted.
+  - A change started but never confirmed is unknown, so the operation is
+    `needsReview`.
+  - A change never started did nothing.
+- `litria_operations_get` is read-only. It also serves
+  `litria_changes_apply`'s answer for a plan from an earlier open.
+
+**W4b: the reopen pill.**
+
+- On open, interrupted operations are recovered in the database and old
+  receipts are pruned.
+- A pill names the new files that may be on disk, and says the interrupted
+  unsaved edits were lost: unsaved text is not persisted across a restart.
+- Each operation is reported once.
+
+### Tests
+
+The R5 proofs:
+
+- the process stops before and after each phase;
+- a retry after a restart never executes again;
+- a caller guesses another requester's operation id;
+- receipts hold no file text;
+- retention is enforced.
+
+W4b adds the pill: once per interrupted operation, naming only files that can
+be on disk.
+
+### Acceptance
+
+- At most one execution per plan, across restarts.
+- Every receipt is truthful about what the record proves.
+- Live passes on a throwaway project.
+
+### W4a record
+
+> **Built 2026-10-11.**
+>
+> **Built:**
+>
+> - Schema v5: `api_operations`, created in one transaction with the version
+>   bump. Tests cover a v4 file migrating, and a failed bump leaving v4.
+> - `project_api/operations.rs`:
+>   - the record, with phases per change;
+>   - a pure `standing`, which recovers on read;
+>   - `settled_state`, shared with the apply path;
+>   - save and load through the epoch-bound `with_workspace_db`;
+>   - pruning at 30 days whenever a new operation begins.
+> - **The apply path journals as it goes:**
+>   1. the intent;
+>   2. "started" before each owner call, written together with the outcomes
+>      known so far;
+>   3. the final outcome, by path (paths are unique within a plan).
+> - A finish the database refuses leaves the record as far as it got, so the
+>   next open reads it as interrupted.
+> - **New tool `litria_operations_get`** (read-only, capability
+>   `project.operations.read`). The apply tool's repeat answer falls back to
+>   the same durable record.
+>
+> **Adversarial check** (journal
+> `.research/2026-10-11-project-api-w4-durable-operations.md`):
+>
+> - Another requester's operation id answers `unknown`.
+> - Reading never applies, and a retry after a restart never re-applies.
+> - The process stopping at each phase reads as R5 requires.
+> - With no intent recorded, nothing is done.
+> - Receipts hold kind, path, phase and outcome only.
+> - Records are per project, and writes are epoch-bound.
+> - **Residual:** ownership is the in-process principal until track T.
+>
+> **Evidence:**
+>
+> - **Rust:** 19 new tests (schema, records, apply-path journaling, a real
+>   catalog test).
+>   - `cargo test`: 716 passed, zero warnings.
+>   - `cargo check --release` is clean.
+> - `test:domains`: 1567 passed. All seven guards pass, and the build passes.
+> - **Live pass** (`tauri dev`, throwaway project;
+>   `.research/2026-10-11-w3-live/w4a-live.mjs`):
+>   - Reading a prepared plan twice left it `prepared`.
+>   - After the apply, it read `applied` with the same receipts.
+>   - After the database was closed and reopened under a new epoch, it still
+>     read `applied` from the record, and asking to apply again changed
+>     nothing.
+>   - An unknown id read `unknown`.
+>   - No console errors.
+
 ## W-track outline
 
 The brief §13 holds the direction. Slices are detailed when the write contract is written.
@@ -1884,7 +2005,7 @@ The brief §13 holds the direction. Slices are detailed when the write contract 
 - **W1: compare-and-apply.** Detailed in [W1](#w1-compare-and-apply).
 - **W2: buffer edits.** Detailed in [W2](#w2-buffer-edits).
 - **W3: agent files on disk.** Detailed in [W3](#w3-agent-files-on-disk).
-- **W4: durable operations.** Per-effect receipts, `litria_operations_get`, and recovery without replay (R5).
+- **W4: durable operations.** Detailed in [W4](#w4-durable-operations).
 
 ## Track T: runtime and transport (separate plan)
 

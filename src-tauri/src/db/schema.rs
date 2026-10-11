@@ -100,6 +100,27 @@ CREATE TABLE IF NOT EXISTS workspace_grid (
 );
 "#;
 
+/// The Project API's durable operations (Project API build plan W4a, v5): one
+/// row per applied plan, its id the plan's. A receipt holds identifiers and
+/// outcomes only — paths, kinds, phases, outcomes, revisions — never file
+/// text (agent brief). Rows older than 30 days are pruned (owner ruling,
+/// 2026-10-11). Kept apart from `WORKSPACE_SCHEMA_V1` so the v5 migration step
+/// creates it with exactly the same DDL.
+pub(crate) const API_OPERATIONS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS api_operations (
+    id TEXT PRIMARY KEY,
+    principal TEXT NOT NULL,
+    epoch TEXT NOT NULL,
+    state TEXT NOT NULL,
+    changes TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    interrupted INTEGER NOT NULL DEFAULT 0,
+    reported INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS api_operations_updated_at ON api_operations (updated_at);
+"#;
+
 /// App-level database schema (recent projects + preferences).
 pub(crate) const APP_SCHEMA_V1: &str = r#"
 PRAGMA journal_mode=WAL;
@@ -120,7 +141,7 @@ CREATE TABLE IF NOT EXISTS preferences (
 );
 "#;
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 4;
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 5;
 
 /// One additive column: `(table, column, declaration)`. Table and column
 /// names are compile-time literals and must stay so: they are interpolated
@@ -154,6 +175,8 @@ pub(crate) fn initialize_workspace_schema(conn: &Connection) -> Result<(), DbErr
         .map_err(DbError::sqlite("Failed to initialize workspace schema"))?;
     conn.execute_batch(WORKSPACE_GRID_DDL)
         .map_err(DbError::sqlite("Failed to initialize the workspace grid table"))?;
+    conn.execute_batch(API_OPERATIONS_DDL)
+        .map_err(DbError::sqlite("Failed to initialize the API operations table"))?;
 
     // Set schema version if not already set
     let count: i32 = conn
@@ -192,6 +215,9 @@ pub(crate) fn migrate_workspace_schema(conn: &Connection) -> Result<(), DbError>
     }
     if version < 4 {
         apply_table_step(conn, 4, WORKSPACE_GRID_DDL)?;
+    }
+    if version < 5 {
+        apply_table_step(conn, 5, API_OPERATIONS_DDL)?;
     }
 
     Ok(())
@@ -538,6 +564,40 @@ mod tests {
         assert_eq!(get_schema_version(&conn).unwrap(), 3);
         let tables: i64 = conn
             .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'workspace_grid'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tables, 0, "table creation rolled back with the failed bump");
+    }
+
+    /// v4 -> v5 (Project API build plan W4a): the operations table, created in
+    /// one transaction with the bump; a v4 file's data is untouched.
+    #[test]
+    fn migrate_v4_to_v5_adds_the_operations_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        v1_fixture(&conn);
+        migrate_workspace_schema(&conn).unwrap();
+        conn.execute_batch("DROP TABLE api_operations; UPDATE schema_version SET version = 4;").unwrap();
+        migrate_workspace_schema(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn).unwrap(), 5);
+        assert!(columns(&conn, "api_operations").contains(&"interrupted".to_string()));
+        assert!(columns(&conn, "workspace_grid").contains(&"major_x".to_string()), "v4 data kept");
+    }
+
+    #[test]
+    fn migrate_failed_v5_step_leaves_v4() {
+        let conn = Connection::open_in_memory().unwrap();
+        v1_fixture(&conn);
+        migrate_workspace_schema(&conn).unwrap();
+        conn.execute_batch("DROP TABLE api_operations; UPDATE schema_version SET version = 4;").unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER block_v5 BEFORE UPDATE ON schema_version
+             WHEN NEW.version = 5 BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+        let err = migrate_workspace_schema(&conn).expect_err("the v5 bump must fail");
+        assert!(err.to_string().contains("v5"), "{err}");
+        assert_eq!(get_schema_version(&conn).unwrap(), 4);
+        let tables: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'api_operations'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(tables, 0, "table creation rolled back with the failed bump");
     }

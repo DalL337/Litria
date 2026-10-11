@@ -15,6 +15,7 @@
 //! (W2a), `litria_changes_apply` reports a reviewed plan's outcome (W2b).
 
 pub(crate) mod changes_apply;
+pub(crate) mod operations_get;
 pub(crate) mod changes_prepare;
 pub(crate) mod diagnostics_list;
 pub(crate) mod files_read;
@@ -42,6 +43,7 @@ pub(crate) fn catalog() -> Vec<crate::contracts::catalog::OperationEntry> {
         entry::<diagnostics_list::DiagnosticsListOp>(),
         entry::<changes_prepare::ChangesPrepareOp>(),
         entry::<changes_apply::ChangesApplyOp>(),
+        entry::<operations_get::OperationsGetOp>(),
     ]
 }
 
@@ -62,6 +64,7 @@ pub(crate) fn test_dispatcher() -> crate::contracts::catalog::Dispatcher {
     dispatcher.register::<diagnostics_list::DiagnosticsListOp>(|_, _| Ok(samples::diagnostics_list_result()));
     dispatcher.register::<changes_prepare::ChangesPrepareOp>(|_, _| Ok(samples::changes_prepare_result()));
     dispatcher.register::<changes_apply::ChangesApplyOp>(|_, _| Ok(samples::changes_apply_result()));
+    dispatcher.register::<operations_get::OperationsGetOp>(|_, _| Ok(samples::operations_get_result()));
     dispatcher
 }
 
@@ -446,6 +449,24 @@ pub(crate) mod samples {
                     revision: "d1-43fc694b464e7896c039039bd204030e".into(),
                 },
             ],
+        }
+    }
+
+    /// An operation a restart interrupted: the edit had landed in the editor
+    /// (lost with the restart, unsaved); the new file's outcome is unknown.
+    pub(crate) fn operations_get_result() -> super::operations_get::OperationsGetResult {
+        use super::changes_apply::{ChangeOutcome, Effect};
+        use super::changes_prepare::PlanState;
+        use super::operations_get::OperationsGetResult;
+        OperationsGetResult {
+            operation_id: "plan-e810c8cf2fc667011ff17e280098bdb6".into(),
+            state: PlanState::NeedsReview,
+            effects: vec![Effect::Buffer],
+            changes: vec![ChangeOutcome::Applied {
+                path: "src/auth.ts".into(),
+                revision: "b1-30e217dafba8bae4b210e802479fb377".into(),
+            }],
+            interrupted: true,
         }
     }
 

@@ -17,6 +17,7 @@ mod context;
 mod diagnostics;
 mod files_read;
 mod graph_query;
+mod operations;
 mod paths;
 pub(crate) mod policy;
 pub(crate) mod reader;
@@ -40,6 +41,7 @@ use crate::contracts::project_api::diagnostics_list::DiagnosticsListOp;
 use crate::contracts::project_api::files_read::FilesReadOp;
 use crate::contracts::project_api::files_search::FilesSearchOp;
 use crate::contracts::project_api::graph_query::GraphQueryOp;
+use crate::contracts::project_api::operations_get::OperationsGetOp;
 use crate::contracts::project_api::project_context::ProjectContextOp;
 #[cfg(debug_assertions)]
 use crate::contracts::project_api_bridge::{BridgeRequestEvent, REQUEST_EVENT};
@@ -64,6 +66,7 @@ pub(crate) fn dispatcher() -> &'static Dispatcher {
         dispatcher.register::<DiagnosticsListOp>(diagnostics::handle);
         dispatcher.register::<ChangesPrepareOp>(changes::handle);
         dispatcher.register::<ChangesApplyOp>(changes::handle_apply);
+        dispatcher.register::<OperationsGetOp>(changes::handle_operations_get);
         dispatcher
     })
 }
