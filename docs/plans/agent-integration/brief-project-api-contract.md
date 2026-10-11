@@ -341,6 +341,21 @@ Full diagnostics exist today only as Monaco markers on tabs with a live model. T
 
 Diagnostics that only JavaScript produces are reported as `unavailable` until they are bridged: Monaco's built-in JSON/CSS/HTML workers and Python local intelligence. The slice that builds this operation chooses the store, and records the freshness it can prove. Freshness is tied to the producer's session and the document version it diagnosed, not to the time the diagnostics arrived.
 
+> **As built, P5a (2026-10-11).** The store is the **Rust cache in the LSP
+> bridge** (owner ruling; §15 Q5). It records the version Litria last sent per
+> document, an open generation per `didOpen` (the webview restarts versions
+> at 1 on reopen), and each publish's own `version`. Freshness is one of:
+>
+> - `current`: the same opening, and the version equals the last one sent;
+> - `stale`: an older version, or the diagnostics arrived in an earlier
+>   opening;
+> - `unknown`: the document is closed, the producer publishes no version, or
+>   the producer's version is ahead of any Litria sent.
+>
+> typescript-language-server publishes no version, so its freshness is always
+> `unknown`, by owner ruling. A session's diagnostics are dropped when it
+> stops, crashes or is replaced. Details and evidence: build plan, P5a record.
+
 **Disclosure through allowed files.** A diagnostic on an allowed file can still point at a denied one:
 - Related locations in denied files are removed.
 - In the message, a path-like token that the policy's matcher classifies as denied is replaced with `[denied]` (for example, `Cannot find module './.env'`).
@@ -544,7 +559,7 @@ The write contract is written after the reads land. Today's inspection found the
 2. `.gitignore`-aware search: adopt the `ignore` crate (a dependency change) once P3's measurements show the need? *(2026-09-30: they do, on a real working tree — §10 addendum. Owner decision pending.)* *(Answered 2026-10-01: yes (owner). Built in P4 gate item 1; see the §7.3 and §10 addenda.)*
 3. Should `.env.example` and similar templates become readable by default? v1 denies them. *(Answered 2026-10-01: yes (owner). See the §6 addendum.)*
 4. Multiple windows: bridge requests target the main window. Revisit if Litria gains project windows. *(2026-10-01: no decision for now (owner).)*
-5. Diagnostics store (§7.5): Rust LSP-bridge cache or JS store, decided in its slice with the freshness evidence. *(2026-10-01: stays with P5 (owner).)*
+5. Diagnostics store (§7.5): Rust LSP-bridge cache or JS store, decided in its slice with the freshness evidence. *(2026-10-01: stays with P5 (owner).)* *(Answered 2026-10-11: the Rust LSP-bridge cache (owner). A producer that publishes no version reports freshness `unknown`. See the §7.5 addendum and the build plan's P5a record.)*
 
 ## 16. Verification record
 

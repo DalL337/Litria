@@ -37,8 +37,8 @@ This document owns sequencing, executable evidence and completion status. It own
 | P1 | Workspace binding in Rust, production contract machinery, call context and fencing, disclosure policy, bounded disk reads (`litria_files_read`, `source: disk`), debug-only development call | — | Done: PR #86, merged 2026-09-30 (see [P1 record](#p1-record)) |
 | P2 | Owner bridge family, JS `ProjectApiBridge`, effective reads | P1 | Done: PR #89, merged 2026-09-30 (see [P2 record](#p2-record)) |
 | P3 | `litria_project_context`, `litria_files_search`, budget measurements (**first read set complete**) | P2 | Done: PR #90 (see [P3 record](#p3-record)) |
-| P4 | `litria_graph_query` | P2 | Done, PR pending (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
-| P5 | `litria_diagnostics_list` and its detail store | P2 | Pending |
+| P4 | `litria_graph_query` | P2 | Done: PR #108, merged 2026-10-03 (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
+| P5 | `litria_diagnostics_list` and its detail store | P2 | In progress: P5a detail store built (see [P5a record](#p5a-record)); P5b the tool, P5c the live pass |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Pending |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Outline |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
@@ -751,6 +751,79 @@ All tests and standard checks pass, plus a live pass on a JS/TS scratch project.
 ### Acceptance
 
 All tests and standard checks pass, plus a live pass with a real language server.
+
+### P5a record
+
+> **The detail store (2026-10-11).** Owner rulings, the same day: the store is
+> a **Rust cache in the LSP bridge** (brief §15 Q5); a producer that publishes
+> no document version reports freshness **`unknown`**; ceilings are 100
+> diagnostics per file, 1,000 per response and 1,000-character messages, with
+> `truncated` on any hit. The slices are P5a (store), P5b (the tool) and P5c
+> (the live pass).
+>
+> **Why Rust.** Every document notification Litria sends (`lsp_notify` →
+> `session_notify`) and every notification a server pushes
+> (`dispatch_notification`) already passes through Rust. The store can
+> therefore pair what was sent with what was published, without a bridge
+> round trip and next to the disclosure module P5b applies. JS-only producers
+> (Monaco's JSON/CSS/HTML workers, Python local intelligence) stay
+> `unavailable` until bridged, as §7.5 allows.
+>
+> **What it can prove.** `lsp/diagnostics_cache.rs` keeps, per session and
+> document: the version Litria last sent, an *open generation* counted per
+> `didOpen`, and the last publish with its own `version` and the generation it
+> arrived in. The generation is needed because the webview restarts a
+> document's version at 1 on every reopen (`documentSync.js`), so a version
+> alone can repeat within one session. Freshness is decided by session,
+> generation and version, never by arrival time:
+>
+> - Published in an earlier opening → `stale` (reopened).
+> - Document not open in Litria → `unknown` (closed file: the server diagnosed
+>   disk content whose version nobody sent).
+> - No `version` from the producer → `unknown`. typescript-language-server
+>   publishes only `uri` + `diagnostics`; Pyright includes `version`.
+> - Version equal to the last sent → `current`; older → `stale`; newer →
+>   `unknown`.
+>
+> A session's entries live only as long as the session: dropped on stop and
+> on crash, cleared on app teardown, and replaced when a session for the same
+> project and language starts. The start's quota check has already refused a
+> live one, so only a dead session's leftovers are replaced. The start
+> registers before the server can publish, through a guard that drops the
+> entry if a later start step fails. Sent versions are recorded **before**
+> the write, so a fast reply can never be filed against an older opening, and
+> every race errs toward "not current". Publishes are parsed into bounded,
+> typed entries:
+>
+> - 1,000 diagnostics per document, `storeTruncated` beyond that;
+> - 2,000-character stored messages;
+> - 16 related locations per diagnostic;
+> - 10,000 documents per session, evicting the least recently touched,
+>   closed documents first, and reported.
+>
+> A malformed publish is ignored, never read as "no errors". An empty one is
+> kept as a positive "no errors". Document keys meet across URI spellings:
+> `file:///C:/…` sent, `file:///c%3A/…` published.
+>
+> **Evidence.** 19 unit tests drive the real cache through the sequences that
+> could make freshness lie (test-authoring Rule 1):
+>
+> - restart;
+> - reopen at version 1;
+> - an out-of-order late publish;
+> - a version-less producer;
+> - empty and malformed publishes;
+> - bounds and eviction;
+> - URI spellings;
+> - the start guard.
+>
+> Three deliberate breaks were each caught by the test meant for them: no
+> reopen check, garbage read as "no errors", and a restart that keeps the old
+> session. The send, publish, start and end hooks are one-line calls into the
+> store, and their end-to-end proof is P5c's live pass. A missing hook fails
+> safe: an empty store, which P5b reports as `unavailable`, never as "no
+> errors". Checks: `cargo test` 578 (zero warnings), architecture guards 7/7,
+> `test:domains` 1513, build.
 
 ## P6. MCP conformance over the read catalog
 
