@@ -231,7 +231,7 @@ impl Bridge {
             self.state().pending.remove(&event.request_id);
             return Err(before(unavailable()));
         }
-        let delivery = match receiver.recv_timeout(self.deadline) {
+        let delivery = match receiver.recv_timeout(self.deadline * O::DEADLINE_FACTOR) {
             Ok(delivery) => delivery,
             Err(RecvTimeoutError::Timeout) => {
                 // Withdraw the request; a reply delivered in the same instant

@@ -31,7 +31,8 @@ export const BRIDGE_OPS = Object.freeze({
   capabilities: 'languages.capabilities',
   graph: 'workspace.graph',
   checkChanges: 'editor.checkChanges',
-  applyChanges: 'editor.applyChanges'
+  applyChanges: 'editor.applyChanges',
+  createFiles: 'files.create'
 });
 /** Encoded size of one reply (contract brief §10); the catalog publishes it. */
 export const MAX_REPLY_BYTES = 512 * 1024;
@@ -43,6 +44,8 @@ const MAX_SELECTED_PATHS = 1000;
 const MAX_LANGUAGE_ROWS = 32;
 /** Frontier paths named in one `workspace.graph` request (one walk level). */
 const MAX_GRAPH_FRONTIER = 200;
+/** Files named in one `files.create` request: a plan's changes at most. */
+const MAX_CREATE_FILES = 16;
 /** Edges incident to one frontier node that a reply will carry. */
 const MAX_EDGES_PER_NODE = 500;
 /** Symbols named on one edge (contract brief §10). */
@@ -731,6 +734,66 @@ export function answerApplyChanges(request, check, apply) {
 }
 
 /**
+ * `files.create` (Project API build plan W3b): an approved plan's new files,
+ * in request order, each created through the filesystem write manager's
+ * create-if-absent (W3a) — never an overwrite — and then shown on the canvas
+ * (a piece, no editor tab; owner ruling 2026-10-11).
+ *
+ * `owners` are taken once, when the request arrives, so every file of the
+ * batch goes to the project the request was for:
+ * - `createFile(path, text)`: the manager's createFile, answering its result
+ *   (`fs.exists` when something has the name);
+ * - `holds(path)`: whether the editor session holds a document of that name
+ *   (a tab whose file is gone) — the name is then taken;
+ * - `showOnCanvas(path)`: put the created file on the canvas;
+ * - `stillCurrent()`: whether the request's workspace is still the open
+ *   one. Once it is not, nothing more is created or placed, and the rest
+ *   answer `failed` (never `created` in another project).
+ *
+ * One answer per file: `created`, `exists` or `failed`. A file the canvas
+ * could not show is still `created`: it is on disk.
+ */
+export async function answerCreateFiles(request, owners) {
+  const files = request?.files;
+  if (!Array.isArray(files) || files.length === 0 || files.length > MAX_CREATE_FILES) return refusal('invalidRequest');
+  if (files.some((file) => !file || typeof file.path !== 'string' || typeof file.text !== 'string')) {
+    return refusal('invalidRequest');
+  }
+  const { createFile, holds, showOnCanvas, stillCurrent } = owners ?? {};
+  if (typeof createFile !== 'function' || typeof stillCurrent !== 'function') return refusal('internal');
+  const answers = [];
+  for (const { path, text } of files) {
+    if (!stillCurrent()) {
+      answers.push({ outcome: 'failed', path });
+      continue;
+    }
+    if (holds?.(path) === true) {
+      answers.push({ outcome: 'exists', path });
+      continue;
+    }
+    let created = null;
+    try {
+      created = await createFile(path, text);
+    } catch {
+      created = null;
+    }
+    if (created?.success !== true) {
+      answers.push({ outcome: created?.code === 'fs.exists' ? 'exists' : 'failed', path });
+      continue;
+    }
+    if (typeof showOnCanvas === 'function' && stillCurrent()) {
+      try {
+        await showOnCanvas(path);
+      } catch {
+        // The file is on disk; the canvas only shows it.
+      }
+    }
+    answers.push({ outcome: 'created', path });
+  }
+  return { kind: 'result', result: { files: answers } };
+}
+
+/**
  * Each requested change checked against the latest session text: its edit
  * request and its answer, in request order. Null when the request is broken
  * (Rust validates it first, so this does not happen in practice).
@@ -776,7 +839,9 @@ function checkAll(request, check) {
  *   selection: () => {selectedPaths: string[], folder: (string|null), activeDocument: ({path:string, dirty:boolean}|null)},
  *   languageCapabilities: () => object[],
  *   checkBufferEdit: (request: object) => object,
- *   applyBufferEdit: (request: object) => object
+ *   applyBufferEdit: (request: object) => object,
+ *   fileOwners?: () => {createFile: (path: string, text: string) => Promise<object>,
+ *     holds: (path: string) => boolean, showOnCanvas: (path: string) => Promise<unknown>}
  * }} deps.ports
  *   Read-only owner ports: EditorDomain's `getSessionDocumentsByPath` and
  *   `getActiveSessionDocument`; the selection, its pieces and the selected
@@ -853,22 +918,34 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
     replied.add(event.requestId);
     if (replied.size > REMEMBERED_REQUESTS) replied.delete(replied.values().next().value);
 
+    // Whether the request's workspace is still the one this bridge answers
+    // for: checked before answering, and by answers that work over time.
+    const epoch = event.epoch;
+    const stillCurrent = () =>
+      epoch === state.readyEpoch && epoch === state.attached?.epoch && epoch === getWorkspaceEpoch();
     let reply;
     try {
-      const epoch = event.epoch;
-      reply = epoch === state.readyEpoch && epoch === state.attached.epoch && epoch === getWorkspaceEpoch()
-        ? answer(event.op, event.request)
-        : refusal('workspaceChanged');
+      reply = stillCurrent() ? answer(event.op, event.request, stillCurrent) : refusal('workspaceChanged');
     } catch {
       reply = refusal('internal');
     }
-    let text = JSON.stringify(reply);
-    if (utf8Length(text) > ceiling) text = JSON.stringify(refusal('internal'));
-    transport.reply(event.requestId, generation, text).catch(() => {});
+    const send = (value) => {
+      let text = JSON.stringify(value);
+      if (utf8Length(text) > ceiling) text = JSON.stringify(refusal('internal'));
+      transport.reply(event.requestId, generation, text).catch(() => {});
+    };
+    if (typeof reply?.then === 'function') {
+      // An answer that does disk work (`files.create`) settles later. A
+      // failure after it began is `internal`, which Rust records as an
+      // outcome to review, never as nothing done.
+      reply.then(send, () => send(refusal('internal')));
+    } else {
+      send(reply);
+    }
     return true;
   }
 
-  function answer(op, request) {
+  function answer(op, request, stillCurrent) {
     switch (op) {
       case BRIDGE_OPS.documents:
         return answerDocuments(request, ports.sessionDocuments(), revisionOf, ceiling);
@@ -884,6 +961,8 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
         return answerCheckChanges(request, ports.checkBufferEdit);
       case BRIDGE_OPS.applyChanges:
         return answerApplyChanges(request, ports.checkBufferEdit, ports.applyBufferEdit);
+      case BRIDGE_OPS.createFiles:
+        return answerCreateFiles(request, { ...(ports.fileOwners?.() ?? {}), stillCurrent });
       default:
         return refusal('unknownOperation');
     }

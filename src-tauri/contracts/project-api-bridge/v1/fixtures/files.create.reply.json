@@ -1,0 +1,15 @@
+{
+  "kind": "result",
+  "result": {
+    "files": [
+      {
+        "outcome": "created",
+        "path": "src/util/format.ts"
+      },
+      {
+        "outcome": "exists",
+        "path": "notes.md"
+      }
+    ]
+  }
+}

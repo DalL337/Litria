@@ -1,10 +1,14 @@
-//! `litria_changes_apply` (Project API build plan W2b; contract brief §13):
-//! apply a prepared plan, all or none. The agent's own approval is enough —
-//! its client already asked the person (owner ruling, 2026-10-11) — so this
-//! call applies the plan unless Litria is set to review agent edits itself
-//! (off by default), when it answers `pendingReview` until a person decides.
-//! It reports where the plan stands and, once applied, each document's new
-//! revision. Asking again is safe: a plan is applied at most once.
+//! `litria_changes_apply` (Project API build plan W2b, W3b; contract brief
+//! §13): apply a prepared plan. The agent's own approval is enough — its
+//! client already asked the person (owner ruling, 2026-10-11) — so this call
+//! applies the plan unless Litria is set to review agent edits itself (off by
+//! default), when it answers `pendingReview` until a person decides.
+//!
+//! A plan's edits apply all or none, to the editor. Its new files are created
+//! after them, each only if nothing has its name: a disk change and a buffer
+//! change never happen together, so a plan can end `partial` (agent brief),
+//! and every change reports its own outcome. Asking again is safe: a plan is
+//! applied at most once.
 
 #[cfg(test)]
 use schemars::JsonSchema;
@@ -23,11 +27,14 @@ pub(crate) struct ChangesApplyOp;
 
 impl Operation for ChangesApplyOp {
     const NAME: &'static str = "litria_changes_apply";
-    const DESCRIPTION: &'static str = "Apply a plan from litria_changes_prepare, all or none: every document must \
-         still be the revision it was proposed against, otherwise nothing is applied (state conflict; propose \
-         again). Applied changes are in the editor, unsaved (effect: buffer), each with its new revision. A plan \
-         is applied at most once; asking again returns the same outcome. If Litria is set to have a person review \
-         agent edits, the plan waits for that decision (state pendingReview); ask again later.";
+    const DESCRIPTION: &'static str = "Apply a plan from litria_changes_prepare. Its text edits apply all or none: \
+         every document must still be the revision it was proposed against, otherwise nothing is applied (state \
+         conflict; propose again). Applied edits are in the editor, unsaved (effect buffer), each with its new \
+         revision. New files are created after the edits, each only if nothing has its name (effect disk; outcome \
+         created with the file's revision, or exists); if only some changes land the state is partial and each \
+         change says what happened. A plan is applied at most once; asking again returns the same outcome. If \
+         Litria is set to have a person review agent edits, the plan waits for that decision (state \
+         pendingReview); ask again later.";
     const CAPABILITY: &'static str = "project.changes.apply";
     const READ_ONLY: bool = false;
     type Request = ChangesApplyRequest;
@@ -58,11 +65,11 @@ impl Validate for ChangesApplyRequest {
 pub(crate) struct ChangesApplyResult {
     pub plan_id: String,
     pub state: PlanState,
-    /// Where an applied plan's changes went: the editor's copy, not saved.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effect: Option<Effect>,
-    /// Per document, once applied (each new revision) or in conflict (what
-    /// each document no longer matched).
+    /// Where the changes that landed went, once any did: `buffer` (edits, in
+    /// the editor, unsaved), then `disk` (new files).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<Effect>,
+    /// Per change, once the plan ran: what each one did or found.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<ChangeOutcome>,
 }
@@ -71,12 +78,14 @@ pub(crate) struct ChangesApplyResult {
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Effect {
-    /// Applied to the editor's copy of each document; not saved to disk.
+    /// Edits applied to the editor's copy of documents; not saved to disk.
     Buffer,
+    /// New files created on disk.
+    Disk,
 }
 
-/// One document of a plan that was applied or found in conflict. A reader
-/// that meets an unfamiliar `outcome` must not assume the document changed.
+/// One change of a plan that ran. A reader that meets an unfamiliar
+/// `outcome` must not assume anything changed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(JsonSchema))]
 #[serde(tag = "outcome", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -94,4 +103,15 @@ pub(crate) enum ChangeOutcome {
     Ambiguous { path: String, edit: u32 },
     /// The editor no longer holds the document.
     NotInSession { path: String },
+    /// The new file was created on disk; its revision as created.
+    Created { path: String, revision: String },
+    /// Not created: something has the new file's name now, on disk or open in
+    /// the editor. Nothing was replaced.
+    Exists { path: String },
+    /// Not created: the file could not be written, or the workspace changed
+    /// while creating.
+    Failed { path: String },
+    /// Not created: the path is withheld now (it passes through a link that
+    /// appeared since the proposal). Nothing was written.
+    Denied { path: String },
 }

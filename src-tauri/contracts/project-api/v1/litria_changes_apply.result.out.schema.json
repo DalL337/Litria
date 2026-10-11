@@ -4,22 +4,18 @@
   "type": "object",
   "properties": {
     "changes": {
-      "description": "Per document, once applied (each new revision) or in conflict (what\neach document no longer matched).",
+      "description": "Per change, once the plan ran: what each one did or found.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/ChangeOutcome"
       }
     },
-    "effect": {
-      "description": "Where an applied plan's changes went: the editor's copy, not saved.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Effect"
-        },
-        {
-          "type": "null"
-        }
-      ]
+    "effects": {
+      "description": "Where the changes that landed went, once any did: `buffer` (edits, in\nthe editor, unsaved), then `disk` (new files).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Effect"
+      }
     },
     "planId": {
       "type": "string"
@@ -34,7 +30,7 @@
   ],
   "$defs": {
     "ChangeOutcome": {
-      "description": "One document of a plan that was applied or found in conflict. A reader\nthat meets an unfamiliar `outcome` must not assume the document changed.",
+      "description": "One change of a plan that ran. A reader that meets an unfamiliar\n`outcome` must not assume anything changed.",
       "oneOf": [
         {
           "description": "Changed; the document's revision now.",
@@ -157,15 +153,92 @@
             "outcome",
             "path"
           ]
+        },
+        {
+          "description": "The new file was created on disk; its revision as created.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "created"
+            },
+            "path": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path",
+            "revision"
+          ]
+        },
+        {
+          "description": "Not created: something has the new file's name now, on disk or open in\nthe editor. Nothing was replaced.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "exists"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "Not created: the file could not be written, or the workspace changed\nwhile creating.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "failed"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
+        },
+        {
+          "description": "Not created: the path is withheld now (it passes through a link that\nappeared since the proposal). Nothing was written.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "denied"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "path"
+          ]
         }
       ]
     },
     "Effect": {
       "oneOf": [
         {
-          "description": "Applied to the editor's copy of each document; not saved to disk.",
+          "description": "Edits applied to the editor's copy of documents; not saved to disk.",
           "type": "string",
           "const": "buffer"
+        },
+        {
+          "description": "New files created on disk.",
+          "type": "string",
+          "const": "disk"
         }
       ]
     },
@@ -188,9 +261,14 @@
           "const": "applying"
         },
         {
-          "description": "Applied to the editor: the documents hold the changes, unsaved.",
+          "description": "Every change landed: edits in the editor (unsaved), new files on disk.",
           "type": "string",
           "const": "applied"
+        },
+        {
+          "description": "Some changes landed and some did not; each change's outcome says which.\nNever retried: propose the rest again.",
+          "type": "string",
+          "const": "partial"
         },
         {
           "description": "A person rejected it. Nothing was applied.",

@@ -19,6 +19,7 @@
 //! is tested against the fixtures beside them.
 
 pub(crate) mod editor;
+pub(crate) mod files;
 pub(crate) mod languages;
 pub(crate) mod workspace;
 
@@ -58,6 +59,9 @@ pub(crate) trait BridgeOperation: 'static {
     /// The frontend domain that owns the answer.
     #[cfg_attr(not(test), allow(dead_code))]
     const OWNER: &'static str;
+    /// How many times the bridge's usual wait this operation's reply may
+    /// take. Only operations that write (disk work) wait longer.
+    const DEADLINE_FACTOR: u32 = 1;
     type Request: Serialize;
     type Result: DeserializeOwned + Validate;
 }
@@ -144,6 +148,7 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
         entry::bridge_entry::<languages::CapabilitiesOp>(),
         entry::bridge_entry::<editor::CheckChangesOp>(),
         entry::bridge_entry::<editor::ApplyChangesOp>(),
+        entry::bridge_entry::<files::CreateFilesOp>(),
     ]
 }
 
@@ -216,6 +221,17 @@ pub(crate) mod samples {
         use super::editor::ApplyChangesOp;
         let check = check_changes_event();
         BridgeRequestEvent { op: ApplyChangesOp::NAME.into(), ..check }
+    }
+
+    /// Two new files: one in a folder that does not exist yet, one empty.
+    pub(crate) fn create_files_event() -> BridgeRequestEvent {
+        use super::files::{CreateFilesOp, CreateFilesRequest, FileToCreate};
+        event::<CreateFilesOp>(&CreateFilesRequest {
+            files: vec![
+                FileToCreate { path: "src/util/format.ts".into(), text: "export const format = String;\n".into() },
+                FileToCreate { path: "notes.md".into(), text: String::new() },
+            ],
+        })
     }
 
     /// Two changes, one with two ordered edits. The revisions are real buffer

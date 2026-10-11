@@ -1,0 +1,11 @@
+{
+  "kind": "result",
+  "result": {
+    "files": [
+      {
+        "outcome": "replaced",
+        "path": "src/a.ts"
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "changes": [
+    {
+      "kind": "text.edit",
+      "path": "src/auth.ts",
+      "expectedRevision": "b1-f59b1b11140c6614a81c9a0015c21f81",
+      "edits": [
+        {
+          "oldText": "import { login } from './login';",
+          "newText": "import { login } from './login';\nimport { format } from './util/format';"
+        }
+      ],
+      "text": "export const a = 1;\n"
+    }
+  ]
+}

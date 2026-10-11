@@ -53,6 +53,13 @@
       "owner": "EditorDomain",
       "reply": "editor.applyChanges.reply.schema.json",
       "request": "editor.applyChanges.request.schema.json"
+    },
+    {
+      "description": "Create each file through the filesystem write manager, only if nothing has its name (never an overwrite), and show each created file on the canvas (not opened in the editor). One answer per file, in request order: created; exists (something has the name, on disk or open in the editor); or failed (not created: the write failed, or the workspace changed while creating). Rust sends only paths the disclosure policy allows.",
+      "name": "files.create",
+      "owner": "FilesystemWriteManager",
+      "reply": "files.create.reply.schema.json",
+      "request": "files.create.request.schema.json"
     }
   ],
   "replyCommand": "project_api_bridge_reply",

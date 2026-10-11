@@ -301,11 +301,13 @@ mod outbound {
         assert_eq!(graph["nodes"][0]["kind"], "file");
         assert_eq!(graph["edges"][0]["provenance"]["kind"], "sourceDerived");
         let applied = assert_conforms("changes apply", &samples::changes_apply_result());
-        assert_eq!(applied["effect"], "buffer");
+        assert_eq!(applied["effects"], serde_json::json!(["buffer", "disk"]));
         assert_eq!(applied["changes"][0]["outcome"], "applied");
+        assert_eq!(applied["changes"][2]["outcome"], "created");
         let prepare = assert_conforms("changes prepare", &samples::changes_prepare_result());
         assert!(prepare.get("plan").is_none(), "an absent plan is omitted");
         assert_eq!(prepare["changes"][1]["outcome"], "conflict");
+        assert_eq!(prepare["changes"][7]["outcome"], "exists");
         let diagnostics = assert_conforms("diagnostics list", &samples::diagnostics_list_result());
         assert_eq!(diagnostics["files"][0]["state"], "available");
         assert_eq!(diagnostics["files"][0]["freshnessReason"], "producerOmitsVersion");
@@ -463,6 +465,7 @@ mod bridge_family {
                 Some("capabilities") => samples::capabilities_event(),
                 Some("checkChanges") => samples::check_changes_event(),
                 Some("applyChanges") => samples::apply_changes_event(),
+                Some("createFiles") => samples::create_files_event(),
                 other => panic!("{file}: unknown sample {other:?}"),
             };
             assert_eq!(sample.op, fixture.operation, "{file}: the sample is for another operation");

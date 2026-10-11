@@ -143,6 +143,27 @@ fn owner(event: &BridgeRequestEvent) -> Option<String> {
             let reply = committed_json_in(&bridge_dir().join(FIXTURES_DIR), "languages.capabilities.reply.json");
             return Some(reply.to_string());
         }
+        // The filesystem write manager creates each file with the native
+        // create-if-absent (build plan W3a), as the real one does (W3b).
+        "files.create" => {
+            let (_, root) = db::workspace_binding().unwrap();
+            let root = root.unwrap();
+            json!({
+                "files": paths("files")
+                    .iter()
+                    .map(|file| {
+                        let path = file["path"].as_str().unwrap();
+                        let text = file["text"].as_str().unwrap();
+                        let outcome = match crate::project_ops::create_project_file(root.to_str().unwrap(), path, text) {
+                            Ok(crate::project_ops::CreateFileOutcome::Created) => "created",
+                            Ok(crate::project_ops::CreateFileOutcome::Exists) => "exists",
+                            Err(_) => "failed",
+                        };
+                        json!({ "outcome": outcome, "path": path })
+                    })
+                    .collect::<Vec<_>>()
+            })
+        }
         _ => return None,
     };
     Some(json!({ "kind": "result", "result": result }).to_string())
@@ -329,7 +350,7 @@ fn propose_and_apply_through_the_real_catalog() {
     let applied = apply(&plan_id);
     let result = &applied["structuredContent"];
     assert_eq!(result["state"], "applied", "{result}");
-    assert_eq!(result["effect"], "buffer");
+    assert_eq!(result["effects"], json!(["buffer"]));
     assert_eq!(result["changes"][0], json!({ "outcome": "applied", "path": "src/auth.ts", "revision": "b1-applied" }));
     assert!(output.is_valid(result), "{result}");
     assert_eq!(apply(&plan_id)["structuredContent"], *result, "applying again returns the same outcome");
@@ -342,4 +363,72 @@ fn propose_and_apply_through_the_real_catalog() {
     assert!(output.is_valid(&rejected["structuredContent"]));
     let annotations = &tool(&list, "litria_changes_apply")["annotations"];
     assert_eq!(annotations["readOnlyHint"], false);
+}
+
+/// New files through the real catalog (build plan W3b; owner ruling: created
+/// on disk, only if nothing has the name). The policy answers before the disk
+/// does, so a withheld file that exists reads as `denied`, never `exists`.
+/// The revision the apply reports is the one `litria_files_read` then reads.
+#[test]
+fn new_files_through_the_real_catalog() {
+    let bound = Bound::new("create");
+    let dispatcher = crate::project_api::dispatcher();
+    let context = bound.context(Grant::of(dispatcher.capabilities()));
+    let list = tools_list();
+    let prepare_output = validator(&tool(&list, "litria_changes_prepare")["outputSchema"]);
+    let apply_output = validator(&tool(&list, "litria_changes_apply")["outputSchema"]);
+    let call = |name: &str, arguments: Value| {
+        let reply = tools_call(dispatcher, &context, &json!({ "name": name, "arguments": arguments })).unwrap();
+        reply["structuredContent"].clone()
+    };
+    let create = |path: &str, text: &str| json!({ "kind": "file.create", "path": path, "text": text });
+
+    // Taken names, withheld names, and invalid ones: no plan.
+    let refused = call(
+        "litria_changes_prepare",
+        json!({ "changes": [create("README.md", ""), create(".env", ""), create("../out.ts", ""), create("src/new.ts", "")] }),
+    );
+    assert!(prepare_output.is_valid(&refused), "{refused}");
+    assert!(refused.get("plan").is_none());
+    assert_eq!(
+        refused["changes"],
+        json!([
+            { "outcome": "exists", "path": "README.md" },
+            { "outcome": "denied", "path": ".env" },
+            { "outcome": "invalidPath", "path": "../out.ts" },
+            { "outcome": "ready", "path": "src/new.ts" },
+        ])
+    );
+
+    // A new file in a folder that does not exist yet, with an edit beside it.
+    let text = "export const format = String;\n";
+    let prepared = call(
+        "litria_changes_prepare",
+        json!({ "changes": [create("src/util/format.ts", text), {
+            "kind": "text.edit", "path": "src/auth.ts", "expectedRevision": "b1-x",
+            "edits": [{ "oldText": "signIn", "newText": "logIn" }]
+        }]}),
+    );
+    let plan_id = prepared["plan"]["planId"].as_str().unwrap().to_string();
+    assert!(!bound.root.join("src/util").exists(), "nothing is created before the apply");
+    let applied = call("litria_changes_apply", json!({ "planId": plan_id }));
+    assert!(apply_output.is_valid(&applied), "{applied}");
+    assert_eq!(applied["state"], "applied", "{applied}");
+    assert_eq!(applied["effects"], json!(["buffer", "disk"]));
+    assert_eq!(applied["changes"][1], json!({ "outcome": "applied", "path": "src/auth.ts", "revision": "b1-applied" }));
+    assert_eq!(applied["changes"][0]["outcome"], "created");
+    assert_eq!(fs::read_to_string(bound.root.join("src/util/format.ts")).unwrap(), text);
+    let read = call("litria_files_read", json!({ "documents": [{ "path": "src/util/format.ts" }] }));
+    assert_eq!(read["documents"][0]["revision"], applied["changes"][0]["revision"], "{read}");
+    assert_eq!(call("litria_changes_apply", json!({ "planId": plan_id })), applied, "applying again returns the same outcome");
+
+    // A name taken between proposal and apply: nothing lands.
+    let prepared = call("litria_changes_prepare", json!({ "changes": [create("src/late.ts", "export {};\n")] }));
+    put(&bound.root, "src/late.ts", "MINE");
+    let conflict = call("litria_changes_apply", json!({ "planId": prepared["plan"]["planId"] }));
+    assert!(apply_output.is_valid(&conflict), "{conflict}");
+    assert_eq!(conflict["state"], "conflict");
+    assert_eq!(conflict["changes"], json!([{ "outcome": "exists", "path": "src/late.ts" }]));
+    assert!(conflict.get("effects").is_none());
+    assert_eq!(fs::read_to_string(bound.root.join("src/late.ts")).unwrap(), "MINE");
 }

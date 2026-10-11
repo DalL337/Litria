@@ -42,7 +42,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
 | W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Done 2026-10-11: W2a propose (PR #130) and W2b apply (see [W2a record](#w2a-record), [W2b record](#w2b-record)). The agent's own approval is enough; Litria's review is off by default (owner) |
-| W3 | Native conditional disk operations: create-if-absent, agent-created files, edits to files that are not open | P1, W2 | In progress: W3a create-if-absent (see [W3 section](#w3-agent-files-on-disk), [W3a record](#w3a-record)). Replace-if-the-disk-revision-matches deferred: no consumer (owner rulings) |
+| W3 | Native conditional disk operations: create-if-absent, agent-created files, edits to files that are not open | P1, W2 | In progress: W3a create-if-absent (PR #132) and W3b agents' new files (see [W3 section](#w3-agent-files-on-disk), [W3a record](#w3a-record), [W3b record](#w3b-record)); W3c next. Replace-if-the-disk-revision-matches deferred: no consumer (owner rulings) |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
 | T | Runtime qualification, stdio MCP helper and authenticated local IPC, real principals and grants | ADR-031 gate; P6 | Separate plan |
 
@@ -1569,9 +1569,10 @@ fault-injection proofs.
 - **Prepare** applies the path policy first, so a withheld path answers
   `denied` whether or not it exists. Then it checks the name is free on disk.
 - **Apply** runs in this order:
-  1. re-check every create's name;
+  1. judge every create again, the policy and then the name; one that is
+     not free means nothing lands;
   2. apply the buffer edits, all or none;
-  3. create the files through the write manager;
+  3. create the files through the write manager (bridge op `files.create`);
   4. put each created file on the canvas (`createPieceFromFile`, no tab).
 - Effects are reported per change; `partial` when only some land.
 
@@ -1683,6 +1684,100 @@ disk after the agent read it.
 >   - New Node `package.json` (on disk, no piece): refused, file unchanged,
 >     no piece.
 >   - New Node `src/node.py`: created with its header, and a piece.
+>   - No console errors.
+
+### W3b record
+
+> **Built 2026-10-11.** Agents can create new files. `file.create` is a
+> change kind beside `text.edit` in `litria_changes_prepare`, and
+> `litria_changes_apply` creates the files after the plan's edits.
+>
+> **Contract (v1 draft; no agent is connected yet):**
+>
+> - A proposed change is now a union on `kind`: `text.edit` (unchanged on
+>   the wire) or `file.create {path, text}`. The text is at most 65,536
+>   characters and may be empty.
+> - A check can now be `exists`. The plan state `partial` is new: some
+>   changes landed and some did not, and the plan is never retried.
+> - Apply outcomes gain `created {revision}`, `exists`, `failed` and
+>   `denied`.
+> - `effect` became `effects`: `buffer` for edits, `disk` for new files,
+>   listing each kind that landed.
+> - **Bridge operation `files.create`,** owned by the filesystem write
+>   manager. Every disk write still passes through it.
+>
+> **Service:**
+>
+> - **Prepare** judges a new file's path by the disclosure policy first,
+>   then checks the disk. So a withheld file that exists answers `denied`,
+>   never `exists`.
+> - **Apply** runs in a fixed order:
+>   1. Every new file is judged again, by the policy and then the name. If
+>      any is not free, nothing lands.
+>   2. The edits apply all or none.
+>   3. The files are created, each only if nothing has its name (W3a).
+>   4. Each created file is put on the canvas, with no tab.
+> - A file's revision is minted in Rust from the exact text written.
+> - A lost answer is `needsReview`, keeping the edit outcomes that are
+>   known. It is never retried.
+> - **Waits:** `files.create` may wait five times the bridge's usual 2 s,
+>   because it does disk work. Bridge operations can now declare a
+>   `DEADLINE_FACTOR`.
+>
+> **Frontend:**
+>
+> - `answerCreateFiles` takes the write manager and the canvas owner once
+>   per request. A project switch mid-batch therefore never writes into the
+>   other project: the remaining files answer `failed`.
+> - A name the editor session holds, such as a tab whose file is gone, is
+>   taken.
+> - The bridge now accepts answers that settle later. A failure after the
+>   work began is `internal`, which Rust records as `needsReview`.
+>
+> **Adversarial check** (journal
+> `.research/2026-10-11-project-api-w3-conditional-disk.md`):
+>
+> - **Reproduced, then verified fixed, on Windows: a folder swapped for a
+>   link.** After the proposal, a folder was swapped for a junction into the
+>   withheld `.git` folder.
+>   - The apply had re-checked only that the name was free, so the plan
+>     answered `applied` and wrote `.git/new.ts`. The native create allowed
+>     it because the target was inside the project.
+>   - The apply now judges every new file again through the policy, where
+>     links fail closed. The change is `denied`, and nothing lands.
+>   - CI runs the same test with symlinks on Linux and macOS.
+> - **Tested:**
+>   - a withheld file that exists, and another spelling of it on
+>     case-insensitive volumes: both `denied`;
+>   - a new file through a folder link: `denied`;
+>   - a name taken at the proposal, at the apply, and between Rust's last
+>     check and the manager's create: no overwrite in any case;
+>   - a project switch mid-batch: nothing more is created or placed;
+>   - replies about other files, lost, or never delivered: each reported
+>     honestly.
+> - **Residual:** another process swapping a folder between Rust's last
+>   check and the manager's create, a window of milliseconds.
+>
+> **Evidence:**
+>
+> - **Rust:** 14 new tests (13 in the changes suite, 1 in the real catalog).
+>   - `cargo test`: 689 passed, zero warnings.
+>   - `cargo check --release` is clean.
+> - **Real-catalog proof:** the revision `litria_changes_apply` reports is
+>   the one `litria_files_read` then reads.
+> - **JavaScript:** 7 new `files.create` tests. `test:domains`: 1555 passed.
+>   All seven guards pass, and the build passes.
+> - **Live pass** (`tauri dev`, throwaway project;
+>   `.research/2026-10-11-w3-live/w3b-live.mjs`):
+>   - Refused: `package.json` (`exists`), `.env` (`denied`, though it
+>     exists), `../out.ts` (`invalidPath`).
+>   - A new file in a new folder with an edit beside it: nothing was created
+>     before the apply. After it: `applied`, effects buffer and disk; the file
+>     holds exactly the text, and its revision equals a fresh read; a piece on
+>     the canvas and no tab; `a.ts` dirty in the editor, disk unchanged.
+>   - Applying again returned the same outcome.
+>   - Two files at once: two pieces at different positions.
+>   - A name taken late: `conflict`, and the other file was kept.
 >   - No console errors.
 
 ## W-track outline

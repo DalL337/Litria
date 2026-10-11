@@ -30,6 +30,10 @@
     {
       "outcome": "invalidPath",
       "path": "../outside.ts"
+    },
+    {
+      "outcome": "exists",
+      "path": "src/index.ts"
     }
   ]
 }

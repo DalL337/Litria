@@ -1,0 +1,18 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "files.create",
+  "request": {
+    "files": [
+      {
+        "path": "src/util/format.ts",
+        "text": "export const format = String;\n"
+      },
+      {
+        "path": "notes.md",
+        "text": ""
+      }
+    ]
+  },
+  "requestId": "r1"
+}

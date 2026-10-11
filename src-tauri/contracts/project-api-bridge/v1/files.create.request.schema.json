@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CreateFilesRequest",
+  "description": "Rust → JavaScript.",
+  "type": "object",
+  "properties": {
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FileToCreate"
+      }
+    }
+  },
+  "required": [
+    "files"
+  ],
+  "$defs": {
+    "FileToCreate": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The project-relative path, exactly as the plan names it.",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "text"
+      ]
+    }
+  }
+}
