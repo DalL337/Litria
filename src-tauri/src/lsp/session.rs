@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 
 use crate::errors::{CommandError, CommandResult};
+use crate::lsp::diagnostics_cache;
 use crate::lsp::ipc_bridge;
 use crate::lsp::packs::{get_pack, LanguagePack};
 use crate::lsp::resolver;
@@ -431,6 +432,12 @@ pub(crate) fn start_session(
     let session_id =
         format!("{project_id}::{language_id}::{}", chrono::Utc::now().timestamp_millis());
 
+    // Register with the diagnostics store before the server can publish (P5a).
+    // The quota check above refused a live session for this key, so whatever
+    // this replaces is a dead session's leftovers. Dropped again if any step
+    // below fails; kept once the session is in the registry.
+    let diagnostics_guard = diagnostics_cache::SessionGuard::begin(&session_id, project_id, language_id);
+
     // Build the shared pending map.  It is Arc-cloned into both the on_message
     // closure and the on_crash closure so the read thread can resolve requests
     // without touching the session registry.
@@ -461,6 +468,9 @@ pub(crate) fn start_session(
         for (_, tx) in pending_crash.lock().unwrap().drain() {
             let _ = tx.send(Err(format!("{lid_crash}.server.crashed")));
         }
+        // A dead server's diagnostics are never current (P5a). Dropped even for
+        // a superseded session: its successor already replaced it in the store.
+        diagnostics_cache::drop_session(&sid_crash);
         // Remove the zombie session from the registry so future calls fail
         // fast with "session not found" — but ONLY if the registry entry is
         // still OURS. A crash handler firing for an already-replaced session
@@ -566,6 +576,7 @@ pub(crate) fn start_session(
     };
 
     sessions().lock().unwrap().insert(key, session);
+    diagnostics_guard.keep();
     ipc_bridge::emit_session_started(app, &payload);
 
     Ok(payload)
@@ -598,6 +609,8 @@ pub(crate) fn stop_session(
                 ),
             )
         })?;
+
+    diagnostics_cache::drop_session(&session.session_id);
 
     // Graceful shutdown — ignore errors if the server has already exited.
     // mark_stopping() must be called before kill() so the read-loop thread
@@ -668,6 +681,7 @@ pub(crate) fn teardown_all_sessions() -> CommandResult<usize> {
         let mut map = sessions().lock().unwrap();
         map.drain().map(|(_, session)| session).collect()
     };
+    diagnostics_cache::clear();
     let count = drained.len();
     for session in drained {
         teardown_session_process(
@@ -773,7 +787,7 @@ pub(crate) fn session_notify(
     ensure_len(project_id, MAX_PROJECT_ID_LEN, "project_id")?;
     ensure_len(method, MAX_METHOD_LEN, "method")?;
 
-    let stdin_arc = {
+    let (stdin_arc, session_id) = {
         let key = session_key(project_id, language_id);
         let map = sessions().lock().unwrap();
         let session = map.get(&key).ok_or_else(|| {
@@ -784,8 +798,13 @@ pub(crate) fn session_notify(
                 ),
             )
         })?;
-        Arc::clone(&session.transport.stdin)
+        (Arc::clone(&session.transport.stdin), session.session_id.clone())
     }; // ← sessions mutex released here
+
+    // Recorded BEFORE the write (P5a): a fast publish for this version can then
+    // never be filed against an older opening. A failed write leaves a version
+    // the server never saw, which only ever makes diagnostics not current.
+    diagnostics_cache::record_sent(&session_id, method, &params);
 
     let notif = LspNotification::new(method, params);
     let body = serde_json::to_string(&serde_json::to_value(&notif).unwrap()).unwrap();

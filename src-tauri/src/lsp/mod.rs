@@ -1,3 +1,4 @@
+pub(crate) mod diagnostics_cache;
 pub(crate) mod download;
 pub(crate) mod ipc_bridge;
 pub(crate) mod packs;
