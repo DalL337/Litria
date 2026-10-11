@@ -40,7 +40,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P4 | `litria_graph_query` | P2 | Done: PR #108, merged 2026-10-03 (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)). Codex review: five findings, all fixed (see [P5 review record](#p5-review-record)) |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
-| W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Outline |
+| W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | In progress: W1a prerequisite fixes (see [W1 section](#w1-compare-and-apply)); W1b the command |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
 | W3 | Native conditional disk operations (create-if-absent, replace-if-expected-revision) | P1 | Outline |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
@@ -1108,13 +1108,91 @@ All tests and standard checks pass. The adapter is test-only or unreachable in r
 > `cargo test` 625 with zero warnings; `test:domains` 1515; architecture
 > guards pass.
 
+## W1. Compare-and-apply
+
+### Goal
+
+The editor can apply an exact-text edit to a document, but only if the document is still what the caller read. The check and the edit happen in the same JavaScript turn, against the session's text and any live editor model. Nothing is exposed to agents yet: W2 adds the Project API operations on top.
+
+### Tasks
+
+**W1a: the two prerequisite defects** (brief §13; both reproduced live, see the W1a record):
+
+- **A rename moves the model.** A model's URI names its file (`cm://tab/{tabId}/{filename}`). The LSP providers, the pane's hover and the marker feed all read the file from it.
+  - So a renamed tab gets a new model under its new name, holding the same text.
+  - Its language-server documents move with it: didClose for the old URI, didOpen for the new one.
+  - The syntax adapter is moved to the new path and handed the new model.
+- **An edit to a model no editor shows reaches the session.** The workspace mirrors any change to a model that is not attached to an editor. It goes into the session, through the setter typing uses, and to the language servers. Attached models keep the pane's path.
+
+**W1b: the command** (built after W1a merges):
+
+- An editor-session command: `applyBufferEdit({ path, expectedRevision, edits: [{ oldText, newText }] })`.
+  - **It reads the session's current text for `path`.** That is an open tab, or a closed entry the session still holds. It reads the text synchronously, so two applies in one turn see each other.
+  - **It compares `bufferRevision(text)` with `expectedRevision`.** This is the same function the reads report.
+  - **It applies each `oldText` → `newText` in order.** Each `oldText` must occur exactly once in the text as it stands.
+  - **All or nothing.**
+- **Outcomes:**
+  - `applied`, with the new revision;
+  - `conflict`, with the current revision;
+  - `notInSession` (disk edits are W3);
+  - `noMatch` or `ambiguous`, naming the edit.
+- **Applying.**
+  - The session takes the new text; the document becomes dirty.
+  - If a live model exists, the engine applies the same text through a capability it registers (`engineCapabilities`). It applies it as one undoable edit, with no echo back into the session.
+  - The language servers and the syntax index are notified once.
+- **Not built on the syntax adapter's `writeResultText`,** which replaces the whole buffer with no check.
+
+### Tests
+
+- **W1a:**
+  - the workspace's model registry, driven for real against a test engine stub: a rename recreates the model, moves the LSP documents and moves the adapter; an edit to a detached model is mirrored to the session and to LSP; an attached model is left to its pane;
+  - a live pass of both repros.
+- **W1b:**
+  - a revision mismatch is a `conflict`, and nothing changes;
+  - exactly-once matching, and all-or-nothing on any failed edit;
+  - two applies in one turn;
+  - a closed-dirty entry is edited with no model;
+  - a live model is updated as one undoable edit, with no session echo;
+  - a single `didChange`;
+  - no revert on the next activation;
+  - a live pass.
+
+### Acceptance
+
+All tests and standard checks pass, plus a live pass for each part.
+
+### W1a record
+
+> **Both defects were reproduced live on main (2026-10-11).**
+>
+> - **Setup:** `tauri dev` from main, a throwaway project, and the
+>   `.research/2026-10-11-w1-live/` driver. It triggers each defect through
+>   the app's own objects: the syntax adapter's `writeResultText` (the
+>   canvas-wire path), and the session's `updateTabFilename` (what the
+>   filesystem write manager calls after a move).
+> - **Defect 2:**
+>   - With `a.ts` open but not shown, a programmatic edit changed its model.
+>   - The session's text stayed the old one, and the tab did not turn dirty.
+>   - Showing `a.ts` then reverted the model to the old text. The edit was
+>     lost silently.
+> - **Defect 1:**
+>   - After the rename to `src/renamed.ts`, the tab's model URI was still
+>     `cm://tab/1/src/a.ts`.
+>   - Every LSP request about the file would name the old path.
+>
+> **Fixed** in `src/editor/monacoWorkspace.js` (shared `createTabModel`,
+> `trackLsp`, `untrackLsp`, `renameModel`, `setSessionEditMirror`), with
+> the container registering the session setter. The syntax adapter's
+> `onFileRenamed` now accepts the replacement model.
+>
+> **Cost:** undo history does not cross a rename. The engine cannot move it
+> between models.
+
 ## W-track outline
 
 The brief §13 holds the direction. Slices are detailed when the write contract is written.
 
-- **W1: compare-and-apply.** An EditorDomain command, applied to session state and any live model in the same turn, through an engine-injected capability. It first fixes the two prerequisite defects:
-  - the rename leaves the model URI and LSP tab maps stale;
-  - a programmatic edit to an unattached model is not mirrored into the session.
+- **W1: compare-and-apply.** Detailed in [W1](#w1-compare-and-apply).
 - **W2: buffer edits.** `text.edit` as exact-text replacement, through `litria_changes_prepare` and `litria_changes_apply`. Plan identity, expiry and one execution claim. Buffer effects only. An approval surface is designed with the owner.
 - **W3: native conditional operations.** Create-if-absent and replace-if-the-disk-revision-matches. These are the remainder of R2, with fault-injection proofs from the [Project API proposal](../ideas/brief-project-api-mcp.md) R2.
 - **W4: durable operations.** Per-effect receipts, `litria_operations_get`, and recovery without replay (R5).
