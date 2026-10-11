@@ -34,6 +34,7 @@ use crate::contracts::catalog::{Dispatcher, Limits};
 use crate::contracts::context::{CallContext, Grant, Principal};
 #[cfg(debug_assertions)]
 use crate::contracts::error::{ContractError, ErrorCode};
+use crate::contracts::project_api::changes_apply::ChangesApplyOp;
 use crate::contracts::project_api::changes_prepare::ChangesPrepareOp;
 use crate::contracts::project_api::diagnostics_list::DiagnosticsListOp;
 use crate::contracts::project_api::files_read::FilesReadOp;
@@ -62,6 +63,7 @@ pub(crate) fn dispatcher() -> &'static Dispatcher {
         dispatcher.register::<GraphQueryOp>(graph_query::handle);
         dispatcher.register::<DiagnosticsListOp>(diagnostics::handle);
         dispatcher.register::<ChangesPrepareOp>(changes::handle);
+        dispatcher.register::<ChangesApplyOp>(changes::handle_apply);
         dispatcher
     })
 }
@@ -82,6 +84,18 @@ pub(crate) fn dev_call(operation: &str, payload: &[u8]) -> Result<Value, Contrac
         epoch,
     };
     dispatcher.dispatch(&context, operation, payload)
+}
+
+/// Debug builds only: a person's decision on an agent's plan, through the
+/// review seam (build plan W2b), for live passes until track T gives the
+/// review a surface. The plan must belong to the workspace open now.
+#[cfg(debug_assertions)]
+pub(crate) fn dev_review(plan_id: &str, approve: bool) -> Result<Value, ContractError> {
+    let epoch = workspace::current_epoch()
+        .ok_or_else(|| ContractError::new(ErrorCode::NotReady, "no project workspace is open"))?;
+    let decision = if approve { changes::Decision::Approve } else { changes::Decision::Reject };
+    let reviewed = changes::review(plan_id, decision, &epoch);
+    Ok(serde_json::json!({ "planId": plan_id, "state": reviewed.state, "changes": reviewed.changes }))
 }
 
 // --- The owner bridge's command side (debug builds, see commands.rs) --------

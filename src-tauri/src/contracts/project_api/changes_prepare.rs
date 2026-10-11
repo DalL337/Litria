@@ -2,7 +2,7 @@
 //! propose exact-text edits to documents the editor holds. Nothing is applied
 //! here. Every change is checked against the current editor text; when all
 //! are ready they become one plan that waits for a person's review, and a
-//! plan applies only after approval (W2b).
+//! plan applies only after approval (W2b, `litria_changes_apply`).
 
 #[cfg(test)]
 use schemars::JsonSchema;
@@ -162,6 +162,24 @@ pub(crate) struct PreparedPlan {
 pub(crate) enum PlanState {
     /// Waiting for a person to approve or reject it.
     PendingReview,
+    /// Approved, and being applied now.
+    Applying,
+    /// Applied to the editor: the documents hold the changes, unsaved.
+    Applied,
+    /// A person rejected it. Nothing was applied.
+    Rejected,
+    /// Nobody answered within ten minutes. Nothing was applied.
+    Expired,
+    /// A document changed after the plan was prepared, so nothing was applied.
+    /// Propose again against the current text.
+    Conflict,
+    /// Applying could not reach the editor. Nothing was applied.
+    Failed,
+    /// Applying reached the editor but its outcome is unknown (it did not
+    /// answer in time). Check the documents; the plan is never retried.
+    NeedsReview,
+    /// Not a plan of this connection and workspace, or one long expired.
+    Unknown,
 }
 
 /// One proposed change, checked against the editor's current text. A reader

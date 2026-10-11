@@ -56,6 +56,15 @@
       "request": "litria_changes_prepare.request.schema.json",
       "resultIn": "litria_changes_prepare.result.in.schema.json",
       "resultOut": "litria_changes_prepare.result.out.schema.json"
+    },
+    {
+      "capability": "project.changes.apply",
+      "description": "The outcome of a plan from litria_changes_prepare. A plan is applied when a person approves it; this call never applies one that awaits review, so ask again later. Applied changes are in the editor, unsaved (effect: buffer), and each document reports its new revision. A plan is applied at most once; asking again returns the same outcome.",
+      "name": "litria_changes_apply",
+      "readOnly": false,
+      "request": "litria_changes_apply.request.schema.json",
+      "resultIn": "litria_changes_apply.result.in.schema.json",
+      "resultOut": "litria_changes_apply.result.out.schema.json"
     }
   ],
   "status": "draft"

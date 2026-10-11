@@ -1,0 +1,18 @@
+{
+  "kind": "result",
+  "result": {
+    "applied": true,
+    "changes": [
+      {
+        "outcome": "applied",
+        "path": "a.ts",
+        "revision": "b1-x"
+      },
+      {
+        "outcome": "conflict",
+        "path": "b.ts",
+        "revision": "b1-y"
+      }
+    ]
+  }
+}

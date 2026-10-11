@@ -300,6 +300,9 @@ mod outbound {
         let graph = assert_conforms("graph query", &samples::graph_query_result());
         assert_eq!(graph["nodes"][0]["kind"], "file");
         assert_eq!(graph["edges"][0]["provenance"]["kind"], "sourceDerived");
+        let applied = assert_conforms("changes apply", &samples::changes_apply_result());
+        assert_eq!(applied["effect"], "buffer");
+        assert_eq!(applied["changes"][0]["outcome"], "applied");
         let prepare = assert_conforms("changes prepare", &samples::changes_prepare_result());
         assert!(prepare.get("plan").is_none(), "an absent plan is omitted");
         assert_eq!(prepare["changes"][1]["outcome"], "conflict");
@@ -347,6 +350,10 @@ mod outbound {
         check::<crate::contracts::project_api::changes_prepare::ChangesPrepareResult>(
             "changes_prepare.result.json",
             &samples::changes_prepare_result(),
+        );
+        check::<crate::contracts::project_api::changes_apply::ChangesApplyResult>(
+            "changes_apply.result.json",
+            &samples::changes_apply_result(),
         );
     }
 }
@@ -455,6 +462,7 @@ mod bridge_family {
                 Some("graph") => samples::graph_event(),
                 Some("capabilities") => samples::capabilities_event(),
                 Some("checkChanges") => samples::check_changes_event(),
+                Some("applyChanges") => samples::apply_changes_event(),
                 other => panic!("{file}: unknown sample {other:?}"),
             };
             assert_eq!(sample.op, fixture.operation, "{file}: the sample is for another operation");

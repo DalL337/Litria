@@ -95,6 +95,13 @@ pub(crate) fn global() -> &'static Bridge {
     BRIDGE.get_or_init(|| Bridge::new(DEADLINE))
 }
 
+/// A failed bridge call, and whether its request reached the owner first.
+#[derive(Debug)]
+pub(crate) struct CallFailure {
+    pub error: ContractError,
+    pub delivered: bool,
+}
+
 fn unavailable() -> ContractError {
     ContractError::new(
         ErrorCode::OwnerUnavailable,
@@ -168,26 +175,40 @@ impl Bridge {
 
     /// Ask the owner for `O`'s answer about the workspace `epoch`.
     pub(crate) fn call<O: BridgeOperation>(&self, epoch: &str, request: &O::Request) -> Result<O::Result, ContractError> {
+        self.call_reporting::<O>(epoch, request).map_err(|failure| failure.error)
+    }
+
+    /// `call`, saying whether the request reached the owner before the call
+    /// failed. An owner that never received a request did nothing; one that
+    /// did may have acted even though its answer was lost, so a write's
+    /// outcome is then unknown (build plan W2b).
+    pub(crate) fn call_reporting<O: BridgeOperation>(
+        &self,
+        epoch: &str,
+        request: &O::Request,
+    ) -> Result<O::Result, CallFailure> {
+        let before = |error: ContractError| CallFailure { error, delivered: false };
+        let after = |error: ContractError| CallFailure { error, delivered: true };
         let emitter = self
             .emitter
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
-            .ok_or_else(unavailable)?;
+            .ok_or_else(|| before(unavailable()))?;
         let payload = serde_json::to_value(request)
-            .map_err(|_| ContractError::new(ErrorCode::Internal, "the bridge request could not be encoded"))?;
+            .map_err(|_| before(ContractError::new(ErrorCode::Internal, "the bridge request could not be encoded")))?;
         let (sender, receiver) = sync_channel::<Delivery>(1);
         let event = {
             let mut state = self.state();
             let generation = match &state.attachment {
                 Some(attachment) if attachment.epoch == epoch => attachment.generation.clone(),
-                _ => return Err(unavailable()),
+                _ => return Err(before(unavailable())),
             };
             if state.pending.len() >= MAX_PENDING {
-                return Err(ContractError::new(
+                return Err(before(ContractError::new(
                     ErrorCode::Busy,
                     "too many requests are waiting for the editor; retry shortly",
-                ));
+                )));
             }
             state.next_request += 1;
             let request_id = format!("r{}", state.next_request);
@@ -208,7 +229,7 @@ impl Bridge {
         };
         if !emitter.emit(&event) {
             self.state().pending.remove(&event.request_id);
-            return Err(unavailable());
+            return Err(before(unavailable()));
         }
         let delivery = match receiver.recv_timeout(self.deadline) {
             Ok(delivery) => delivery,
@@ -219,33 +240,33 @@ impl Bridge {
                 match receiver.try_recv() {
                     Ok(delivery) => delivery,
                     Err(_) => {
-                        return Err(ContractError::new(
+                        return Err(after(ContractError::new(
                             ErrorCode::OwnerTimeout,
                             "the editor did not answer in time",
-                        ))
+                        )))
                     }
                 }
             }
             // The generation ended (re-attach or detach) while waiting.
-            Err(RecvTimeoutError::Disconnected) => return Err(unavailable()),
+            Err(RecvTimeoutError::Disconnected) => return Err(after(unavailable())),
         };
-        let raw = delivery?;
+        let raw = delivery.map_err(after)?;
         match accept_within::<BridgeReply<O::Result>>(raw.as_bytes(), MAX_REPLY_BYTES) {
             Ok(BridgeReply::Result { result }) => Ok(result),
             Ok(BridgeReply::Error {
                 code: BridgeErrorCode::WorkspaceChanged,
                 ..
-            }) => Err(ContractError::new(
+            }) => Err(after(ContractError::new(
                 ErrorCode::WorkspaceChanged,
                 "the open project changed while the editor was answering",
-            )),
+            ))),
             // The owner's own message is not forwarded: it is free text from
             // the webview and could name a path.
-            Ok(BridgeReply::Error { .. }) => Err(ContractError::new(
+            Ok(BridgeReply::Error { .. }) => Err(after(ContractError::new(
                 ErrorCode::Internal,
                 "the editor could not answer the request",
-            )),
-            Err(_) => Err(malformed()),
+            ))),
+            Err(_) => Err(after(malformed())),
         }
     }
 

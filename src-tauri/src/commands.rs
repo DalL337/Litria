@@ -443,6 +443,23 @@ pub(crate) async fn project_api_dev_call(
         .map_err(|_| ContractError::new(ErrorCode::Internal, "the call did not complete"))?
 }
 
+/// A person's decision on an agent's plan — dev builds only, like the dev call
+/// above: the review seam (Project API build plan W2b) has no surface until
+/// track T, and live passes approve or reject through this. Approving applies
+/// the plan to the editor (unsaved, undoable) through the owner bridge; it
+/// never writes to disk.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub(crate) async fn project_api_dev_review(
+    plan_id: String,
+    approve: bool,
+) -> Result<serde_json::Value, crate::contracts::error::ContractError> {
+    use crate::contracts::error::{ContractError, ErrorCode};
+    tauri::async_runtime::spawn_blocking(move || crate::project_api::dev_review(&plan_id, approve))
+        .await
+        .map_err(|_| ContractError::new(ErrorCode::Internal, "the review did not complete"))?
+}
+
 // The Project API owner bridge (contract brief §8) — dev builds only, like
 // the dev call above, which is its only consumer until the external transport
 // (build plan track T). The frontend hook attaches once its project has

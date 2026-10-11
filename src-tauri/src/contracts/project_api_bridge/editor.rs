@@ -1,6 +1,6 @@
 //! EditorDomain operations of the bridge family (Project API contract brief
-//! §5, §8): `editor.documents`, `editor.bufferIndex`, and `editor.checkChanges`
-//! (build plan W2a).
+//! §5, §8): `editor.documents`, `editor.bufferIndex`, `editor.checkChanges` and
+//! `editor.applyChanges` (build plan W2a, W2b).
 //!
 //! Buffer truth is the editor session — the working text of every entry it
 //! holds, including closed entries it still retains — never an editor engine
@@ -385,6 +385,119 @@ impl Validate for CheckChangesResult {
             match change {
                 CheckedChange::Conflict { revision, .. } => check_revision(revision)?,
                 CheckedChange::NoMatch { edit, .. } | CheckedChange::Ambiguous { edit, .. } if *edit > MAX_EDIT_INDEX => {
+                    return Err(invalid(format!("edit: at most {MAX_EDIT_INDEX}")));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// editor.applyChanges
+// ---------------------------------------------------------------------------
+
+/// An approved plan applied to the session (build plan W2b): every change is
+/// checked again and, only if every one is still ready, all are applied — in
+/// one turn, so the documents change together or not at all. The request is
+/// the plan's changes, exactly as `editor.checkChanges` takes them.
+pub(crate) struct ApplyChangesOp;
+
+impl BridgeOperation for ApplyChangesOp {
+    const NAME: &'static str = "editor.applyChanges";
+    const DESCRIPTION: &'static str = "Apply an approved plan's text changes to the editor session, all or none: \
+         every change is checked against the latest text and, only if every one is still ready, all are applied \
+         in the same turn (unsaved, undoable). Answers applied with each document's new revision, or not applied \
+         with what each change found.";
+    const OWNER: &'static str = "EditorDomain";
+    type Request = CheckChangesRequest;
+    type Result = ApplyChangesResult;
+}
+
+/// JavaScript → Rust: one entry per requested change, in request order.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ApplyChangesResult {
+    /// Every change was applied; otherwise none was.
+    pub applied: bool,
+    #[cfg_attr(test, schemars(length(min = 1, max = MAX_CHANGES)))]
+    pub changes: Vec<ApplyEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(JsonSchema))]
+#[serde(tag = "outcome", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub(crate) enum ApplyEntry {
+    /// Changed; the session's revision of the document now.
+    Applied {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        #[cfg_attr(test, schemars(length(min = 1, max = MAX_REVISION_LENGTH)))]
+        revision: String,
+    },
+    /// Still ready, but another change was not, so nothing was applied.
+    Ready {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+    },
+    Conflict {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        #[cfg_attr(test, schemars(length(min = 1, max = MAX_REVISION_LENGTH)))]
+        revision: String,
+    },
+    NoMatch {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        #[cfg_attr(test, schemars(range(max = MAX_EDIT_INDEX)))]
+        edit: u32,
+    },
+    Ambiguous {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+        #[cfg_attr(test, schemars(range(max = MAX_EDIT_INDEX)))]
+        edit: u32,
+    },
+    NotInSession {
+        #[cfg_attr(test, schemars(length(min = MIN_PATH_LENGTH, max = MAX_PATH_LENGTH)))]
+        path: String,
+    },
+}
+
+impl ApplyEntry {
+    pub(crate) fn path(&self) -> &str {
+        match self {
+            ApplyEntry::Applied { path, .. }
+            | ApplyEntry::Ready { path }
+            | ApplyEntry::Conflict { path, .. }
+            | ApplyEntry::NoMatch { path, .. }
+            | ApplyEntry::Ambiguous { path, .. }
+            | ApplyEntry::NotInSession { path } => path,
+        }
+    }
+}
+
+impl Validate for ApplyChangesResult {
+    fn validate(&self) -> Result<(), ContractError> {
+        let count = self.changes.len();
+        if !(1..=MAX_CHANGES).contains(&count) {
+            return Err(invalid(format!("changes: expected 1 to {MAX_CHANGES} entries")));
+        }
+        // All or none: the flag and the entries must tell the same story.
+        let applied = self.changes.iter().filter(|entry| matches!(entry, ApplyEntry::Applied { .. })).count();
+        if self.applied && applied != count {
+            return Err(invalid("changes: an applied plan applies every change"));
+        }
+        if !self.applied && applied != 0 {
+            return Err(invalid("changes: a plan that was not applied applies no change"));
+        }
+        for entry in &self.changes {
+            check_path(entry.path())?;
+            match entry {
+                ApplyEntry::Applied { revision, .. } | ApplyEntry::Conflict { revision, .. } => check_revision(revision)?,
+                ApplyEntry::NoMatch { edit, .. } | ApplyEntry::Ambiguous { edit, .. } if *edit > MAX_EDIT_INDEX => {
                     return Err(invalid(format!("edit: at most {MAX_EDIT_INDEX}")));
                 }
                 _ => {}

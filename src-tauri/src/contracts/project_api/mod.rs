@@ -11,8 +11,10 @@
 //! P1 (build plan) delivers `litria_files_read`; P3 adds
 //! `litria_project_context` and `litria_files_search`. The graph and
 //! diagnostics reads join the catalog in P4–P5 (P5b: `litria_diagnostics_list`).
-//! The write increment starts in W2a: `litria_changes_prepare` proposes edits.
+//! The write increment starts in W2: `litria_changes_prepare` proposes edits
+//! (W2a), `litria_changes_apply` reports a reviewed plan's outcome (W2b).
 
+pub(crate) mod changes_apply;
 pub(crate) mod changes_prepare;
 pub(crate) mod diagnostics_list;
 pub(crate) mod files_read;
@@ -39,6 +41,7 @@ pub(crate) fn catalog() -> Vec<crate::contracts::catalog::OperationEntry> {
         entry::<graph_query::GraphQueryOp>(),
         entry::<diagnostics_list::DiagnosticsListOp>(),
         entry::<changes_prepare::ChangesPrepareOp>(),
+        entry::<changes_apply::ChangesApplyOp>(),
     ]
 }
 
@@ -58,6 +61,7 @@ pub(crate) fn test_dispatcher() -> crate::contracts::catalog::Dispatcher {
     dispatcher.register::<graph_query::GraphQueryOp>(|_, _| Ok(samples::graph_query_result()));
     dispatcher.register::<diagnostics_list::DiagnosticsListOp>(|_, _| Ok(samples::diagnostics_list_result()));
     dispatcher.register::<changes_prepare::ChangesPrepareOp>(|_, _| Ok(samples::changes_prepare_result()));
+    dispatcher.register::<changes_apply::ChangesApplyOp>(|_, _| Ok(samples::changes_apply_result()));
     dispatcher
 }
 
@@ -413,6 +417,27 @@ pub(crate) mod samples {
                 ChangeCheck::NotInSession { path: "src/closed.ts".into() },
                 ChangeCheck::Denied { path: ".env".into() },
                 ChangeCheck::InvalidPath { path: "../outside.ts".into() },
+            ],
+        }
+    }
+
+    /// An applied plan: every document's new revision, in the editor (unsaved).
+    pub(crate) fn changes_apply_result() -> super::changes_apply::ChangesApplyResult {
+        use super::changes_apply::{ChangeOutcome, ChangesApplyResult, Effect};
+        use super::changes_prepare::PlanState;
+        ChangesApplyResult {
+            plan_id: "plan-e810c8cf2fc667011ff17e280098bdb6".into(),
+            state: PlanState::Applied,
+            effect: Some(Effect::Buffer),
+            changes: vec![
+                ChangeOutcome::Applied {
+                    path: "src/auth.ts".into(),
+                    revision: "b1-30e217dafba8bae4b210e802479fb377".into(),
+                },
+                ChangeOutcome::Applied {
+                    path: "src/session.ts".into(),
+                    revision: "b1-0983cd5a83f4775828da1580184f0f92".into(),
+                },
             ],
         }
     }

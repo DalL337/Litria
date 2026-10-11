@@ -144,6 +144,8 @@ pub fn run() {
             #[cfg(debug_assertions)]
             commands::project_api_dev_call,
             #[cfg(debug_assertions)]
+            commands::project_api_dev_review,
+            #[cfg(debug_assertions)]
             commands::project_api_bridge_attach,
             #[cfg(debug_assertions)]
             commands::project_api_bridge_detach,

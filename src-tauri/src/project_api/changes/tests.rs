@@ -351,3 +351,232 @@ fn make_dir_link(link: &Path, target: &Path) -> bool {
 fn remove_dir_link(link: &Path) {
     let _ = fs::remove_file(link);
 }
+
+// --- W2b: the review seam and the outcome ----------------------------------------
+
+use crate::contracts::project_api::changes_apply::{ChangeOutcome, ChangesApplyRequest, Effect};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// An editor attached for `epoch` that answers `editor.applyChanges` with
+/// `reply(paths)` (None: never answers), counting the requests it receives.
+fn applying_editor(
+    epoch: &str,
+    deadline: Duration,
+    reply: fn(&[String]) -> Option<Value>,
+) -> (&'static Bridge, Arc<AtomicUsize>) {
+    let bridge: &'static Bridge = Box::leak(Box::new(Bridge::new(deadline)));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    answering(bridge, move |event: &BridgeRequestEvent| {
+        assert_eq!(event.op, "editor.applyChanges");
+        counted.fetch_add(1, Ordering::SeqCst);
+        let paths: Vec<String> = event.request["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|change| change["path"].as_str().unwrap().to_string())
+            .collect();
+        reply(&paths).map(|value| value.to_string())
+    });
+    bridge.attach(epoch, Some(epoch)).unwrap();
+    (bridge, calls)
+}
+
+fn all_applied(paths: &[String]) -> Option<Value> {
+    let changes: Vec<Value> = paths
+        .iter()
+        .map(|path| json!({ "outcome": "applied", "path": path, "revision": format!("b1-new-{path}") }))
+        .collect();
+    Some(json!({ "kind": "result", "result": { "applied": true, "changes": changes } }))
+}
+
+fn store_with_plan(epoch: &str, now: Instant) -> (Mutex<PlanStore>, String) {
+    let mut store = PlanStore::default();
+    let plan = store
+        .propose(Principal::Test, epoch, [planned("src/a.ts", "b1-x"), planned("src/b.ts", "b1-y")].concat(), now)
+        .unwrap();
+    (Mutex::new(store), plan.plan_id)
+}
+
+#[test]
+fn approving_applies_the_plan_once_and_records_each_revision() {
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let (bridge, calls) = applying_editor("ws-1", Duration::from_secs(5), all_applied);
+    let reviewed = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    assert_eq!(reviewed.state, PlanState::Applied);
+    assert_eq!(
+        reviewed.changes,
+        [
+            ChangeOutcome::Applied { path: "src/a.ts".into(), revision: "b1-new-src/a.ts".into() },
+            ChangeOutcome::Applied { path: "src/b.ts".into(), revision: "b1-new-src/b.ts".into() },
+        ]
+    );
+    // Approving again changes nothing and asks the editor nothing.
+    let again = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    assert_eq!(again, reviewed);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "applied at most once");
+    // The requester sees the outcome.
+    let (state, changes) = store.lock().unwrap().status(&id, Principal::Test, "ws-1", now);
+    assert_eq!((state, changes.len()), (PlanState::Applied, 2));
+}
+
+#[test]
+fn two_approvals_at_once_apply_once() {
+    fn slow(paths: &[String]) -> Option<Value> {
+        std::thread::sleep(Duration::from_millis(150));
+        all_applied(paths)
+    }
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let store: &'static Mutex<PlanStore> = Box::leak(Box::new(store));
+    let (bridge, calls) = applying_editor("ws-1", Duration::from_secs(5), slow);
+    let reviewers: Vec<_> = (0..4)
+        .map(|_| {
+            let id = id.clone();
+            std::thread::spawn(move || review_with(&id, Decision::Approve, "ws-1", bridge, store, now).state)
+        })
+        .collect();
+    let states: Vec<PlanState> = reviewers.into_iter().map(|reviewer| reviewer.join().unwrap()).collect();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "one claim won; the editor applied once");
+    assert!(states.contains(&PlanState::Applied), "{states:?}");
+    assert!(states.iter().all(|state| matches!(state, PlanState::Applied | PlanState::Applying)), "{states:?}");
+}
+
+#[test]
+fn rejecting_ends_the_plan_and_nothing_applies_after() {
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let (bridge, calls) = applying_editor("ws-1", Duration::from_secs(5), all_applied);
+    assert_eq!(review_with(&id, Decision::Reject, "ws-1", bridge, &store, now).state, PlanState::Rejected);
+    assert_eq!(review_with(&id, Decision::Approve, "ws-1", bridge, &store, now).state, PlanState::Rejected);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn an_expired_plan_cannot_be_approved() {
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let (bridge, calls) = applying_editor("ws-1", Duration::from_secs(5), all_applied);
+    let later = now + PLAN_TTL;
+    assert_eq!(review_with(&id, Decision::Approve, "ws-1", bridge, &store, later).state, PlanState::Expired);
+    assert_eq!(review_with(&id, Decision::Reject, "ws-1", bridge, &store, later).state, PlanState::Expired);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(store.lock().unwrap().status(&id, Principal::Test, "ws-1", later).0, PlanState::Expired);
+}
+
+#[test]
+fn a_document_that_changed_meanwhile_is_a_conflict_and_nothing_applies() {
+    fn changed(paths: &[String]) -> Option<Value> {
+        Some(json!({ "kind": "result", "result": { "applied": false, "changes": [
+            { "outcome": "ready", "path": paths[0] },
+            { "outcome": "conflict", "path": paths[1], "revision": "b1-typed" }
+        ] } }))
+    }
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let (bridge, _) = applying_editor("ws-1", Duration::from_secs(5), changed);
+    let reviewed = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    assert_eq!(reviewed.state, PlanState::Conflict);
+    assert_eq!(
+        reviewed.changes,
+        [
+            ChangeOutcome::Ready { path: "src/a.ts".into() },
+            ChangeOutcome::Conflict { path: "src/b.ts".into(), revision: "b1-typed".into() },
+        ]
+    );
+}
+
+#[test]
+fn an_outcome_litria_cannot_know_is_needs_review_never_failed() {
+    fn silent(_: &[String]) -> Option<Value> {
+        None
+    }
+    fn other_documents(_: &[String]) -> Option<Value> {
+        all_applied(&["src/elsewhere.ts".to_string()])
+    }
+    fn refuses_internally(_: &[String]) -> Option<Value> {
+        Some(json!({ "kind": "error", "code": "internal", "message": "boom" }))
+    }
+    let cases: [(fn(&[String]) -> Option<Value>, &str); 3] = [
+        (silent, "no answer in time"),
+        (other_documents, "an answer about other documents"),
+        (refuses_internally, "an internal failure after delivery"),
+    ];
+    for (reply, what) in cases {
+        let now = Instant::now();
+        let (store, id) = store_with_plan("ws-1", now);
+        let (bridge, calls) = applying_editor("ws-1", Duration::from_millis(150), reply);
+        let first = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now).state;
+        assert_eq!(first, PlanState::NeedsReview, "{what}");
+        // Never retried.
+        let again = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now).state;
+        assert_eq!(again, PlanState::NeedsReview, "{what}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{what}");
+    }
+}
+
+#[test]
+fn a_request_that_never_reached_the_editor_failed_with_nothing_applied() {
+    fn refused(_: &[String]) -> Option<Value> {
+        Some(json!({ "kind": "error", "code": "workspaceChanged", "message": "moved on" }))
+    }
+    // Not attached for this workspace: never delivered.
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let detached: &'static Bridge = Box::leak(Box::new(Bridge::new(Duration::from_secs(5))));
+    assert_eq!(review_with(&id, Decision::Approve, "ws-1", detached, &store, now).state, PlanState::Failed);
+    // Delivered, but refused before the editor acted (the workspace moved on).
+    let (store, id) = store_with_plan("ws-1", now);
+    let (bridge, _) = applying_editor("ws-1", Duration::from_secs(5), refused);
+    assert_eq!(review_with(&id, Decision::Approve, "ws-1", bridge, &store, now).state, PlanState::Failed);
+}
+
+#[test]
+fn a_reviewer_of_another_workspace_finds_nothing() {
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let (bridge, calls) = applying_editor("ws-2", Duration::from_secs(5), all_applied);
+    assert_eq!(review_with(&id, Decision::Approve, "ws-2", bridge, &store, now).state, PlanState::Unknown);
+    assert_eq!(review_with(&id, Decision::Reject, "ws-2", bridge, &store, now).state, PlanState::Unknown);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_reviewed_plan_no_longer_counts_as_pending() {
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-1", now);
+    let (bridge, _) = applying_editor("ws-1", Duration::from_secs(5), all_applied);
+    review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    // The same changes again are a new proposal, not the applied plan.
+    let again = store
+        .lock()
+        .unwrap()
+        .propose(Principal::Test, "ws-1", [planned("src/a.ts", "b1-x"), planned("src/b.ts", "b1-y")].concat(), now)
+        .unwrap();
+    assert_ne!(again.plan_id, id);
+}
+
+#[test]
+fn the_apply_tool_reports_and_never_applies() {
+    let session = Session::new("apply-tool", ready);
+    let store = Mutex::new(PlanStore::default());
+    let prepared = session.prepare(request(&["src/a.ts"]), &store).unwrap().plan.unwrap();
+    let ask = |id: &str, principal| {
+        let mut context = session.context();
+        context.principal = principal;
+        handle_apply_with(&context, ChangesApplyRequest { plan_id: id.into() }, &store, Instant::now()).unwrap()
+    };
+    let pending = ask(&prepared.plan_id, Principal::Test);
+    assert_eq!(pending.state, PlanState::PendingReview, "asking never applies a plan that awaits review");
+    assert!(pending.effect.is_none() && pending.changes.is_empty());
+    assert_eq!(ask(&prepared.plan_id, Principal::Dev).state, PlanState::Unknown, "another requester's plan");
+    assert_eq!(ask("plan-guess", Principal::Test).state, PlanState::Unknown);
+    // Approved by a person (scripted editor), then asked: applied, buffer.
+    let (bridge, _) = applying_editor(&session.epoch, Duration::from_secs(5), all_applied);
+    review_with(&prepared.plan_id, Decision::Approve, &session.epoch, bridge, &store, Instant::now());
+    let applied = ask(&prepared.plan_id, Principal::Test);
+    assert_eq!(applied.state, PlanState::Applied);
+    assert_eq!(applied.effect, Some(Effect::Buffer));
+    assert_eq!(applied.changes.len(), 1);
+}

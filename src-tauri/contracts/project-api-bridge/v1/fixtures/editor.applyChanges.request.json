@@ -1,0 +1,34 @@
+{
+  "epoch": "ws-7",
+  "generation": "g3",
+  "op": "editor.applyChanges",
+  "request": {
+    "changes": [
+      {
+        "edits": [
+          {
+            "newText": "login(user, { remember: true })",
+            "oldText": "login(user)"
+          },
+          {
+            "newText": "export async function",
+            "oldText": "export function"
+          }
+        ],
+        "expectedRevision": "b1-e20f31222078c95a25a7ef6c0d20fcd8",
+        "path": "src/auth.ts"
+      },
+      {
+        "edits": [
+          {
+            "newText": "ttl = 600",
+            "oldText": "ttl = 60"
+          }
+        ],
+        "expectedRevision": "b1-0eb4282030cb877f4552949e5c746506",
+        "path": "src/session.ts"
+      }
+    ]
+  },
+  "requestId": "r1"
+}
