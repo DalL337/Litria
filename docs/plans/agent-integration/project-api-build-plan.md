@@ -40,7 +40,7 @@ This document owns sequencing, executable evidence and completion status. It own
 | P4 | `litria_graph_query` | P2 | Done: PR #108, merged 2026-10-03 (P4a #105, P4b #106, P4c tab-close #107; graph query built in the unattended P4c arc — see [P4c record](#p4c-record)) |
 | P5 | `litria_diagnostics_list` and its detail store | P2 | Done: P5a detail store (PR #122) and P5b the tool (PR #123), merged 2026-10-11; P5c live pass passed 2026-10-11, its Python half after the fix in PR #124 (see [P5a record](#p5a-record), [P5b record](#p5b-record), [P5c record](#p5c-record)). Codex review: five findings, all fixed (see [P5 review record](#p5-review-record)) |
 | P6 | MCP conformance over the real read catalog (in process, no transport) | P3 | Done 2026-10-11 (see [P6 record](#p6-record)) |
-| W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | In progress: W1a prerequisite fixes (see [W1 section](#w1-compare-and-apply)); W1b the command |
+| W1 | EditorDomain compare-and-apply port and its two prerequisite fixes | P2 | Done 2026-10-11: W1a prerequisite fixes (PR #128) and W1b the command (see [W1a record](#w1a-record), [W1b record](#w1b-record)) |
 | W2 | Buffer `text.edit` through `litria_changes_prepare` and `litria_changes_apply`; in-memory operations | W1, P3 | Outline |
 | W3 | Native conditional disk operations (create-if-absent, replace-if-expected-revision) | P1 | Outline |
 | W4 | Durable operations, receipts, `litria_operations_get`, recovery | W2, W3 | Outline |
@@ -1187,6 +1187,64 @@ All tests and standard checks pass, plus a live pass for each part.
 >
 > **Cost:** undo history does not cross a rename. The engine cannot move it
 > between models.
+
+### W1b record
+
+> **Built 2026-10-11, as specified above.**
+>
+> **Session side:**
+>
+> - `planBufferEdit` in `editorSessionDomain.js` is the pure decision: the
+>   session document, the revision check, exactly-once ordered edits, all or
+>   nothing, and the new text normalized as the session stores it.
+> - `applyBufferEdit` in `EditorSessionContext.jsx` applies the plan. It
+>   updates the session (and the piece mirror), then calls the engine
+>   capability.
+> - **Same turn.** Every session action now goes through a `dispatch` that
+>   also applies the (pure) reducer to a "latest state" ref. A command
+>   therefore sees typing and earlier edits from the same turn, even through
+>   a context value captured before them.
+>
+> **Engine side:**
+>
+> - `engineCapabilities.applyBufferText` is the registered capability.
+> - `monacoWorkspace.applySessionText` puts the new text into a live model
+>   as one undoable edit, over the changed span only, so cursors outside it
+>   stay put. It never splits a surrogate pair.
+> - A workspace flag keeps that change from echoing back through the pane's
+>   `onChange`, the detached-edit mirror, or the pane's suggest trigger.
+> - The language servers and the syntax index are notified once.
+>
+> **Contract:** the outcomes are as specified, plus `invalid` for a request
+> not shaped as above. It is internal: no agent can call it until W2.
+>
+> **Evidence:**
+>
+> - **Tests:** 15 new.
+>   - 9 for the plan;
+>   - 1 for capability routing;
+>   - 2 for the engine side: the changed span, no echo, one `didChange`,
+>     attached and detached models, and surrogate pairs;
+>   - 3 through the real provider: two edits and a replay in one turn
+>     through a stale context value, typing then an edit in one turn, and
+>     nothing changing on any non-applied outcome.
+> - **The same-turn test can fail.** A planted "latest ref synced on render"
+>   made the second same-turn edit a `conflict`, and the typing test failed.
+> - **Checks:** `test:domains` 1534; all seven guards, including the
+>   editor-engine guard; the build.
+> - **Live pass** (`tauri dev`, throwaway project, driver
+>   `.research/2026-10-11-w1-live/w1b-live.mjs`). Revisions came from
+>   `litria_files_read` through the dev call, as an agent gets them.
+>   - **Shown document:** applied, and the editor and the session both hold
+>     the new text, dirty. A re-read reports exactly the revision the edit
+>     returned.
+>   - **Undo** in the editor restores the original and clears dirty: one
+>     undoable edit.
+>   - **The now-stale revision** is a `conflict` naming the current one, and
+>     nothing changes.
+>   - **Background document:** applied with its model detached, and kept
+>     when shown.
+>   - No console errors.
 
 ## W-track outline
 
