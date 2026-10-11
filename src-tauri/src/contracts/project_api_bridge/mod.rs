@@ -143,6 +143,7 @@ pub(crate) fn catalog() -> Vec<entry::BridgeEntry> {
         entry::bridge_entry::<workspace::GraphOp>(),
         entry::bridge_entry::<languages::CapabilitiesOp>(),
         entry::bridge_entry::<editor::CheckChangesOp>(),
+        entry::bridge_entry::<editor::ApplyChangesOp>(),
     ]
 }
 
@@ -208,6 +209,13 @@ pub(crate) mod samples {
 
     pub(crate) fn capabilities_event() -> BridgeRequestEvent {
         event::<CapabilitiesOp>(&CapabilitiesRequest {})
+    }
+
+    /// The same two changes, approved: applied all or none.
+    pub(crate) fn apply_changes_event() -> BridgeRequestEvent {
+        use super::editor::ApplyChangesOp;
+        let check = check_changes_event();
+        BridgeRequestEvent { op: ApplyChangesOp::NAME.into(), ..check }
     }
 
     /// Two changes, one with two ordered edits. The revisions are real buffer

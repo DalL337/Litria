@@ -396,6 +396,65 @@
       "message": "reply",
       "expect": "reject",
       "note": "Unknown fields are rejected: the editor never sends text back."
+    },
+    {
+      "file": "editor.applyChanges.request.json",
+      "operation": "editor.applyChanges",
+      "message": "request",
+      "expect": "accept",
+      "note": "What Rust emits (asserted in fixtures.rs): the same changes editor.checkChanges takes.",
+      "sample": "applyChanges"
+    },
+    {
+      "file": "editor.applyChanges.reply.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "accept",
+      "note": "What the JavaScript bridge answers to editor.applyChanges.request.json when src/session.ts changed since: nothing applied."
+    },
+    {
+      "file": "editor.applyChanges.reply.applied.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "accept",
+      "note": "Every change applied, each with its new revision."
+    },
+    {
+      "file": "editor.applyChanges.reply.applied-with-a-conflict.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "All or none: an applied plan applies every change. JSON Schema cannot tie the flag to every entry, so the boundary alone rejects it.",
+      "limit": true
+    },
+    {
+      "file": "editor.applyChanges.reply.not-applied-with-an-applied-change.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "All or none: a plan that was not applied applies no change. JSON Schema cannot tie the flag to every entry, so the boundary alone rejects it.",
+      "limit": true
+    },
+    {
+      "file": "editor.applyChanges.reply.applied-without-revision.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An applied change names its new revision."
+    },
+    {
+      "file": "editor.applyChanges.reply.unknown-outcome.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "An unfamiliar outcome is rejected."
+    },
+    {
+      "file": "editor.applyChanges.reply.no-changes.json",
+      "operation": "editor.applyChanges",
+      "message": "reply",
+      "expect": "reject",
+      "note": "A reply answers at least one change."
     }
   ]
 }

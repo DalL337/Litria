@@ -1,0 +1,12 @@
+{
+  "kind": "result",
+  "result": {
+    "applied": false,
+    "changes": [
+      {
+        "outcome": "partial",
+        "path": "a.ts"
+      }
+    ]
+  }
+}

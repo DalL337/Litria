@@ -152,14 +152,23 @@ async function readyBridge({ session = fixtureSession(), epoch = 'ws-7', workspa
     session,
     workspace: fixtureWorkspace(),
     active: getActiveSessionDocument(fixtureActiveSession(), 5),
-    languages: []
+    languages: [],
+    applied: []
   };
   const bridge = createProjectApiBridge({
     ports: {
       sessionDocuments: () => getSessionDocumentsByPath(holder.session),
       selection: () => selectionSnapshot(holder.workspace, holder.active),
       languageCapabilities: () => holder.languages,
-      checkBufferEdit: (request) => planBufferEdit(holder.session, request, bufferRevision)
+      checkBufferEdit: (request) => planBufferEdit(holder.session, request, bufferRevision),
+      // What the session's applyBufferEdit does: plan against the latest text, store it.
+      applyBufferEdit: (request) => {
+        holder.applied.push(request.path);
+        const plan = planBufferEdit(holder.session, request, bufferRevision);
+        if (plan.outcome !== 'applied') return plan;
+        holder.session = reduce(holder.session, { type: 'UPDATE_WORKING_CODE', tabId: plan.tabId, workingCode: plan.text });
+        return { outcome: 'applied', revision: plan.revision };
+      }
     },
     transport,
     getWorkspaceEpoch: () => current,
@@ -772,4 +781,70 @@ test('editor.checkChanges: a malformed request is refused', async () => {
     bridge.handleRequest({ requestId: `r-${transport.replies.length}`, epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.checkChanges, request });
   }
   assert.deepEqual(transport.replies.map((entry) => entry.reply.code), ['invalidRequest', 'invalidRequest', 'invalidRequest']);
+});
+
+// ─── editor.applyChanges (build plan W2b) ────────────────────────────────────
+
+test('editor.applyChanges: the committed request gets the committed reply, and nothing applies', async () => {
+  const { bridge, transport, holder } = await readyBridge({ session: proposalSession() });
+  const before = JSON.stringify(holder.session);
+  bridge.handleRequest(acceptedFixture('editor.applyChanges.request.json'));
+  const [{ requestId, generation, reply }] = transport.replies;
+  assert.equal(requestId, 'r1');
+  assert.equal(generation, 'g3');
+  assert.deepEqual(reply, acceptedFixture('editor.applyChanges.reply.json'));
+  assertDeclared(BRIDGE_OPS.applyChanges, reply);
+  assert.deepEqual(holder.applied, [], 'session.ts changed since: no document was touched');
+  assert.equal(JSON.stringify(holder.session), before);
+});
+
+test('editor.applyChanges: when every change is ready, all apply, each with its new revision', async () => {
+  const session = proposalSession();
+  const { bridge, transport, holder } = await readyBridge({ session });
+  const authText = session.tabsById[1].workingCode;
+  const twiceText = session.tabsById[3].workingCode;
+  bridge.handleRequest({
+    requestId: 'r6', epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.applyChanges,
+    request: { changes: [
+      { path: 'src/auth.ts', expectedRevision: bufferRevision(authText), edits: [{ oldText: 'login(user)', newText: 'login(user, true)' }] },
+      { path: 'src/twice.ts', expectedRevision: bufferRevision(twiceText), edits: [{ oldText: 'x x', newText: 'y' }] }
+    ] }
+  });
+  const [{ reply }] = transport.replies;
+  const authNow = 'export function signIn(user) {\n  return login(user, true);\n}\n';
+  assert.deepEqual(reply, { kind: 'result', result: { applied: true, changes: [
+    { outcome: 'applied', path: 'src/auth.ts', revision: bufferRevision(authNow) },
+    { outcome: 'applied', path: 'src/twice.ts', revision: bufferRevision('y\n') }
+  ] } });
+  assertDeclared(BRIDGE_OPS.applyChanges, reply);
+  assert.equal(holder.session.tabsById[1].workingCode, authNow);
+  assert.equal(holder.session.tabsById[3].workingCode, 'y\n');
+});
+
+test('editor.applyChanges: one change not ready means none apply', async () => {
+  const session = proposalSession();
+  const { bridge, transport, holder } = await readyBridge({ session });
+  bridge.handleRequest({
+    requestId: 'r7', epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.applyChanges,
+    request: { changes: [
+      { path: 'src/auth.ts', expectedRevision: bufferRevision(session.tabsById[1].workingCode), edits: [{ oldText: 'login', newText: 'logIn' }] },
+      { path: 'src/twice.ts', expectedRevision: bufferRevision('x x\n'), edits: [{ oldText: 'x', newText: 'y' }] }
+    ] }
+  });
+  const [{ reply }] = transport.replies;
+  assert.deepEqual(reply.result, { applied: false, changes: [
+    { outcome: 'ready', path: 'src/auth.ts' },
+    { outcome: 'ambiguous', path: 'src/twice.ts', edit: 0 }
+  ] });
+  assert.deepEqual(holder.applied, [], 'the ready document was not touched either');
+  assert.equal(holder.session.tabsById[1].workingCode, session.tabsById[1].workingCode);
+});
+
+test('editor.applyChanges: a malformed request is refused and applies nothing', async () => {
+  const { bridge, transport, holder } = await readyBridge({ session: proposalSession() });
+  for (const request of [{}, { changes: [] }, { changes: [{ expectedRevision: 'b1-x', edits: [] }] }]) {
+    bridge.handleRequest({ requestId: `ra-${transport.replies.length}`, epoch: 'ws-7', generation: 'g3', op: BRIDGE_OPS.applyChanges, request });
+  }
+  assert.deepEqual(transport.replies.map((entry) => entry.reply.code), ['invalidRequest', 'invalidRequest', 'invalidRequest']);
+  assert.deepEqual(holder.applied, []);
 });

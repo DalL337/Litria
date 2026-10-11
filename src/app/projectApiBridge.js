@@ -30,7 +30,8 @@ export const BRIDGE_OPS = Object.freeze({
   selection: 'workspace.selection',
   capabilities: 'languages.capabilities',
   graph: 'workspace.graph',
-  checkChanges: 'editor.checkChanges'
+  checkChanges: 'editor.checkChanges',
+  applyChanges: 'editor.applyChanges'
 });
 /** Encoded size of one reply (contract brief §10); the catalog publishes it. */
 export const MAX_REPLY_BYTES = 512 * 1024;
@@ -697,35 +698,73 @@ export function answerCapabilities(request, rows) {
  * policy allows.
  */
 export function answerCheckChanges(request, check) {
-  const changes = request?.changes;
-  if (!Array.isArray(changes) || changes.length === 0 || typeof check !== 'function') {
-    return refusal('invalidRequest');
+  const checked = checkAll(request, check);
+  if (!checked) return refusal('invalidRequest');
+  return { kind: 'result', result: { changes: checked.map(({ answer }) => answer) } };
+}
+
+/**
+ * `editor.applyChanges` (Project API build plan W2b): an approved plan,
+ * applied all or none. Every change is checked first with `check`; only if
+ * every one is still ready are all applied with `apply` (the session's
+ * `applyBufferEdit`) — in this same synchronous turn, so nothing can change in
+ * between and the documents change together. Otherwise nothing is applied and
+ * the answer says what each change found (`ready` = would have applied).
+ */
+export function answerApplyChanges(request, check, apply) {
+  if (typeof apply !== 'function') return refusal('invalidRequest');
+  const checked = checkAll(request, check);
+  if (!checked) return refusal('invalidRequest');
+  if (!checked.every(({ answer }) => answer.outcome === 'ready')) {
+    return { kind: 'result', result: { applied: false, changes: checked.map(({ answer }) => answer) } };
   }
-  const answers = [];
+  const changes = [];
+  for (const { request: change } of checked) {
+    const applied = apply(change);
+    // Checked a moment ago in this same turn, so it applies. If it somehow
+    // did not, earlier documents already changed: say so as a failure, which
+    // Rust records as an outcome to review, never as applied or not.
+    if (applied?.outcome !== 'applied') return refusal('internal');
+    changes.push({ outcome: 'applied', path: change.path, revision: applied.revision });
+  }
+  return { kind: 'result', result: { applied: true, changes } };
+}
+
+/**
+ * Each requested change checked against the latest session text: its edit
+ * request and its answer, in request order. Null when the request is broken
+ * (Rust validates it first, so this does not happen in practice).
+ */
+function checkAll(request, check) {
+  const changes = request?.changes;
+  if (!Array.isArray(changes) || changes.length === 0 || typeof check !== 'function') return null;
+  const checked = [];
   for (const change of changes) {
-    if (!change || typeof change.path !== 'string') return refusal('invalidRequest');
+    if (!change || typeof change.path !== 'string') return null;
     const { path } = change;
-    const plan = check({ path, expectedRevision: change.expectedRevision, edits: change.edits });
+    const editRequest = { path, expectedRevision: change.expectedRevision, edits: change.edits };
+    const plan = check(editRequest);
+    let answer;
     switch (plan?.outcome) {
       case 'applied':
-        answers.push({ outcome: 'ready', path });
+        answer = { outcome: 'ready', path };
         break;
       case 'conflict':
-        answers.push({ outcome: 'conflict', path, revision: plan.revision });
+        answer = { outcome: 'conflict', path, revision: plan.revision };
         break;
       case 'noMatch':
       case 'ambiguous':
-        answers.push({ outcome: plan.outcome, path, edit: plan.edit });
+        answer = { outcome: plan.outcome, path, edit: plan.edit };
         break;
       case 'notInSession':
-        answers.push({ outcome: 'notInSession', path });
+        answer = { outcome: 'notInSession', path };
         break;
       default:
-        // Rust validated the request; anything else is a broken request.
-        return refusal('invalidRequest');
+        return null;
     }
+    checked.push({ request: editRequest, answer });
   }
-  return { kind: 'result', result: { changes: answers } };
+  return checked;
 }
 
 // ─── The bridge ────────────────────────────────────────────────────────────
@@ -736,7 +775,8 @@ export function answerCheckChanges(request, check) {
  *   sessionDocuments: () => Map<string, {tabId:any, path:string, state:string, dirty:boolean, text:string}>,
  *   selection: () => {selectedPaths: string[], folder: (string|null), activeDocument: ({path:string, dirty:boolean}|null)},
  *   languageCapabilities: () => object[],
- *   checkBufferEdit: (request: object) => object
+ *   checkBufferEdit: (request: object) => object,
+ *   applyBufferEdit: (request: object) => object
  * }} deps.ports
  *   Read-only owner ports: EditorDomain's `getSessionDocumentsByPath` and
  *   `getActiveSessionDocument`; the selection, its pieces and the selected
@@ -842,6 +882,8 @@ export function createProjectApiBridge({ ports, transport, getWorkspaceEpoch, ce
         return answerCapabilities(request, ports.languageCapabilities());
       case BRIDGE_OPS.checkChanges:
         return answerCheckChanges(request, ports.checkBufferEdit);
+      case BRIDGE_OPS.applyChanges:
+        return answerApplyChanges(request, ports.checkBufferEdit, ports.applyBufferEdit);
       default:
         return refusal('unknownOperation');
     }

@@ -175,7 +175,7 @@ These names are proposed contract targets, not implemented endpoints. Define exa
 
 ### Litria-mediated changes
 
-Use **prepare → authorize → revalidate → apply through owners → record outcomes**. Default to concrete review for these changes; an explicit session grant may allow ordinary source edits without repeat review. Sensitive paths, policy/config changes and higher-risk operations need separately defined rules.
+Use **prepare → authorize → revalidate → apply through owners → record outcomes**. Default to concrete review for these changes; an explicit session grant may allow ordinary source edits without repeat review. Sensitive paths, policy/config changes and higher-risk operations need separately defined rules. *(Owner rulings, 2026-10-11, Project API build plan W2: the agent's own approval is the default authorization. Its client already asked the person, and Litria does not stack a second prompt on it. Litria never restricts or wraps an agent's own tools. Litria's own review is opt-in, arriving with the track T surface. Revalidation still applies: an edit lands only on the revision the agent read, all or none, unsaved and undoable.)*
 
 Start with `text.edit` and `file.create`. Edits require an expected document revision; creation requires absence and never becomes an implicit overwrite. An editor-owned compare-and-apply operation checks the live model at the actual mutation boundary. Saved writes additionally validate the disk baseline. Buffer application is not a successful save, and saving pre-existing human edits must be included in the approved effect.
 

@@ -170,9 +170,54 @@
       "description": "Where a plan stands. A reader that meets an unfamiliar value must not\nassume the plan was applied.",
       "oneOf": [
         {
-          "description": "Waiting for a person to approve or reject it.",
+          "description": "Ready: `litria_changes_apply` applies it.",
+          "type": "string",
+          "const": "prepared"
+        },
+        {
+          "description": "Waiting for a person to approve or reject it. Only when Litria is set\nto review agent edits itself (off by default).",
           "type": "string",
           "const": "pendingReview"
+        },
+        {
+          "description": "Approved, and being applied now.",
+          "type": "string",
+          "const": "applying"
+        },
+        {
+          "description": "Applied to the editor: the documents hold the changes, unsaved.",
+          "type": "string",
+          "const": "applied"
+        },
+        {
+          "description": "A person rejected it. Nothing was applied.",
+          "type": "string",
+          "const": "rejected"
+        },
+        {
+          "description": "Nobody answered within ten minutes. Nothing was applied.",
+          "type": "string",
+          "const": "expired"
+        },
+        {
+          "description": "A document changed after the plan was prepared, so nothing was applied.\nPropose again against the current text.",
+          "type": "string",
+          "const": "conflict"
+        },
+        {
+          "description": "Applying could not reach the editor. Nothing was applied.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Applying reached the editor but its outcome is unknown (it did not\nanswer in time). Check the documents; the plan is never retried.",
+          "type": "string",
+          "const": "needsReview"
+        },
+        {
+          "description": "Not a plan of this connection and workspace, or one long expired.",
+          "type": "string",
+          "const": "unknown"
         }
       ]
     },
@@ -180,7 +225,7 @@
       "type": "object",
       "properties": {
         "expiresInSeconds": {
-          "description": "Seconds until an unanswered plan expires.",
+          "description": "Seconds until the plan expires if it is not applied.",
           "type": "integer",
           "format": "uint32",
           "maximum": 600,

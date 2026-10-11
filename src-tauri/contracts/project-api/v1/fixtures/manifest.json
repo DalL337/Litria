@@ -630,6 +630,74 @@
       "expect": "reject",
       "note": "Unknown fields are rejected (saving is not part of this operation).",
       "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_apply.result.json",
+      "operation": "litria_changes_apply",
+      "message": "result",
+      "expect": "accept",
+      "note": "An applied plan: each document with its new revision, in the editor (effect: buffer), exactly as Rust emits it (asserted in fixtures.rs)."
+    },
+    {
+      "file": "changes_apply.result.unknown-state.json",
+      "operation": "litria_changes_apply",
+      "message": "result",
+      "expect": "reject",
+      "errorCode": "invalidParams",
+      "note": "An unfamiliar plan state must never read as a known one (least of all applied)."
+    },
+    {
+      "file": "changes_apply.result.pending.json",
+      "operation": "litria_changes_apply",
+      "message": "result",
+      "expect": "accept",
+      "note": "A plan awaiting review: no effect and no changes (both omitted)."
+    },
+    {
+      "file": "changes_apply.request.minimal.json",
+      "operation": "litria_changes_apply",
+      "message": "request",
+      "expect": "accept",
+      "note": "A plan id as litria_changes_prepare returned it."
+    },
+    {
+      "file": "changes_apply.request.unminted-id.json",
+      "operation": "litria_changes_apply",
+      "message": "request",
+      "expect": "accept",
+      "note": "Any id of acceptable length is answered (state unknown), never refused as a request error."
+    },
+    {
+      "file": "changes_apply.request.empty-id.json",
+      "operation": "litria_changes_apply",
+      "message": "request",
+      "expect": "reject",
+      "note": "planId is not empty.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_apply.request.id-over-length.json",
+      "operation": "litria_changes_apply",
+      "message": "request",
+      "expect": "reject",
+      "note": "planId is at most 128 characters.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_apply.request.missing-id.json",
+      "operation": "litria_changes_apply",
+      "message": "request",
+      "expect": "reject",
+      "note": "planId is required.",
+      "errorCode": "invalidParams"
+    },
+    {
+      "file": "changes_apply.request.unknown-field.json",
+      "operation": "litria_changes_apply",
+      "message": "request",
+      "expect": "reject",
+      "note": "Unknown fields are rejected: a request cannot approve its own plan.",
+      "errorCode": "invalidParams"
     }
   ]
 }

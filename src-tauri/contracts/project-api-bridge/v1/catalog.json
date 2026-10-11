@@ -46,6 +46,13 @@
       "owner": "EditorDomain",
       "reply": "editor.checkChanges.reply.schema.json",
       "request": "editor.checkChanges.request.schema.json"
+    },
+    {
+      "description": "Apply an approved plan's text changes to the editor session, all or none: every change is checked against the latest text and, only if every one is still ready, all are applied in the same turn (unsaved, undoable). Answers applied with each document's new revision, or not applied with what each change found.",
+      "name": "editor.applyChanges",
+      "owner": "EditorDomain",
+      "reply": "editor.applyChanges.reply.schema.json",
+      "request": "editor.applyChanges.request.schema.json"
     }
   ],
   "replyCommand": "project_api_bridge_reply",
