@@ -182,6 +182,8 @@ Standard checks pass. The security review and the adversarial check are recorded
 > - Linux: the endpoint's real files in a `rust:1-bookworm` container (Docker Desktop's WSL2 kernel 6.6): 14 pass, including the `0700` directory and the taken name.
 > - Guards 7/7; `npm run test:domains` 1626/1626; `npm audit` 0; `cargo audit` unchanged (the four `rustls` advisories tracked separately, 9 allowed warnings).
 > - `cargo build --release` 0 warnings. The release binary is GUI-subsystem (PE header read: subsystem 2; the debug binary is 3, console).
+> - CI found one more defect, on macos-14: macOS refuses to set a socket's timeout once the socket can no longer receive (`setsockopt` → `EINVAL` after the peer closes or after `cancel`), while Linux allows it. The Unix endpoint set the timeout before every read, so a closed peer read as an error instead of the end, and seven tests failed. Fixed in the commit after the docs commit (the read goes ahead and returns at once); all `mcp_connection` tests then pass on macos-14 and ubuntu-22.04.
+> - The one macOS failure left is not T1a's: T2a's `a_shell_exiting_by_itself_is_reported_with_its_code_after_its_output` ("timed out waiting for the exit watcher") fails on `main`'s own CI for the T2a merge too (board card `macos-terminal-exit-watcher-test`).
 >
 > **Live pass** (Windows, a `tauri dev` build of the branch, scratch app data, throwaway projects; a scripted client spawning the real helper binary, as an agent does):
 > - The handshake: first answer in 23 ms; 2025-11-25 and 2025-06-18 each negotiated; the 8 tools in catalog order, with no `resultType`; `server/discover` and `tools/call` refused at once; the helper exits 0 when stdin closes; no helper process remains.
