@@ -45,6 +45,7 @@ export function useTopDrawers({
           <DrawerContentTerminal
             terminalDomain={terminalDomain}
             projectId={projectInstance?.instanceId ?? null}
+            hasFolder={Boolean(projectInstance?.rootPath)}
           />
         )
       },
@@ -67,6 +68,7 @@ export function useTopDrawers({
     [
       terminalDomain,
       projectInstance?.instanceId,
+      projectInstance?.rootPath,
       buildLogDomain,
       buildLogActions,
       logsTab

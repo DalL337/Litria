@@ -173,6 +173,9 @@ export default function TerminalRenderer({
         const bytes = event.data.chunk.length;
         pendingRef.current += bytes;
         terminal.write(event.data.chunk, () => {
+          // xterm still runs a disposed screen's queued writes; they must not
+          // count against the screen that replaced it.
+          if (terminalRef.current !== terminal) return;
           pendingRef.current -= bytes;
           if (pausedRef.current && pendingRef.current <= RESUME_BELOW_BYTES) {
             pausedRef.current = false;

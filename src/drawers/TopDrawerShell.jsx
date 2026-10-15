@@ -53,7 +53,10 @@ function TopDrawerShell({ height = 300 }) {
         aria-hidden="true"
       />
 
-      <aside className={`top-drawer-panel ${isOpen ? 'is-open' : ''}`}>
+      {/* Closed, the panel is only slid away: inert keeps its controls and
+          any session screen out of the tab order, so typing can never reach
+          a terminal the person cannot see. */}
+      <aside className={`top-drawer-panel ${isOpen ? 'is-open' : ''}`} inert={!isOpen}>
         <div className="top-drawer-header">
           <div className="top-drawer-title">
             {activeDrawer ? activeDrawer.label : ''}

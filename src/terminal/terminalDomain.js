@@ -12,6 +12,10 @@ import {
 } from './terminalStorage.js';
 
 const DEFAULT_SIZE = { cols: 80, rows: 24 };
+/** A session that printed within this long counts as busy. Rust sees child
+ * processes only; work inside the shell process itself (a PowerShell loop
+ * or cmdlet) shows up as output instead. Silent in-process work is missed. */
+const RECENT_OUTPUT_MS = 2000;
 /** A command a pill starts a session with is typed after the shell's first
  * output (its prompt); this is the fallback if no output comes. */
 const INITIAL_INPUT_FALLBACK_MS = 3000;
@@ -30,11 +34,12 @@ const EMPTY_PROJECT = Object.freeze({ tabs: Object.freeze([]), viewedKey: null }
  * resolves. A tab is `starting`, `running` or `ended`. An ended tab stays
  * until the person removes it, so they can read what the program printed.
  *
- * Starts are refused unless a project is current. The lifecycle hook sets
- * the current project; the switch coordinator clears it before it ends the
- * old project's sessions, so nothing can start in a project that is closing.
+ * Starts are refused unless a project is current. The switch coordinator
+ * clears the current project before it ends the old project's sessions, so
+ * nothing can start in a project that is closing, and sets it once the next
+ * one is open; the lifecycle hook keeps it in step otherwise.
  */
-export function createTerminalDomain({ adapters = {}, setTimer = setTimeout } = {}) {
+export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now = () => Date.now() } = {}) {
   const io = {
     spawn: adapters.spawn ?? terminalSpawn,
     end: adapters.end ?? terminalSessionEnd,
@@ -125,6 +130,7 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout } = 
   const onStreamEvent = (tab, event) => {
     if (event?.event === 'Output') {
       tab.sawOutput = true;
+      tab.lastOutputAt = now();
       writeInitialInput(tab);
     } else if (event?.event === 'Exited') {
       if (!state.tabs.has(tab.key) || tab.status === 'ended') return;
@@ -151,7 +157,8 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout } = 
       error: null,
       stream: null,
       pendingInput: initialInput,
-      sawOutput: false
+      sawOutput: false,
+      lastOutputAt: 0
     };
     state.tabs.set(key, tab);
     state.order.set(project.id, [...(state.order.get(project.id) ?? []), key]);
@@ -204,8 +211,9 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout } = 
     const busyIds = response.ok && Array.isArray(response.data)
       ? new Set(response.data)
       : new Set(tabs.map((tab) => tab.sessionId));
+    const recent = now() - RECENT_OUTPUT_MS;
     return tabs
-      .filter((tab) => busyIds.has(tab.sessionId))
+      .filter((tab) => busyIds.has(tab.sessionId) || tab.lastOutputAt > recent)
       .map((tab) => ({ key: tab.key, label: tab.label }));
   };
 
@@ -217,12 +225,18 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout } = 
 
   return {
     commands: {
-      /** The open project, or null. Starts are refused without one. */
+      /** The open project, or null (no folder: an untitled file). Starts are
+       * refused without one. */
       setCurrentProject(project) {
-        state.current = project?.id && project?.root ? { id: project.id, root: project.root } : null;
+        const next = project?.id && project?.root ? { id: project.id, root: project.root } : null;
+        if (next?.id === state.current?.id && next?.root === state.current?.root) return;
+        state.current = next;
+        notify();
       },
       clearCurrentProject() {
+        if (!state.current) return;
         state.current = null;
+        notify();
       },
       startSession,
       /** The person's open gesture (the terminal rail): a project with no tabs

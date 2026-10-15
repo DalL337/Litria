@@ -5,6 +5,7 @@ import TerminalRenderer from '../components/TerminalRenderer';
 const NO_TABS = { tabs: [], viewedKey: null };
 const subscribeNothing = () => () => {};
 const getNoTabs = () => NO_TABS;
+const getNoProject = () => null;
 
 /**
  * The terminal drawer: a view of the open project's terminal sessions.
@@ -20,13 +21,18 @@ const getNoTabs = () => NO_TABS;
  * out of the clipped stack, so xterm also stops rendering them while their
  * boxes keep their size.
  */
-function DrawerContentTerminal({ terminalDomain, projectId, isVisible = false }) {
+function DrawerContentTerminal({ terminalDomain, projectId, hasFolder = true, isVisible = false }) {
   const subscribe = terminalDomain?.subscribe ?? subscribeNothing;
   const getSnapshot = useCallback(
     () => (terminalDomain && projectId ? terminalDomain.selectors.getProject(projectId) : NO_TABS),
     [terminalDomain, projectId]
   );
+  const getCurrentProjectId = useCallback(
+    () => terminalDomain.selectors.getCurrentProjectId(),
+    [terminalDomain]
+  );
   const { tabs, viewedKey } = useSyncExternalStore(subscribe, terminalDomain ? getSnapshot : getNoTabs);
+  const currentProjectId = useSyncExternalStore(subscribe, terminalDomain ? getCurrentProjectId : getNoProject);
 
   if (!projectId || !terminalDomain) {
     return (
@@ -35,7 +41,17 @@ function DrawerContentTerminal({ terminalDomain, projectId, isVisible = false })
       </div>
     );
   }
+  if (!hasFolder) {
+    // An untitled file has no folder for a shell to run in.
+    return (
+      <div className="top-drawer-empty">
+        Save this file to a folder to use the terminal
+      </div>
+    );
+  }
 
+  // Only the current project can start a session: never one that is closing.
+  const canStart = currentProjectId === projectId;
   const startNew = () => {
     terminalDomain.commands.startSession();
   };
@@ -52,23 +68,27 @@ function DrawerContentTerminal({ terminalDomain, projectId, isVisible = false })
             projectId={projectId}
           />
         ))}
-        <button
-          type="button"
-          className="terminal-tab-new"
-          onClick={startNew}
-          title="New terminal"
-          aria-label="New terminal"
-        >
-          <Plus size={13} />
-        </button>
+        {canStart && (
+          <button
+            type="button"
+            className="terminal-tab-new"
+            onClick={startNew}
+            title="New terminal"
+            aria-label="New terminal"
+          >
+            <Plus size={13} />
+          </button>
+        )}
       </div>
       <div className="terminal-stack">
         {tabs.length === 0 ? (
           <div className="top-drawer-empty terminal-empty">
             <span>No terminal is open in this project.</span>
-            <button type="button" className="terminal-empty-new" onClick={startNew}>
-              <Plus size={13} /> New terminal
-            </button>
+            {canStart && (
+              <button type="button" className="terminal-empty-new" onClick={startNew}>
+                <Plus size={13} /> New terminal
+              </button>
+            )}
           </div>
         ) : (
           tabs.map((tab) => (
@@ -121,10 +141,15 @@ function TerminalTab({ tab, isViewed, terminalDomain, projectId }) {
   const [renaming, setRenaming] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const inputRef = useRef(null);
+  // Escape cancels: the blur that can follow when the box goes away must not
+  // commit what was typed.
+  const renameCancelledRef = useRef(false);
   const ended = tab.status === 'ended';
 
   useEffect(() => {
-    if (renaming) inputRef.current?.select();
+    if (!renaming) return;
+    renameCancelledRef.current = false;
+    inputRef.current?.select();
   }, [renaming]);
 
   const select = () => terminalDomain.commands.setViewedSession(projectId, tab.key);
@@ -168,12 +193,17 @@ function TerminalTab({ tab, isViewed, terminalDomain, projectId }) {
           defaultValue={tab.label}
           aria-label="Terminal name"
           onClick={(event) => event.stopPropagation()}
-          onBlur={(event) => commitRename(event.currentTarget.value)}
+          onBlur={(event) => {
+            if (!renameCancelledRef.current) commitRename(event.currentTarget.value);
+          }}
           onKeyDown={(event) => {
             // Escape cancels the rename only; it must not close the drawer.
             event.stopPropagation();
             if (event.key === 'Enter') commitRename(event.currentTarget.value);
-            if (event.key === 'Escape') setRenaming(false);
+            if (event.key === 'Escape') {
+              renameCancelledRef.current = true;
+              setRenaming(false);
+            }
           }}
         />
       ) : (
@@ -187,7 +217,7 @@ function TerminalTab({ tab, isViewed, terminalDomain, projectId }) {
           {tab.label}
         </span>
       )}
-      {confirmingEnd ? (
+      {confirmingEnd && !ended ? (
         <span className="terminal-tab-confirm" onClick={(event) => event.stopPropagation()}>
           <span>End it?</span>
           <button

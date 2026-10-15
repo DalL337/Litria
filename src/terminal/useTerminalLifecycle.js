@@ -38,14 +38,15 @@ export function useTerminalLifecycle({ projectInstance, terminalDomain, showToas
   }, [instanceId, rootPath, terminalDomain]);
 
   // A page reload ends every session (Rust does it as the page starts to
-  // load). Say so once; the ref survives StrictMode's double effect.
+  // load). Say so once; the ref survives StrictMode's double effect. It
+  // stays until dismissed: the splash covers the launcher as it loads.
   const reportedRef = useRef(false);
   useEffect(() => {
     if (!terminalDomain || reportedRef.current) return;
     reportedRef.current = true;
     terminalDomain.commands.takeReloadReport().then((count) => {
       const message = reloadReportMessage(count);
-      if (message) showToast?.(message, { severity: 'info' });
+      if (message) showToast?.(message, { severity: 'info', duration: 0 });
     });
   }, [terminalDomain, showToast]);
 }
