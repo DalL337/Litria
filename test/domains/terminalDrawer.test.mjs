@@ -69,8 +69,8 @@ function fakeBackend() {
   return backend;
 }
 
-function Harness({ terminalDomain, pillDomain }) {
-  const drawers = useTopDrawers({ terminalDomain, projectInstance: PROJECT });
+function Harness({ terminalDomain, pillDomain, projectInstance }) {
+  const drawers = useTopDrawers({ terminalDomain, projectInstance });
   return createElement(
     TopDrawerProvider,
     { drawers },
@@ -81,17 +81,17 @@ function Harness({ terminalDomain, pillDomain }) {
 
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
-async function mount() {
+async function mount({ project = PROJECT } = {}) {
   globalThis.__TERMINAL_VIEWS__ = [];
   const backend = fakeBackend();
   const terminalDomain = createTerminalDomain({ adapters: backend.adapters, setTimer: () => {} });
-  terminalDomain.commands.setCurrentProject({ id: PROJECT.instanceId, root: PROJECT.rootPath });
+  terminalDomain.commands.setCurrentProject({ id: project.instanceId, root: project.rootPath });
   const pillDomain = createPillDomain();
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(createElement(StrictMode, null, createElement(Harness, { terminalDomain, pillDomain })));
+    root.render(createElement(StrictMode, null, createElement(Harness, { terminalDomain, pillDomain, projectInstance: project })));
   });
   const query = (selector) => host.querySelector(selector);
   const byTitle = (title) => host.querySelector(`button[title="${title}"]`);
@@ -105,6 +105,7 @@ async function mount() {
     byTitle,
     byLabel,
     isOpen: () => Boolean(query('.top-drawer-panel.is-open')),
+    isInert: () => query('.top-drawer-panel').hasAttribute('inert'),
     tabs: () => [...host.querySelectorAll('.terminal-tab')],
     views: () => globalThis.__TERMINAL_VIEWS__.filter((v) => v.mounted),
     lifetimeCalls: () => backend.calls.filter(([op]) => LIFETIME_CALLS.has(op)),
@@ -225,9 +226,16 @@ test('Escape in the rename box cancels the rename and leaves the drawer open', a
   });
   const input = ui.query('.terminal-tab-rename');
   assert.ok(input, 'rename box shown');
-  await key(input, 'Escape');
+  input.value = 'renamed';
+  // Escape, then the blur a browser can fire as the box is removed, before
+  // React has re-rendered: neither may commit what was typed.
+  await act(async () => {
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    input.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  });
+  await settle();
   assert.equal(ui.isOpen(), true);
-  assert.equal(ui.query('.terminal-tab-rename'), null);
+  assert.ok(!ui.query('.terminal-tab-rename'), 'rename box gone');
   assert.equal(ui.query('.terminal-tab-label').textContent, 'Terminal 1');
   await ui.unmount();
 });
@@ -258,5 +266,67 @@ test('a command pill from another project runs nothing here', async () => {
   });
   await click(ui.query('.pill-notification-body'));
   assert.equal(ui.spawns(), 0);
+  await ui.unmount();
+});
+
+test('closing the drawer from its rail never starts a shell', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('End Terminal 1'));
+  assert.equal(ui.tabs().length, 0);
+  // The rail button closes the open drawer: no tab, but no new shell either.
+  await click(ui.byTitle('Terminal'));
+  assert.equal(ui.isOpen(), false);
+  assert.equal(ui.spawns(), 1, 'a close is not an open');
+  // Opening it again is the person asking for a terminal.
+  await click(ui.byTitle('Terminal'));
+  assert.equal(ui.spawns(), 2);
+  await ui.unmount();
+});
+
+test('a closed drawer is out of reach of the keyboard', async () => {
+  const ui = await mount();
+  assert.equal(ui.isInert(), true, 'closed: inert');
+  await click(ui.byTitle('Terminal'));
+  assert.equal(ui.isInert(), false, 'open: reachable');
+  await click(ui.byLabel('Close panel'));
+  assert.equal(ui.isInert(), true, 'hidden again: inert, while its session runs on');
+  assert.deepEqual(ui.lifetimeCalls(), []);
+  await ui.unmount();
+});
+
+test('a session that exits while End is being confirmed drops the question', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  ui.backend.busyIds = ['s1'];
+  await click(ui.byLabel('End Terminal 1'));
+  assert.match(ui.host.textContent, /End it?/);
+  await act(async () => {
+    ui.backend.channels[0].emit({ event: 'Exited', data: { exitCode: 0 } });
+  });
+  assert.doesNotMatch(ui.host.textContent, /End it?/);
+  assert.ok(ui.byLabel('Remove Terminal 1'), 'the ended tab can be removed');
+  assert.deepEqual(ui.lifetimeCalls(), []);
+  await ui.unmount();
+});
+
+test('an untitled file says why it has no terminal, and starts none', async () => {
+  const ui = await mount({ project: { instanceId: 'litria-untitled', rootPath: '' } });
+  await click(ui.byTitle('Terminal'));
+  assert.match(ui.host.textContent, /Save this file to a folder to use the terminal/);
+  assert.ok(!ui.byLabel('New terminal'), 'no New terminal');
+  assert.equal(ui.spawns(), 0);
+  await ui.unmount();
+});
+
+test('a project that is closing offers no new terminal', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  assert.ok(ui.byLabel('New terminal'));
+  await act(async () => {
+    ui.terminalDomain.commands.clearCurrentProject();
+  });
+  assert.ok(!ui.byLabel('New terminal'), 'no New terminal');
+  assert.equal(ui.tabs().length, 1, 'its tab still shows until the project ends it');
   await ui.unmount();
 });

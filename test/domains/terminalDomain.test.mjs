@@ -201,8 +201,8 @@ test('ensureSession makes one shell for an empty project, however often it is ca
 
 test('a command session types its command after the first output', async () => {
   const backend = fakeBackend();
-  const domain = domainWith(backend);
   const timers = [];
+  const domain = domainWith(backend, { setTimer: (fn, ms) => timers.push([fn, ms]) });
   const pending = domain.commands.startSession({ label: 'npm install', initialInput: 'npm install\r' });
   backend.spawns[0].resolve();
   const result = await pending;
@@ -213,7 +213,11 @@ test('a command session types its command after the first output', async () => {
   backend.spawns[0].channel.emit(output('more'));
   assert.equal(backend.calls.filter(([op]) => op === 'input').length, 1, 'typed once');
   assert.equal(result.ok, true);
-  assert.deepEqual(timers, []);
+  // No output had come when the start resolved, so the fallback was armed.
+  // Firing it after the prompt typed the command types nothing more.
+  assert.equal(timers.length, 1);
+  timers[0][0]();
+  assert.equal(backend.calls.filter(([op]) => op === 'input').length, 1, 'the fallback is a no-op now');
 });
 
 test('a command session whose prompt came during the start types at once', async () => {
@@ -303,6 +307,21 @@ test('busySessions maps the busy session ids to the project tabs', async () => {
   assert.equal(await domain.commands.isBusy(b.key), true);
 });
 
+test('a session printing right now counts as busy, even with no child process', async () => {
+  // A PowerShell loop runs inside the shell process: Rust's child-process
+  // check sees nothing, but the output gives it away (live pass, 2026-10-14).
+  const backend = fakeBackend();
+  let clock = 10_000;
+  const domain = domainWith(backend, { now: () => clock });
+  const a = await started(domain, backend);
+  await started(domain, backend);
+  backend.spawns[0].channel.emit(output('Tuesday, 14 October 2026 21:00:00'));
+  clock += 1500;
+  assert.deepEqual(await domain.commands.busySessions('p1'), [{ key: a.key, label: 'Terminal 1' }]);
+  clock += 1000;
+  assert.deepEqual(await domain.commands.busySessions('p1'), [], 'quiet for 2 s: idle again');
+});
+
 test('when the busy check fails, every running tab counts as busy', async () => {
   // Unknown must lead to the question before a switch, never to ending a
   // running program unasked.
@@ -344,6 +363,25 @@ test('the snapshot is stable until something changes', async () => {
   backend.spawns[0].channel.emit(output('lots of output'));
   assert.equal(domain.selectors.getSnapshot(), settled);
   assert.equal(notified, notifiedBefore);
+});
+
+test('the current project can be watched; it notifies only when it changes', () => {
+  const domain = createTerminalDomain({ adapters: fakeBackend().adapters });
+  let notified = 0;
+  domain.subscribe(() => { notified += 1; });
+  domain.commands.setCurrentProject({ id: 'p1', root: '/projects/p1' });
+  assert.equal(domain.selectors.getCurrentProjectId(), 'p1');
+  assert.equal(notified, 1);
+  domain.commands.setCurrentProject({ id: 'p1', root: '/projects/p1' });
+  assert.equal(notified, 1, 'the same project again changes nothing');
+  domain.commands.clearCurrentProject();
+  domain.commands.clearCurrentProject();
+  assert.equal(domain.selectors.getCurrentProjectId(), null);
+  assert.equal(notified, 2);
+  // A project with no folder (an untitled file) is no current project.
+  domain.commands.setCurrentProject({ id: 'untitled', root: '' });
+  assert.equal(domain.selectors.getCurrentProjectId(), null);
+  assert.equal(notified, 2);
 });
 
 test('takeReloadReport returns the count Rust kept', async () => {
