@@ -610,7 +610,16 @@ fn spawn_writer_thread(
                             break;
                         }
                     }
-                    Err(RecvTimeoutError::Disconnected) => break,
+                    // Every sender is gone, and still only End's release
+                    // closes the input: on Unix the close types an EOF, and a
+                    // shell that exits on it hides its background jobs from
+                    // End's process-group capture. Both end paths release.
+                    Err(RecvTimeoutError::Disconnected) => {
+                        if released.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        thread::sleep(WRITER_POLL);
+                    }
                 }
             }
             // Dropping the writer closes the input side. On Unix its Drop also
@@ -797,7 +806,6 @@ impl PtyInner {
         } else {
             self.wait_for_exit(Duration::ZERO)
         };
-        drop(control);
 
         if matches!(state, ProcessState::Running) {
             self.stop_process_tree();
@@ -808,7 +816,9 @@ impl PtyInner {
             state = self.wait_for_exit(KILL_WAIT);
         }
 
+        // Only now may the input close (see the writer thread).
         self.released.store(true, Ordering::SeqCst);
+        drop(control);
         self.close_and_join();
         state.code()
     }
@@ -1268,6 +1278,46 @@ mod tests {
     }
 
     #[test]
+    fn the_writer_holds_the_input_open_until_released_even_with_no_sender_left() {
+        // On Unix, dropping the PTY writer types "\n" + EOF: a shell at its
+        // prompt exits on it, and its background jobs stop being its children
+        // before End can find them (CI, ubuntu-22.04, 2026-10-15).
+        struct DropFlag(Arc<AtomicBool>);
+        impl Write for DropFlag {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (queue, received) = mpsc::sync_channel::<WriterMsg>(INPUT_QUEUE);
+        let released = Arc::new(AtomicBool::new(false));
+        let handle = spawn_writer_thread(
+            Box::new(DropFlag(Arc::clone(&dropped))),
+            received,
+            Arc::new(AtomicBool::new(true)),
+            Arc::clone(&released),
+            "test",
+        )
+        .unwrap();
+        // End took the last sender: every sender is gone.
+        drop(queue);
+        thread::sleep(WRITER_POLL * 4);
+        assert!(!dropped.load(Ordering::SeqCst), "the input stays open until End releases it");
+        assert!(!handle.is_finished());
+        released.store(true, Ordering::SeqCst);
+        handle.join().unwrap();
+        assert!(dropped.load(Ordering::SeqCst), "released: the input closes");
+    }
+
+    #[test]
     fn the_writer_writes_queued_input_in_order() {
         let written = Arc::new(Mutex::new(Vec::new()));
         struct Recorder(Arc<Mutex<Vec<u8>>>);
@@ -1287,7 +1337,7 @@ mod tests {
             Box::new(Recorder(Arc::clone(&written))),
             received,
             Arc::clone(&closing),
-            released,
+            Arc::clone(&released),
             "test",
         )
         .unwrap();
@@ -1296,6 +1346,8 @@ mod tests {
         }
         queue.send(WriterMsg::Reply(CURSOR_REPLY)).unwrap();
         drop(queue);
+        // Only End's release ends the writer (see the test above).
+        released.store(true, Ordering::SeqCst);
         handle.join().unwrap();
         assert_eq!(written.lock().unwrap().as_slice(), b"abc\x1b[1;1R");
     }
