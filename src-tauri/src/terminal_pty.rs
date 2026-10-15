@@ -338,6 +338,13 @@ fn de_verbatim(path: &std::path::Path) -> std::path::PathBuf {
 /// Windows: the console host keeps running while it holds its reference
 /// handle (the vendored crate never releases it), so the output pipe breaks
 /// only when the pseudoconsole is closed.
+///
+/// On macOS a self-exit is noticed only once the shell's output has been
+/// read. The shell is its terminal's controlling process, and XNU drains that
+/// terminal's output before such a process can finish exiting (`proc_exit` →
+/// `ttywait`, no timeout by default); `ps` shows it as `E`, trying to exit.
+/// So while the view has paused the output, the exit waits; when the view
+/// resumes, the output is read and the exit follows. Nothing is lost.
 pub(crate) fn spawn_pty(
     session_id: &str,
     validated: &crate::execution_policy::ValidatedExecutionBoundary,
@@ -1661,53 +1668,6 @@ mod tests {
                 assert!(seen.output.contains("END-MARKER"), "the last output arrived");
                 assert_eq!(seen.exits, vec![Some(3)]);
                 assert_eq!(seen.order.last(), Some(&"E"), "the exit marker comes last");
-            });
-        }
-
-        /// TEMPORARY DIAGNOSTIC (one CI run on the fix branch; removed before
-        /// the pull request): where a self-exiting shell waits on macOS while
-        /// the view is paused. It always fails, so CI prints its report.
-        #[cfg(target_os = "macos")]
-        #[test]
-        fn diag_where_a_paused_self_exit_waits() {
-            with_watchdog(|| {
-                let ps = |pid: u32| {
-                    std::process::Command::new("ps")
-                        .args(["-o", "pid=,ppid=,stat=,wchan=,comm=", "-p", &pid.to_string()])
-                        .output()
-                        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
-                        .unwrap_or_else(|error| format!("ps failed: {error}"))
-                };
-                let exited = Arc::new(AtomicBool::new(false));
-                let (session, seen) = spawn(Arc::clone(&exited));
-                wait_quiet(&seen, Duration::from_millis(500));
-                let pid = session.inner.child.lock().unwrap().process_id().unwrap_or(0);
-                let before = ps(pid);
-                session.pause_output();
-                park_reader(&session, &seen);
-                type_line(&session, "echo END''-MARKER; exit 3");
-                thread::sleep(Duration::from_secs(2));
-                let held_exited = exited.load(Ordering::SeqCst);
-                let held_has_marker = output_of(&seen).contains("END-MARKER");
-                let held_ps = ps(pid);
-                let resumed = Instant::now();
-                session.resume_output();
-                let mut exit_after = None;
-                while resumed.elapsed() < Duration::from_secs(10) {
-                    if exited.load(Ordering::SeqCst) {
-                        exit_after = Some(resumed.elapsed());
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                let code = session.end();
-                let tail: String = output_of(&seen).chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
-                panic!(
-                    "DIAG shell={:?} pid={pid} ps_before={before:?} held_exited={held_exited} \
-                     held_has_marker={held_has_marker} ps_while_paused={held_ps:?} \
-                     exit_after_resume={exit_after:?} end_code={code:?} output_tail={tail:?}",
-                    std::env::var("SHELL").ok()
-                );
             });
         }
 
