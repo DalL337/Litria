@@ -514,7 +514,8 @@ function App() {
 
   useTerminalLifecycle({
     projectInstance,
-    terminalDomain
+    terminalDomain,
+    showToast
   });
 
   // Union of both panes' active files (ADR-017): with a split showing a .py
@@ -1317,7 +1318,6 @@ function App() {
 
   const topDrawers = useTopDrawers({
     terminalDomain,
-    pillDomain,
     projectInstance,
     buildLogDomain,
     buildLogActions,
@@ -1352,6 +1352,7 @@ function App() {
     clearSelection: selectionDomain.commands.clear,
     projectInstance,
     terminalDomain,
+    pillDomain,
     languageSupportDomain,
     showToast,
     setConnections: connections.setConnections,

@@ -1,51 +1,95 @@
-let lastTerminalStorageError = null;
-
 const ERROR_CATEGORIES = new Set(['AccessDenied', 'InvalidPath', 'Conflict', 'NotFound', 'Internal']);
-const TERMINAL_EVENT_NAMES = {
-  sessionStarted: 'terminal:session-started',
-  output: 'terminal:output',
-  sessionEnded: 'terminal:session-ended',
-  processComplete: 'terminal:process-complete',
-  error: 'terminal:error'
+
+const TAURI_UNAVAILABLE = {
+  category: 'Internal',
+  code: 'terminal.tauri_unavailable',
+  message: 'Tauri invoke bridge is unavailable.'
 };
 
-async function getInvoke() {
+/** How much recent output each session keeps for a view that (re)attaches,
+ * in UTF-16 code units: the unit xterm counts and the flow control uses. */
+export const REPLAY_LIMIT = 1024 * 1024;
+
+/** Written first when older output fell out of the replay: a full reset, so
+ * the replay never starts inside an escape sequence's leftovers, then a note. */
+const TRUNCATED_PREAMBLE = '\x1bc\x1b[90m[earlier output not kept]\x1b[0m\r\n';
+
+async function getTauriCore() {
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke;
+    return await import('@tauri-apps/api/core');
   } catch {
     return null;
   }
 }
 
 /**
- * Buffer PTY events from the moment the channel exists. Tauri's Channel
- * constructor installs a NO-OP handler — in-order messages that arrive
- * before a consumer assigns `onmessage` are consumed and silently dropped
- * (its pending queue only covers out-of-order arrivals). The shell's first
- * burst (banner + prompt) lands in exactly that gap: the PTY spawns during
- * `invoke` but TerminalRenderer only attaches after React state propagates.
- * The old Win10 conhost masked this by stalling its first paint on an
- * unanswered cursor query; the sideloaded ConPTY host (PR #106) paints
- * immediately and exposed it as a blank terminal.
+ * The event stream of one terminal session.
+ *
+ * Buffering starts the moment the channel exists. Tauri's Channel constructor
+ * installs a NO-OP handler — in-order messages that arrive before a consumer
+ * assigns `onmessage` are consumed and silently dropped (its pending queue only
+ * covers out-of-order arrivals). The shell's first burst (banner + prompt)
+ * lands in exactly that gap: the PTY spawns during `invoke`. The old Win10
+ * conhost masked this by stalling its first paint on an unanswered cursor
+ * query; the sideloaded ConPTY host (PR #106) paints immediately and exposed
+ * it as a blank terminal.
+ *
+ * Two kinds of listener (track T slice T2a):
+ * - `onEvent`, the domain's tap, sees every event as it arrives, whether or
+ *   not a view is attached. The domain learns a session ended even while no
+ *   view shows it.
+ * - One view at a time subscribes. It first gets a replay, then live events.
+ *   The replay does not drain: a view that mounts twice (StrictMode in
+ *   development) or remounts gets the same screen again. Recent output is kept
+ *   as whole chunks up to `limit`; once older chunks fall out, the replay
+ *   starts with a reset and a note. Exited is kept apart and replays last.
  *
  * Pure over an injected channel-like object so it stays node-testable.
  */
-export function createTerminalEventStream(channel) {
-  const backlog = [];
-  const buffer = (event) => { backlog.push(event); };
-  channel.onmessage = buffer;
+export function createTerminalEventStream(channel, { onEvent = null, limit = REPLAY_LIMIT } = {}) {
+  const ring = [];
+  let size = 0;
+  let truncated = false;
+  let exited = null;
+  let view = null;
+
+  const keep = (event) => {
+    if (event?.event === 'Output' && typeof event.data?.chunk === 'string') {
+      ring.push(event);
+      size += event.data.chunk.length;
+      while (size > limit && ring.length > 1) {
+        size -= ring.shift().data.chunk.length;
+        truncated = true;
+      }
+    } else if (event?.event === 'Exited') {
+      exited = event;
+    }
+  };
+
+  channel.onmessage = (event) => {
+    keep(event);
+    if (typeof onEvent === 'function') {
+      try {
+        onEvent(event);
+      } catch {
+        // A failing tap must never stop delivery to the view.
+      }
+    }
+    if (view) view(event);
+  };
+
   return {
     channel,
+    /** Replays, then attaches. Returns an unsubscribe that only detaches this
+     * handler, so a late cleanup never detaches a newer view. */
     subscribe(handler) {
-      // Drain-then-attach: everything that arrived early replays in order.
-      backlog.splice(0).forEach((event) => handler(event));
-      channel.onmessage = handler;
-    },
-    unsubscribe() {
-      // Re-buffer instead of nulling — a null handler throws on the next
-      // message, and buffering lets a remounting consumer catch up.
-      channel.onmessage = buffer;
+      if (truncated) handler({ event: 'Output', data: { chunk: TRUNCATED_PREAMBLE } });
+      for (const event of ring) handler(event);
+      if (exited) handler(exited);
+      view = handler;
+      return () => {
+        if (view === handler) view = null;
+      };
     }
   };
 }
@@ -63,58 +107,32 @@ function normalizeCommandError(error, fallbackCode, fallbackMessage) {
       : fallbackMessage;
     return { category, code, message };
   }
-  if (error instanceof Error) {
-    return {
-      category: 'Internal',
-      code: fallbackCode,
-      message: error.message || fallbackMessage
-    };
-  }
   return {
     category: 'Internal',
     code: fallbackCode,
-    message: fallbackMessage
+    message: typeof error === 'string' && error.trim() ? error.trim() : fallbackMessage
   };
 }
 
 async function invokeTerminal(command, payload, fallbackCode, fallbackMessage) {
-  const invoke = await getInvoke();
-  if (!invoke) {
-    const error = {
-      category: 'Internal',
-      code: 'terminal.tauri_unavailable',
-      message: 'Tauri invoke bridge is unavailable.'
-    };
-    lastTerminalStorageError = error;
-    return { ok: false, error };
-  }
-
+  const core = await getTauriCore();
+  if (!core) return { ok: false, error: TAURI_UNAVAILABLE };
   try {
-    const data = await invoke(command, payload);
-    lastTerminalStorageError = null;
+    const data = await core.invoke(command, payload);
     return { ok: true, data };
   } catch (error) {
-    const normalized = normalizeCommandError(error, fallbackCode, fallbackMessage);
-    lastTerminalStorageError = normalized;
-    return { ok: false, error: normalized };
+    return { ok: false, error: normalizeCommandError(error, fallbackCode, fallbackMessage) };
   }
 }
 
-export async function terminalSessionStart(projectId, projectRoot, executable = null) {
-  return invokeTerminal(
-    'terminal_session_start',
-    { projectId, projectRoot, executable },
-    'terminal.session_start.failed',
-    'Failed to start terminal session.'
-  );
-}
-
-export async function terminalSpawn(projectId, projectRoot, cols, rows, executable = null) {
+/** Starts a shell session. The stream exists before `invoke`, so the shell's
+ * first output is never lost; `onEvent` is the domain's tap. */
+export async function terminalSpawn({ projectId, projectRoot, cols, rows, executable = null, onEvent = null }) {
+  const core = await getTauriCore();
+  if (!core) return { ok: false, error: TAURI_UNAVAILABLE };
   try {
-    const { invoke, Channel } = await import('@tauri-apps/api/core');
-    // Wrap BEFORE invoke — the PTY starts writing during the spawn call.
-    const stream = createTerminalEventStream(new Channel());
-    const data = await invoke('terminal_spawn', {
+    const stream = createTerminalEventStream(new core.Channel(), { onEvent });
+    const data = await core.invoke('terminal_spawn', {
       projectId,
       projectRoot,
       executable,
@@ -122,25 +140,30 @@ export async function terminalSpawn(projectId, projectRoot, cols, rows, executab
       rows,
       onEvent: stream.channel
     });
-    lastTerminalStorageError = null;
-    return { ok: true, data, channel: stream };
+    return { ok: true, data, stream };
   } catch (error) {
-    const normalized = normalizeCommandError(
-      error,
-      'terminal.spawn.failed',
-      'Failed to spawn terminal PTY session.'
-    );
-    lastTerminalStorageError = normalized;
-    return { ok: false, error: normalized };
+    return {
+      ok: false,
+      error: normalizeCommandError(error, 'terminal.spawn.failed', 'Failed to start a terminal.')
+    };
   }
 }
 
-export async function terminalSessionEnd(projectId) {
+export async function terminalSessionEnd(projectId, sessionId) {
   return invokeTerminal(
     'terminal_session_end',
-    { projectId },
+    { projectId, sessionId },
     'terminal.session_end.failed',
-    'Failed to end terminal session.'
+    'Failed to end the terminal session.'
+  );
+}
+
+export async function terminalEndProject(projectId) {
+  return invokeTerminal(
+    'terminal_end_project',
+    { projectId },
+    'terminal.end_project.failed',
+    "Failed to end the project's terminal sessions."
   );
 }
 
@@ -149,7 +172,7 @@ export async function terminalTeardownAll() {
     'terminal_teardown_all',
     {},
     'terminal.teardown_all.failed',
-    'Failed to teardown terminal sessions.'
+    'Failed to end the terminal sessions.'
   );
 }
 
@@ -167,77 +190,42 @@ export async function terminalResize(projectId, sessionId, cols, rows) {
     'terminal_resize',
     { projectId, sessionId, cols, rows },
     'terminal.resize.failed',
-    'Failed to resize terminal session.'
+    'Failed to resize the terminal.'
   );
 }
 
-export async function terminalPause(projectId) {
+export async function terminalPause(projectId, sessionId) {
   return invokeTerminal(
     'terminal_pause',
-    { projectId },
+    { projectId, sessionId },
     'terminal.pause.failed',
     'Failed to pause terminal output.'
   );
 }
 
-export async function terminalResume(projectId) {
+export async function terminalResume(projectId, sessionId) {
   return invokeTerminal(
     'terminal_resume',
-    { projectId },
+    { projectId, sessionId },
     'terminal.resume.failed',
     'Failed to resume terminal output.'
   );
 }
 
-export function getLastTerminalStorageError() {
-  return lastTerminalStorageError;
+export async function terminalBusySessions(projectId) {
+  return invokeTerminal(
+    'terminal_busy_sessions',
+    { projectId },
+    'terminal.busy.failed',
+    'Failed to check the terminal sessions.'
+  );
 }
 
-export async function listenTerminalEvents({
-  onSessionStarted,
-  onOutput,
-  onSessionEnded,
-  onProcessComplete,
-  onError
-} = {}) {
-  try {
-    const { listen } = await import('@tauri-apps/api/event');
-    const unlistenCallbacks = [];
-
-    if (typeof onSessionStarted === 'function') {
-      unlistenCallbacks.push(await listen(TERMINAL_EVENT_NAMES.sessionStarted, (event) => {
-        onSessionStarted(event.payload);
-      }));
-    }
-    if (typeof onOutput === 'function') {
-      unlistenCallbacks.push(await listen(TERMINAL_EVENT_NAMES.output, (event) => {
-        onOutput(event.payload);
-      }));
-    }
-    if (typeof onSessionEnded === 'function') {
-      unlistenCallbacks.push(await listen(TERMINAL_EVENT_NAMES.sessionEnded, (event) => {
-        onSessionEnded(event.payload);
-      }));
-    }
-    if (typeof onProcessComplete === 'function') {
-      unlistenCallbacks.push(await listen(TERMINAL_EVENT_NAMES.processComplete, (event) => {
-        onProcessComplete(event.payload);
-      }));
-    }
-    if (typeof onError === 'function') {
-      unlistenCallbacks.push(await listen(TERMINAL_EVENT_NAMES.error, (event) => {
-        onError(event.payload);
-      }));
-    }
-
-    return () => {
-      unlistenCallbacks.forEach((unlisten) => {
-        if (typeof unlisten === 'function') {
-          unlisten();
-        }
-      });
-    };
-  } catch {
-    return () => {};
-  }
+export async function terminalTakeReloadReport() {
+  return invokeTerminal(
+    'terminal_take_reload_report',
+    {},
+    'terminal.reload_report.failed',
+    'Failed to read the reload report.'
+  );
 }

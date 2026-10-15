@@ -82,6 +82,8 @@ To preserve architecture boundaries and avoid domain blur:
 4. Input/output is bidirectional through Tauri IPC contracts.
 5. v1 supports one session only; no tab/session manager.
 
+> **Superseded in part (2026-10-14, track T slice T2a):** item 5 no longer holds. A project holds several sessions, one tab each, and closing the drawer never ends one (item 2's "view may disconnect while session continues" is now the only behavior). Item 2's project close/switch rule stands. See `docs/plans/agent-integration/track-t-build-plan.md`.
+
 ### 3.2 Terminal Drawer UX (v1)
 
 1. Terminal is presented through existing drawer architecture.

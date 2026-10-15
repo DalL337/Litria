@@ -26,6 +26,18 @@ Assume every `useEffect` will run twice and design accordingly. (Corollary:
 never perform side effects inside a `setState` updater — updaters must be
 pure; StrictMode double-fires them too.)
 
+**Amended 2026-10-14 (owner ruling, track T slice T2a):** the three steps above
+apply only to resources whose life really is the component's (an xterm
+instance, a listener, a timer). A resource that belongs to a domain — a
+terminal session, a language server, anything the person expects to keep
+running — must not be created by an effect at all, and no effect cleanup may
+end it. Effects run on mount, unmount and visibility changes, not on intent:
+the terminal drawer started its shell when it became visible and ended it in
+a cleanup, so hiding the drawer killed the person's work. A gesture asks the
+domain; the domain dedupes (one in-flight request per key) and owns the
+lifetime. See `docs/Orchestration.md` §1.2 rule 1, and
+`test/domains/drawerLifetimeContract.test.mjs` for the enforcement.
+
 ## Rule 2 — Platform-Specific Code Isolation
 
 Platform-dependent code (Windows job objects, macOS notarization, Linux

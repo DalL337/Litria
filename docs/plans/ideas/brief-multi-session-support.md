@@ -29,7 +29,9 @@ per-request rather than per-global.
   Two projects running the same language get distinct server processes today.
 - **Terminal/ConPTY sessions** are keyed by `project_id` —
   `src-tauri/src/terminal_session_manager.rs:10` (`SESSIONS_BY_PROJECT`). (Enforces one
-  terminal *per project*, which is fine.)
+  terminal *per project*, which is fine.) *(Changed 2026-10-14, track T slice T2a:
+  sessions are keyed by a random session id, several per project; each records its
+  project and folder, and ending a project ends exactly its sessions.)*
 - **Backend commands are stateless per-request**: no `.manage()` / `State<...>` anywhere
   (`src-tauri/src/lib.rs:23`); the frontend passes `project_root` / `project_id` into each
   command explicitly. There is no global "current project path" in Rust to untangle.

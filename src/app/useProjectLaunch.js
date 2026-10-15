@@ -11,6 +11,7 @@ import { PREF_KEYS } from '../preferences/registry.js';
 import { buildBlankSeedRows } from '../project/blankSeed.js';
 import { clearAllDiagnostics } from '../lsp/diagnosticStore.js';
 import { withTimeout } from '../utils/withTimeout.js';
+import { createTerminalEndGate } from './terminalEndGate.js';
 
 // Workspace-style color defaults (ADR-014 / node visual language). Stored in
 // the project's editor_state KV store (no schema change) under `ws.*` keys.
@@ -52,6 +53,7 @@ export function useProjectLaunch({
   clearSelection,
   projectInstance,
   terminalDomain,
+  pillDomain = null,
   languageSupportDomain,
   showToast,
   setConnections,
@@ -64,6 +66,22 @@ export function useProjectLaunch({
   // before it just opened, even if React has not rendered it yet.
   const liveInstanceRef = useRef(projectInstance);
   liveInstanceRef.current = projectInstance;
+
+  // Closing a project ends its terminals. Busy ones get an inline notice
+  // first (track T slice T2a); idle shells end without asking.
+  const endGateRef = useRef(null);
+  if (!endGateRef.current && pillDomain) endGateRef.current = createTerminalEndGate({ pillDomain });
+  const confirmEndingTerminals = useCallback(async (action, subject) => {
+    const current = liveInstanceRef.current;
+    if (!current?.instanceId || !terminalDomain || !endGateRef.current) return true;
+    const busy = await terminalDomain.commands.busySessions(current.instanceId);
+    return endGateRef.current.confirm({
+      projectId: current.instanceId,
+      busyCount: busy.length,
+      action,
+      subject
+    });
+  }, [terminalDomain]);
 
   const getStorageErrorMessage = useCallback((error, fallback) => {
     if (!error || typeof error !== 'object') return fallback;
@@ -245,8 +263,10 @@ export function useProjectLaunch({
       _dbState: projectState
     };
     setProjectInstance(instance);
+    liveInstanceRef.current = instance;
+    terminalDomain?.commands.setCurrentProject({ id: instance.instanceId, root: instance.rootPath });
     await applyPlan(instance.rootPath, scaffoldPlan);
-  }, [applyPlan, resolveProjectRootPath, setProjectInstance]);
+  }, [applyPlan, resolveProjectRootPath, setProjectInstance, terminalDomain]);
 
   // ─── Coordinator: tear down the ACTIVE project ───────────────────────
   //
@@ -266,6 +286,9 @@ export function useProjectLaunch({
     const current = liveInstanceRef.current;
     if (!current || !current.instanceId) return;
     if (terminalDomain) {
+      // No project is current while it closes, so nothing can start a
+      // session in it. Rust's own budget (3 s) is below this timeout.
+      terminalDomain.commands.clearCurrentProject();
       await withTimeout(terminalDomain.commands.teardownAll(), 5000, 'terminal teardown');
     }
     if (languageSupportDomain) {
@@ -346,21 +369,11 @@ export function useProjectLaunch({
       throw new Error('Project path is required.');
     }
 
-    // Dirty-tab gate at the choke point: covers File → Open Project…
-    // (deliberately AFTER the folder picker so Discard can't fire for a
-    // switch the user then cancels at the picker), the in-workspace
-    // ProjectSwitcher, and the launcher (no-op there — no tabs can be
-    // dirty). Unsaved workingCode is memory-only, so an unguarded switch
-    // silently discards it.
-    if (guardUnsavedChanges && !(await guardUnsavedChanges('switch-project'))) {
-      return;
-    }
-
     // Refuse a path that cannot be a project BEFORE tearing anything down: a
     // deleted recent or a typo used to close the current project's terminals,
     // language servers and workspace database first, then leave the window
     // showing that project with nothing behind it (P4 gate item 2,
-    // 2026-10-01).
+    // 2026-10-01). First, so a bad path never prompts.
     try {
       await dbCheckProjectPath(trimmedRootPath);
     } catch (err) {
@@ -368,6 +381,24 @@ export function useProjectLaunch({
         err,
         `Could not open project at that path: ${err?.message || err}`
       ));
+    }
+
+    // Busy terminals of the current project: ask before ending them. Before
+    // the unsaved-changes prompt: its Discard cannot be undone, so it must
+    // only run for a switch that is going ahead, and the person can keep
+    // editing while this notice waits.
+    if (!(await confirmEndingTerminals('Switch', 'Switching'))) {
+      return;
+    }
+
+    // Dirty-tab gate, last before teardown: covers File → Open Project…
+    // (deliberately AFTER the folder picker so Discard can't fire for a
+    // switch the user then cancels at the picker), the in-workspace
+    // ProjectSwitcher, and the launcher (no-op there — no tabs can be
+    // dirty). Unsaved workingCode is memory-only, so an unguarded switch
+    // silently discards it.
+    if (guardUnsavedChanges && !(await guardUnsavedChanges('switch-project'))) {
+      return;
     }
 
     // Tear down the OLD project before opening the NEW one.
@@ -418,8 +449,14 @@ export function useProjectLaunch({
     };
     setProjectInstance(opened);
     liveInstanceRef.current = opened;
+    // The teardown cleared the terminal's current project. Set it here, not
+    // only from the lifecycle hook's effect: reopening the same project keeps
+    // its id and folder, so that effect would not run again.
+    terminalDomain?.commands.setCurrentProject({ id: opened.instanceId, root: opened.rootPath });
   }, [
     guardUnsavedChanges,
+    confirmEndingTerminals,
+    terminalDomain,
     teardownActiveProject,
     resetToLauncher,
     getProjectStorageError,
@@ -444,6 +481,10 @@ export function useProjectLaunch({
   const openTurnRef = useRef(Promise.resolve());
   const openSeqRef = useRef(0);
   const handleOpenProjectInstance = useCallback((args) => {
+    // A notice about busy terminals may be holding the open in flight. The
+    // newest pick is the person's answer to it: stay, so this request's turn
+    // comes at once (it then asks again for itself if it needs to).
+    endGateRef.current?.cancel();
     const seq = ++openSeqRef.current;
     const turn = openTurnRef.current.then(() => (
       seq === openSeqRef.current ? openNowRef.current(args) : undefined
@@ -471,6 +512,12 @@ export function useProjectLaunch({
   // second half. Teardown, then wipe back to the launcher (resetToLauncher).
   // No clean-shutdown ritual: this is not an app exit.
   const handleExitToLauncher = useCallback(async () => {
+    // Exit to Launcher does not queue; it replaces any notice still waiting.
+    endGateRef.current?.cancel();
+    // Busy terminals first, the unsaved-changes prompt last (see the switch).
+    if (!(await confirmEndingTerminals('Close project', 'Closing the project'))) {
+      return;
+    }
     if (guardUnsavedChanges && !(await guardUnsavedChanges('exit-to-launcher'))) {
       return;
     }
@@ -478,6 +525,7 @@ export function useProjectLaunch({
     resetToLauncher();
   }, [
     guardUnsavedChanges,
+    confirmEndingTerminals,
     teardownActiveProject,
     resetToLauncher
   ]);

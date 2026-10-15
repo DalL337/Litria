@@ -30,7 +30,6 @@ mod quote_pool;
 mod scaffold_recipes;
 mod scaffold_runner;
 mod scaffold_types;
-mod terminal_ipc_bridge;
 mod terminal_policy;
 mod terminal_pty;
 mod terminal_session_manager;
@@ -52,6 +51,17 @@ pub fn run() {
         // same posture as opener (capabilities/default.json, enforced by
         // test/domains/capabilityScope.test.mjs).
         .plugin(tauri_plugin_clipboard_manager::init())
+        // A page (re)load means the frontend that showed the terminals is
+        // gone: the automatic reload after a renderer crash, the crash
+        // screen's Reload, or a dev reload. Every reload lands on the
+        // launcher with no project open, so every session ends, as on a
+        // project close. Done here, before any script runs, so nothing the
+        // new page starts can race it.
+        .on_page_load(|_webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                terminal_session_manager::end_all_for_page_load();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // Core project ops
             commands::read_project_file,
@@ -65,14 +75,16 @@ pub fn run() {
             commands::delete_project_path,
             commands::remove_empty_directory,
             // Terminal
-            commands::terminal_session_start,
             commands::terminal_spawn,
             commands::terminal_input,
             commands::terminal_resize,
             commands::terminal_session_end,
+            commands::terminal_end_project,
             commands::terminal_pause,
             commands::terminal_resume,
             commands::terminal_teardown_all,
+            commands::terminal_busy_sessions,
+            commands::terminal_take_reload_report,
             // Generic LSP client
             commands::lsp_get_registry,
             commands::lsp_install_server,
@@ -224,7 +236,9 @@ pub fn run() {
     app.run(|_app_handle, event| {
         match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                let _ = terminal_session_manager::teardown_all_sessions();
+                // Bounded, runs once (the second event returns at once), and
+                // waits for teardowns already running.
+                terminal_session_manager::quit();
                 let _ = lsp::session::teardown_all_sessions();
                 #[cfg(all(debug_assertions, target_os = "windows"))]
                 kill_dev_server();

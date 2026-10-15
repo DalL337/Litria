@@ -13,10 +13,11 @@ use crate::scaffold_types::{
     PackageManager, PrerequisiteResult, ScaffoldConfig, ScaffoldEvent, ScaffoldResult,
     ScaffoldWrapper,
 };
-use crate::terminal_ipc_bridge;
 use crate::terminal_session_manager;
 use crate::terminal_pty::TerminalEvent;
-use crate::terminal_types::{TerminalSessionEndedPayload, TerminalSessionStartedPayload};
+use crate::terminal_types::{
+    TerminalEndReport, TerminalSessionEndedPayload, TerminalSessionStartedPayload,
+};
 use tauri::ipc::Channel;
 use serde_json::Value;
 
@@ -118,134 +119,114 @@ pub(crate) fn remove_empty_directory(root_path: &str, relative_path: &str) -> Co
     project_ops::remove_empty_directory(root_path, relative_path)
 }
 
-/// Legacy metadata-only session start (no PTY process).
+/// Start a shell session for a project. A project can hold several; each
+/// streams its output over its own `on_event` channel. Async because creating
+/// a pseudoconsole must not run on the UI thread.
 #[tauri::command]
-pub(crate) fn terminal_session_start(
-    app: tauri::AppHandle,
-    project_id: &str,
-    project_root: &str,
-    executable: Option<String>,
-) -> CommandResult<TerminalSessionStartedPayload> {
-    let result = terminal_session_manager::start_session(project_id, project_root, executable.as_deref());
-    match result {
-        Ok(payload) => {
-            let _ = terminal_ipc_bridge::emit_session_started(&app, &payload);
-            Ok(payload)
-        }
-        Err(error) => {
-            let _ = terminal_ipc_bridge::emit_terminal_error(&app, project_id, None, &error);
-            Err(error)
-        }
-    }
-}
-
-/// Spawn a PTY-backed terminal session. Output streams via the provided Channel.
-#[tauri::command]
-pub(crate) fn terminal_spawn(
-    app: tauri::AppHandle,
-    project_id: &str,
-    project_root: &str,
+pub(crate) async fn terminal_spawn(
+    project_id: String,
+    project_root: String,
     executable: Option<String>,
     cols: u16,
     rows: u16,
     on_event: Channel<TerminalEvent>,
 ) -> CommandResult<TerminalSessionStartedPayload> {
-    let result = terminal_session_manager::start_pty_session(
-        project_id,
-        project_root,
-        executable.as_deref(),
-        cols,
-        rows,
-        on_event,
-    );
-    match result {
-        Ok(payload) => {
-            let _ = terminal_ipc_bridge::emit_session_started(&app, &payload);
-            Ok(payload)
-        }
-        Err(error) => {
-            let _ = terminal_ipc_bridge::emit_terminal_error(&app, project_id, None, &error);
-            Err(error)
-        }
-    }
+    // Which page asked, taken before the hop: if it reloads while the shell
+    // starts, the session is never registered.
+    let page = terminal_session_manager::current_page();
+    tauri::async_runtime::spawn_blocking(move || {
+        terminal_session_manager::start_pty_session(
+            page,
+            &project_id,
+            &project_root,
+            executable.as_deref(),
+            cols,
+            rows,
+            on_event,
+        )
+    })
+    .await
+    .map_err(|e| CommandError::internal("terminal.thread_error", e.to_string()))?
 }
 
+// Input, resize, pause and resume stay synchronous on purpose. Tauri runs a
+// synchronous command inline, in the order commands arrive, and each of these
+// only clones a session handle and queues or flags something. Async commands
+// can start in any order: keystrokes could be reordered, or a resume could
+// overtake its pause and leave a session paused for good.
+
 #[tauri::command]
-pub(crate) fn terminal_input(
-    app: tauri::AppHandle,
-    project_id: &str,
-    session_id: &str,
-    input: &str,
-) -> CommandResult<()> {
-    let result = terminal_session_manager::write_input(project_id, session_id, input.as_bytes());
-    if let Err(ref error) = result {
-        let _ = terminal_ipc_bridge::emit_terminal_error(&app, project_id, Some(session_id), error);
-    }
-    result
+pub(crate) fn terminal_input(project_id: &str, session_id: &str, input: &str) -> CommandResult<()> {
+    terminal_session_manager::write_input(project_id, session_id, input.as_bytes())
 }
 
 #[tauri::command]
 pub(crate) fn terminal_resize(
-    app: tauri::AppHandle,
     project_id: &str,
     session_id: &str,
     cols: u16,
     rows: u16,
 ) -> CommandResult<()> {
     if cols == 0 || rows == 0 {
-        let error = crate::errors::CommandError::invalid_path(
+        return Err(CommandError::invalid_path(
             "terminal.invalid_request",
             "Terminal cols and rows must be greater than zero.",
-        );
-        let _ = terminal_ipc_bridge::emit_terminal_error(&app, project_id, Some(session_id), &error);
-        return Err(error);
+        ));
     }
-    let result = terminal_session_manager::resize_pty(project_id, session_id, cols, rows);
-    if let Err(ref error) = result {
-        let _ = terminal_ipc_bridge::emit_terminal_error(&app, project_id, Some(session_id), error);
-    }
-    result
+    terminal_session_manager::resize_pty(project_id, session_id, cols, rows)
 }
 
 #[tauri::command]
-pub(crate) fn terminal_session_end(
-    app: tauri::AppHandle,
-    project_id: &str,
+pub(crate) fn terminal_pause(project_id: &str, session_id: &str) -> CommandResult<()> {
+    terminal_session_manager::pause_output(project_id, session_id)
+}
+
+#[tauri::command]
+pub(crate) fn terminal_resume(project_id: &str, session_id: &str) -> CommandResult<()> {
+    terminal_session_manager::resume_output(project_id, session_id)
+}
+
+/// The person ended a session. Its whole process tree stops.
+#[tauri::command]
+pub(crate) async fn terminal_session_end(
+    project_id: String,
+    session_id: String,
 ) -> CommandResult<TerminalSessionEndedPayload> {
-    let result = terminal_session_manager::end_session(project_id);
-    match result {
-        Ok((payload, exit_code)) => {
-            let _ = terminal_ipc_bridge::emit_session_ended(&app, &payload);
-            let severity = if exit_code == Some(0) { "success" } else { "warning" };
-            let _ = terminal_ipc_bridge::emit_process_complete(
-                &app,
-                &payload.project_id,
-                "Terminal session ended.",
-                severity,
-                exit_code,
-            );
-            Ok(payload)
-        }
-        Err(error) => {
-            let _ = terminal_ipc_bridge::emit_terminal_error(&app, project_id, None, &error);
-            Err(error)
-        }
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        terminal_session_manager::end_session(&project_id, &session_id)
+    })
+    .await
+    .map_err(|e| CommandError::internal("terminal.thread_error", e.to_string()))?
 }
 
+/// A project is closing: end every session it holds, and cancel its starts.
 #[tauri::command]
-pub(crate) fn terminal_pause(project_id: &str) -> CommandResult<()> {
-    terminal_session_manager::pause_output(project_id)
+pub(crate) async fn terminal_end_project(project_id: String) -> CommandResult<TerminalEndReport> {
+    tauri::async_runtime::spawn_blocking(move || terminal_session_manager::end_project(&project_id))
+        .await
+        .map_err(|e| CommandError::internal("terminal.thread_error", e.to_string()))?
 }
 
+/// End every session of every project. A window holds one project, so the
+/// project-switch coordinator uses this: it also sweeps anything left behind.
 #[tauri::command]
-pub(crate) fn terminal_resume(project_id: &str) -> CommandResult<()> {
-    terminal_session_manager::resume_output(project_id)
+pub(crate) async fn terminal_teardown_all() -> CommandResult<TerminalEndReport> {
+    tauri::async_runtime::spawn_blocking(|| Ok(terminal_session_manager::teardown_all_sessions()))
+        .await
+        .map_err(|e| CommandError::internal("terminal.thread_error", e.to_string()))?
 }
 
+/// The project's sessions that are running a program, for the notice shown
+/// before a switch ends them.
 #[tauri::command]
-pub(crate) fn terminal_teardown_all() -> CommandResult<usize> {
-    terminal_session_manager::teardown_all_sessions()
+pub(crate) fn terminal_busy_sessions(project_id: &str) -> CommandResult<Vec<String>> {
+    terminal_session_manager::busy_sessions(project_id)
+}
+
+/// How many sessions the last page reload ended. Reported once.
+#[tauri::command]
+pub(crate) fn terminal_take_reload_report() -> usize {
+    terminal_session_manager::take_reload_report()
 }
 
 // ---------------------------------------------------------------------------
@@ -796,8 +777,11 @@ mod tests {
     }
 
     #[test]
-    fn terminal_teardown_all_returns_zero_when_empty() {
-        let result = terminal_teardown_all().expect("teardown should succeed");
-        assert_eq!(result, 0);
+    fn terminal_teardown_all_reports_nothing_when_empty() {
+        // No other test touches the app's registry: the registry tests use
+        // private instances, and the PTY tests spawn sessions directly.
+        let report = terminal_session_manager::teardown_all_sessions();
+        assert_eq!(report.ended, 0);
+        assert_eq!(report.still_ending, 0);
     }
 }

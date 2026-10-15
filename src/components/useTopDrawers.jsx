@@ -16,13 +16,11 @@ import DrawerContentLogs from '../drawers/DrawerContentLogs';
  *
  * @param {object} opts
  * @param {object} opts.terminalDomain
- * @param {object} opts.pillDomain
  * @param {object|null} opts.projectInstance
  * @returns {Array<object>} memoized drawer descriptors
  */
 export function useTopDrawers({
   terminalDomain,
-  pillDomain,
   projectInstance,
   buildLogDomain = null,
   buildLogActions = null,
@@ -34,18 +32,20 @@ export function useTopDrawers({
         id: 'terminal',
         label: 'Terminal',
         icon: TerminalIcon,
-        // contentKey forces TopDrawerShell to remount the wrapper subtree
-        // when the project changes, so DrawerContentTerminal unmounts cleanly
-        // for the OLD project (running its endForProject cleanup) and a fresh
-        // instance mounts for the NEW project. See
-        // docs/plans/persistence/project-switch-crash-investigation.md Phase 3.
+        // contentKey remounts the view when the project changes, so the new
+        // project starts with fresh screens. It ends nothing: the switch
+        // coordinator ends the old project's sessions (track T slice T2a).
         contentKey: projectInstance?.instanceId ?? 'no-project',
+        // Opening the terminal from its rail: a project with no tab gets a
+        // shell. The domain decides; the drawer only reports the gesture.
+        onOpen: () => {
+          terminalDomain?.commands.ensureSession();
+        },
         content: (
           <DrawerContentTerminal
             terminalDomain={terminalDomain}
-            pillDomain={pillDomain}
             projectId={projectInstance?.instanceId ?? null}
-            projectRoot={projectInstance?.rootPath ?? null}
+            hasFolder={Boolean(projectInstance?.rootPath)}
           />
         )
       },
@@ -67,7 +67,6 @@ export function useTopDrawers({
     ],
     [
       terminalDomain,
-      pillDomain,
       projectInstance?.instanceId,
       projectInstance?.rootPath,
       buildLogDomain,

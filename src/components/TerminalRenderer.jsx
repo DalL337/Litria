@@ -38,15 +38,34 @@ const THEME = {
 const PAUSE_ABOVE_BYTES = 1024 * 1024;
 const RESUME_BELOW_BYTES = 256 * 1024;
 
+/**
+ * Releases a WebGL context now instead of at garbage collection. Disposing the
+ * WebGL addon removes its canvas but never loses the context, and live
+ * contexts are capped (Chromium drops the OLDEST past about 16): with several
+ * terminals, created and removed, a live tab would lose its renderer.
+ */
+function releaseWebglContexts(canvases) {
+  for (const canvas of canvases) {
+    try {
+      canvas.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext();
+    } catch {
+      // A 2D canvas, or a context that is already gone.
+    }
+  }
+}
+
+/**
+ * One terminal session's screen. Mounted for the session's whole life and
+ * hidden with CSS when another tab or drawer is in front (implementation
+ * policy Rule 4), so its screen and modes survive. It never decides whether
+ * its session exists.
+ */
 export default function TerminalRenderer({
-  channel,
-  projectId,
-  sessionId,
+  stream,
   onInput,
   onResize,
   onPause,
   onResume,
-  onProcessComplete,
   isVisible = true
 }) {
   const containerRef = useRef(null);
@@ -54,21 +73,32 @@ export default function TerminalRenderer({
   const fitAddonRef = useRef(null);
   const pendingRef = useRef(0);
   const pausedRef = useRef(false);
+  const visibleRef = useRef(isVisible);
+  visibleRef.current = isVisible;
 
-  const handleFit = useCallback(() => {
-    if (fitAddonRef.current && terminalRef.current) {
-      try {
-        fitAddonRef.current.fit();
-      } catch {
-        // fit() can throw if terminal is not attached
-      }
+  // Callbacks are read through refs: the mount effect registers xterm
+  // listeners once, and a new callback identity must never resubscribe the
+  // stream (that would replay its output into the screen again).
+  const callbacksRef = useRef({ onInput, onResize, onPause, onResume });
+  callbacksRef.current = { onInput, onResize, onPause, onResume };
+
+  // Fit only a measured box. A terminal hidden by `display: none` (another
+  // top drawer in front) measures 0×0, and FitAddon would read the computed
+  // `height: 100%` as 100px and shrink the PTY to a sliver.
+  const fitIfSized = useCallback(() => {
+    const container = containerRef.current;
+    if (!container || container.clientWidth === 0 || container.clientHeight === 0) return false;
+    try {
+      fitAddonRef.current?.fit();
+      return true;
+    } catch {
+      return false;
     }
   }, []);
 
-  // Mount terminal
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container) return undefined;
 
     const terminal = new Terminal({
       theme: THEME,
@@ -84,10 +114,8 @@ export default function TerminalRenderer({
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(new WebLinksAddon());
-
     terminal.open(container);
 
-    // WebGL addon — load after open() for GPU-accelerated rendering
     try {
       const webglAddon = new WebglAddon();
       webglAddon.onContextLoss(() => {
@@ -98,28 +126,23 @@ export default function TerminalRenderer({
       // WebGL not available, canvas renderer is fine
     }
 
-    fitAddon.fit();
-
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    // User keystrokes -> PTY stdin
     const dataDisposable = terminal.onData((data) => {
-      if (typeof onInput === 'function') {
-        onInput(data);
-      }
+      callbacksRef.current.onInput?.(data);
     });
-
-    // Resize -> PTY resize
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-      if (typeof onResize === 'function') {
-        onResize(cols, rows);
-      }
+      callbacksRef.current.onResize?.(cols, rows);
     });
 
-    // ResizeObserver for container dimension changes
+    // The first fit runs after onResize is registered, then the size is
+    // reported once even if fit changed nothing: the session may have started
+    // at a default size before this view measured it.
+    if (fitIfSized()) callbacksRef.current.onResize?.(terminal.cols, terminal.rows);
+
     const observer = new ResizeObserver(() => {
-      handleFit();
+      fitIfSized();
     });
     observer.observe(container);
 
@@ -127,100 +150,72 @@ export default function TerminalRenderer({
       observer.disconnect();
       dataDisposable.dispose();
       resizeDisposable.dispose();
+      // A view leaving while it held the session paused would park the
+      // session's output for good: lift the pause on the way out.
+      if (pausedRef.current) callbacksRef.current.onResume?.();
+      const canvases = [...container.querySelectorAll('canvas')];
       terminal.dispose();
+      releaseWebglContexts(canvases);
       terminalRef.current = null;
       fitAddonRef.current = null;
       pendingRef.current = 0;
       pausedRef.current = false;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fitIfSized]);
 
-  // New session = fresh screen (VS Code panel semantics). Closing the
-  // drawer ends the shell session but this component stays mounted, so
-  // without a reset the NEXT session's prompt prints wherever the dead
-  // session's cursor sat — appended mid-line after whatever was typed.
-  // Declared BEFORE the channel effect: same-commit effects run in order,
-  // and the reset must land before the new channel's backlog drains.
-  const lastSessionRef = useRef(null);
+  // Session output -> terminal.write with backpressure.
   useEffect(() => {
-    if (!sessionId) return;
-    if (lastSessionRef.current && lastSessionRef.current !== sessionId && terminalRef.current) {
-      terminalRef.current.reset();
-      pendingRef.current = 0;
-      pausedRef.current = false;
-    }
-    lastSessionRef.current = sessionId;
-  }, [sessionId]);
-
-  // Wire channel output -> terminal.write with backpressure
-  useEffect(() => {
-    if (!channel || !terminalRef.current) return;
-
     const terminal = terminalRef.current;
+    if (!stream || !terminal) return undefined;
 
     const handleEvent = (event) => {
       if (event.event === 'Output' && event.data?.chunk) {
         const bytes = event.data.chunk.length;
         pendingRef.current += bytes;
         terminal.write(event.data.chunk, () => {
+          // xterm still runs a disposed screen's queued writes; they must not
+          // count against the screen that replaced it.
+          if (terminalRef.current !== terminal) return;
           pendingRef.current -= bytes;
           if (pausedRef.current && pendingRef.current <= RESUME_BELOW_BYTES) {
             pausedRef.current = false;
-            if (typeof onResume === 'function') {
-              onResume();
-            }
+            callbacksRef.current.onResume?.();
           }
         });
 
         if (!pausedRef.current && pendingRef.current >= PAUSE_ABOVE_BYTES) {
           pausedRef.current = true;
-          if (typeof onPause === 'function') {
-            onPause();
-          }
+          callbacksRef.current.onPause?.();
         }
       } else if (event.event === 'Exited') {
         const code = event.data?.exitCode;
-        const label = code === 0 || code === null ? 'completed' : `failed (exit ${code})`;
+        const label = code === 0 ? 'completed' : code == null ? 'ended' : `failed (exit ${code})`;
         terminal.write(`\r\n\x1b[90m[Process ${label}]\x1b[0m\r\n`);
-        if (typeof onProcessComplete === 'function') {
-          onProcessComplete(code);
-        }
       }
     };
 
-    // Event-stream wrapper (terminalStorage.createTerminalEventStream):
-    // subscribe replays events buffered between PTY spawn and this effect —
-    // the shell's opening banner/prompt land in that window. Plain-channel
-    // fallback kept for any legacy caller.
-    if (typeof channel.subscribe === 'function') {
-      channel.subscribe(handleEvent);
-      return () => {
-        channel.unsubscribe();
-      };
-    }
+    // The stream replays the session's recent output, then streams live.
+    return stream.subscribe(handleEvent);
+  }, [stream]);
 
-    channel.onmessage = handleEvent;
-
-    return () => {
-      channel.onmessage = null;
-    };
-  }, [channel, onPause, onResume, onProcessComplete]);
-
-  // Re-fit, refresh, and focus when visibility changes
+  // Shown: fit, repaint, focus. Hidden: give the focus up, so keystrokes can
+  // never reach a session the person cannot see.
   useEffect(() => {
-    if (isVisible && terminalRef.current) {
-      // Slight delay for layout to settle
-      const timer = setTimeout(() => {
-        handleFit();
-        const term = terminalRef.current;
-        if (term) {
-          term.refresh(0, term.rows - 1);
-          term.focus();
-        }
-      }, 50);
-      return () => clearTimeout(timer);
+    const terminal = terminalRef.current;
+    if (!terminal) return undefined;
+    if (!isVisible) {
+      terminal.blur();
+      return undefined;
     }
-  }, [isVisible, handleFit]);
+    const timer = setTimeout(() => {
+      const term = terminalRef.current;
+      if (!term || !visibleRef.current) return;
+      fitIfSized();
+      term.refresh(0, term.rows - 1);
+      term.focus();
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [isVisible, fitIfSized]);
 
   return (
     <div

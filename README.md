@@ -91,7 +91,7 @@ Prefer to build it yourself? Jump to [Getting into it](#getting-into-it).
   with the project rather than resetting between sessions
 - Split editor panes, multi-tab workflows, crash-safe unsaved-work recovery
 - Visual groups, connections, and undo/redo
-- Embedded terminal (with hide-don't-kill) and project scaffolding wizard
+- Embedded terminal (several sessions per project that keep running when the drawer closes) and project scaffolding wizard
 - Preferences system with global + per-project layers
 - Crash logging with local records and assisted reporting
 - Native desktop app: macOS, Windows, Linux

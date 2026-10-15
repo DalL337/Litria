@@ -37,7 +37,6 @@ test('the rooms hold what the brief says they hold', () => {
   assert.equal(byKey.buildTracePause, 'projectCreation');
   assert.equal(byKey.buildLogAutoSend, 'projectCreation');
   assert.equal(byKey.wireDropOnCollapsedGroup, 'behavior');
-  assert.equal(byKey.terminalDrawerClose, 'behavior');
   assert.equal(byKey.splashScreen, 'behavior');
   assert.equal(byKey.gridSnapMode, 'grid');
   assert.equal(byKey.gridPaintOverrides, 'grid');

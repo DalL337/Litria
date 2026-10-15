@@ -36,11 +36,11 @@ The command inventory, with each command's frontend caller, is in [rust-command-
 - `project_tree.rs`: the project tree listing (`list_project_tree`), relative-path normalization, and the `IGNORED_DIRS` list that the Project API reuses as its unindexed class.
 
 **Terminal**
-- `terminal_session_manager.rs`: session lifecycle per project (start, spawn, input, resize, end, teardown).
-- `terminal_pty.rs`: the PTY read loop, the ConPTY startup handshake, and teardown with timeouts.
+- `terminal_session_manager.rs` *(rewritten 2026-10-14, track T slice T2a)*: the session registry. Several sessions per project, keyed by a random id; one lock over live sessions, starts in flight, sessions still ending and the quit flag; the caps (8 per project, 24 in total); one folder per project; end, end-project, end-all, page-load and quit, each teardown on its own thread within a budget. Generic over a `TerminalSession` trait so its races are tested with fakes.
+- `terminal_pty.rs`: one session's pseudoconsole and its three threads (the reader, the writer that owns the PTY input, and the exit watcher), the ConPTY startup handshake, UTF-8 decoding across reads, the busy check, and the bounded teardown (the Job Object dropped before the pseudoconsole closes).
 - `terminal_policy.rs`: the execution boundary for terminals (the allowed shells and the preferred one), and the environment allowlist and forced variables.
-- `terminal_ipc_bridge.rs`: the terminal events emitted to the frontend.
 - `terminal_types.rs`: terminal payload types.
+- *(`terminal_ipc_bridge.rs` was removed 2026-10-14: nothing listened to its global events.)*
 - `process_control.rs`: deadlines and cancellation for scaffold subprocesses (ADR-028 §8). Every scaffold subprocess runs under one.
 
 **New Project wizard**
