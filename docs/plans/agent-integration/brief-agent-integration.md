@@ -255,6 +255,11 @@ A sensible implementation order is to qualify runtime/auth/lifetime first, estab
 >
 > This is the build plan's track T, which becomes its own plan once a runtime is chosen. No P or W slice adds a listener, socket or external process. None reaches users until track T passes. The pre-coding list above still applies to track T.
 
+> **Note (2026-10-14, owner rulings on the [track T build plan](track-t-build-plan.md)) — the first route.**
+> - Track T starts the user's own, unmodified Claude Code or Codex in Litria's terminal, with Litria's MCP tools added for that session. The agent keeps its own screen, sign-in, settings, tools and permission prompts.
+> - The integrated conversation UI of §1, through ACP, follows track T as its own plan. ADR-031's alternative 6 still holds: an outside-client screen is not the destination.
+> - The gates in this section are unchanged; the track T plan maps each to a slice. The terminal's own mechanics are to be reviewed with the owner before that slice is built.
+
 ## 11. Verification record
 
 2026-09-19: consolidated existing repository inspection and primary-source research with the owner's product decisions. Validation passed for 54 local references and four heading anchors across the new brief/ADR and both historical briefs; new-document encoding, code fences and trailing whitespace also passed. `git diff --check` passed for tracked changes, supplemented by the reference check for these untracked documents. No runtime was installed, authenticated or executed; no protocol, provider, local-model or packaged-platform compatibility test was performed. The accepted ADR specifies intended behavior, not current shipped functionality.

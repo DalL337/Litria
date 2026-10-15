@@ -1,0 +1,376 @@
+# Track T build plan: connecting the user's own agents
+
+Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a). No code has been written for track T.** *(Proposed the same day.)*
+
+Parents: [ADR-031](031-agent-integration-and-lifecycle.md) (decisions), [agent integration brief](brief-agent-integration.md) (design and the §10 gates), [Project API build plan](project-api-build-plan.md) (the P and W tracks this plan builds on; its "Track T" section is the stub this plan replaces).
+This document owns track T's sequencing and evidence. It owns no decisions: §2 lists what the owner rules on, and the brief stays the design authority.
+
+## 1. What track T delivers
+
+A person working in Litria starts **their own** Claude Code or Codex from Litria. The agent gets Litria's tools for the project that is open: the graph, files, diagnostics, and edits that land as unsaved, undoable changes. Everything else stays the agent's own: its sign-in, settings, instructions, skills, tools and permission prompts.
+
+The P and W tracks built those tools (PRs #86–#136). Today they answer only a debug-only development call. Track T connects them to real agents.
+
+**Owner rulings already given (2026-10-11):**
+- Anthropic and OpenAI first.
+- Litria starts the user's own Claude Code or Codex. Litria runs no agent loop of its own.
+- Keys are the user's own provider keys, never keys Litria issues or pays for.
+- Agents are not hijacked: Litria never turns off or restricts an agent's own tools. Litria's tools are an offer.
+- The agent's own approval is enough. Litria does not stack a second prompt on it.
+- Users bring their own setups. Litria is not opinionated about how they work.
+
+**Deferred, not dropped:**
+- The local-model route. ADR-031 keeps it a product requirement. It follows Anthropic and OpenAI.
+- Sign in with ChatGPT (OpenAI allows it for open-source local apps), as a later, lower-friction option.
+- Litria's own review screen. It stays in the code (`ReviewPolicy::PersonReview`) and stays off by default.
+- Background or scheduled agent work (ADR-031 §4: off by default, separate design).
+- Agents other than Claude Code and Codex.
+
+## 2. Owner decisions
+
+Recommendations are marked. Engineering choices that need evidence, not a ruling, are settled inside their slices and listed there.
+
+> **Owner rulings (2026-10-14):** "the decisions are good for now. I will go with your recommendations. we might have to rethink the terminal and its mechanics."
+> - D1–D6 are ruled as recommended below: the agent runs in Litria's terminal first, and the ACP panel follows track T.
+> - "For now": any of these can be revisited when evidence arrives.
+> - **The terminal's mechanics are open.** T2 starts by reviewing them with the owner. T1a, T1b and T3 do not depend on the terminal. *(Reviewed the same day: the rulings are in [T2a](#t2a-conversations-that-outlive-their-tab).)*
+
+### D1. How Litria starts the agent
+
+| | **A. In Litria's terminal** (recommended first) | **B. In a Litria conversation panel, through ACP** |
+|---|---|---|
+| What the person sees | The agent's own screen, in Litria's terminal drawer | A Litria chat panel; Litria draws the agent's messages and permission requests |
+| How Litria's tools reach it | Added for that session only: `claude --mcp-config`, `codex -c mcp_servers…` | Passed in ACP's `session/new` |
+| Sign-in and billing | Whatever the agent already uses. Litria never sees a key | Claude: the user's API key only, until Anthropic answers. Litria must store the key securely |
+| What Litria must build | The MCP connection (T1), starting the CLI (T2b, on T2a's sessions), file-change handling (T3) | All of A, plus: a chat panel, an ACP client, a permission-request screen, installing and pinning the adapters, key storage, a "which billing is in use" display |
+| Provider status | Research marks it allowed for both providers, subscriptions included (§3). One line goes to Anthropic to confirm | Claude's adapter is built on the Agent SDK, so subscription use is unclear. Codex's adapter is built on `app-server`, which OpenAI calls experimental |
+| Fits "not hijacked" | Completely: nothing sits between the person and the agent | Litria redraws the agent's own requests, so it must do so faithfully |
+
+**Why A first:** everything A needs, B needs too, so nothing is thrown away. A ships Litria's tools to the agents people already use, soonest, with no key handling.
+
+**What A gives up:** Litria cannot show the agent's activity in its own UI, and Stop is the agent's own interrupt key. ADR-031's alternative 6 calls an outside-client-only connector "insufficient as the primary in-app conversation experience". So under A, the ACP panel stays the destination, as the next plan after track T. If the owner picks A, a dated note records the order in the brief's §10 and in ADR-031's follow-ups. The decisions themselves do not change.
+
+### D2. Sign-in for the terminal route (if D1 = A)
+
+- **Recommended:** the agent uses whatever sign-in the person already set up, subscription or API key. Litria never asks for, stores or passes a key.
+- **Confirm with Anthropic:** add one line to the owner's open question to Anthropic: "Litria opens the user's own unmodified `claude` in Litria's built-in terminal, where they sign in through Anthropic's own flow." Research marks this allowed. The line removes any doubt about "running Claude Code in your products".
+- **Until then:** track T's own checks never use a developer's subscription sign-in (T2b runs signed out; T4 uses an API key).
+
+### D3. The agent's own environment variables (if D1 = A)
+
+Litria's terminal passes only an allow-list of environment variables (`terminal_policy.rs`). So a person's `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR` or `CODEX_HOME` never reach an agent started there, and their setup silently changes.
+
+- **Recommended:** for agent launches only, pass a short, named list of the agent's own variables through **unchanged**. Litria adds none and changes none. The ordinary terminal keeps its allow-list.
+- **Alternative:** keep the allow-list. People who set up their agent through variables get a hint instead.
+
+### D4. What a started agent may do
+
+- **Recommended:** the whole Project API catalog, for the project it was started in only (reads, `litria_changes_prepare`, `litria_changes_apply`, `litria_operations_get`). This matches "the agent's own approval is enough".
+- **Alternative:** reads only by default, with edits switched on per project.
+
+### D5. Which tools the agent is shown
+
+MCP lets `tools/list` show every tool, or only those the grant allows (Project API build plan, P6 record).
+
+- **Recommended:** only the allowed tools. A smaller list costs a small model less context, and the agent never tries a tool it will be refused.
+
+### D6. Receipts after Litria restarts
+
+W4 keeps operation receipts for 30 days. A reconnecting agent should see its own (T1b). After a restart, the agent session is new.
+
+- **Recommended:** a new session does not inherit the old session's receipts. The reopen notice (W4b) already tells the person about interrupted work.
+
+## 3. Provider rules this plan stays inside
+
+Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetched and matched. Re-check before T4, because these pages change.
+
+- **Both providers** allow the user's own API key, billed to that user. Litria never pays for, resells or proxies usage.
+- **Anthropic** ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), [authentication](https://code.claude.com/docs/en/authentication), [usage policy](https://www.anthropic.com/legal/aup) from 2026-11-12):
+  - allowed: the user's own unmodified `claude`, signed in through Anthropic's flow, subscription included;
+  - not allowed: a Litria "Log in with Claude"; handling claude.ai tokens; routing a subscription through Litria's own client; a modified binary; removing or restricting its sign-in methods;
+  - unclear, asked of Anthropic: driving the Agent SDK or `claude -p` on a subscription;
+  - naming: "Claude Agent" or the plain text "runs Claude Code", never "Claude Code" as a feature name;
+  - a key in the agent's environment outranks its own sign-in (`-p`: "always used when present"). Litria never injects one.
+- **OpenAI** ([app-server](https://learn.chatgpt.com/docs/app-server), [MCP server removal](https://learn.chatgpt.com/docs/mcp-server), [Sign in with ChatGPT terms](https://openai.com/policies/sign-in-with-chatgpt-terms/), [brand](https://openai.com/brand/)):
+  - allowed: launching the user's installed Codex under its own sign-in and config, for local or open-source apps;
+  - Codex reaches MCP servers over stdio or local HTTP, from its config or a per-run `-c` override;
+  - `codex mcp-server` is removed; `app-server` is experimental;
+  - naming: no "GPT" or OpenAI names in Litria's product names.
+
+## 4. Delivery rules
+
+- **Standard checks, evidence and live-pass rules:** as in the [Project API build plan §1](project-api-build-plan.md#1-delivery-rules-and-baseline). One slice, one branch, one pull request, in a worktree off a refreshed `main`.
+- **Policies:** implementation and verification for every slice. Security (Rule 1: a new execution and IPC surface, or a changed process-spawn command) for T1, T2a and T2b. Adversarial check for T1 (authentication, bounds, principal binding) and T3 (check-then-write saving). Dependency change for any new crate or tool pin (an MCP SDK, a file watcher, agent version pins).
+- **No paid generation before T4.** No check in T1–T3 sends a prompt to a model. Starting, reconnecting and restoring leave the agent idle (ADR-031 §4).
+- **Agent processes are the person's, not Litria's dependencies.** Litria detects an installed `claude` or `codex` and hints when one is missing. It never installs one (security policy Rule 2, class 4).
+- **Placement:** a new Rust module for agent sessions and the MCP connection is recorded in [`rust-module-ownership.md`](../../rust-module-ownership.md) before its code lands. Any new JavaScript domain gets its [Domain Register](../../Orchestration.md#2-domain-register) entry first. The existing `ConnectionDomain` means graph connections and does not take this on (brief §3).
+
+## 5. Slice map
+
+| Slice | Delivers | Depends on | Status |
+|---|---|---|---|
+| T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Not started |
+| T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Not started |
+| T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes | — (alongside T1 and T3) | Not started |
+| T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows | T1b, T2a, D1–D3 | Not started |
+| T3 | Files changed outside Litria: detect, reload, keep both on conflict, never overwrite on save | — (alongside T1 and T2a) | Not started |
+| T4 | Real tasks on the owner's API key; first release | T2b, T3 | Not started |
+| T5 | macOS and Linux qualification | T4 | Not started; needs macOS and Linux testers |
+
+T2a and T3 depend on nothing in track T and can be built alongside T1. Both help people who never start an agent: T2a anyone running a shell, T3 anyone editing in another program. T3 must land before T4, because a real task will use the agent's own file tools.
+
+## T1a. Litria's MCP connection
+
+### Goal
+
+A scripted MCP client (no agent) connects to the running app through Litria's helper, is authenticated, and receives `initialize` and `tools/list` answers built from the committed schemas.
+
+### Tasks
+
+- **The helper.** A small program the agent starts as a stdio MCP server. It relays messages between stdio and the running app's local IPC, and exits when either side closes.
+  - Settle with evidence: a separate bundled binary (Tauri sidecar) or the app binary with a flag. Criteria: bundle size, code signing, start time, and no console window flashing on Windows (release builds flash one for any child started without `platform::hidden_command`).
+- **The local IPC.** A named pipe on Windows, a Unix socket elsewhere, readable only by the current user. No network listener (brief §3).
+  - Settle with evidence: the pipe or socket name and its permissions on each OS.
+- **Authentication.** Litria mints a short-lived token per agent session. The token is bound to one project session: the workspace and its epoch, and the app run. Epochs restart every run, so an epoch alone is not an identity across restarts (adversarial-check Learned Flaw 12, found in W4a).
+  - The token never lands in shell history or a file that outlives the session.
+  - Revoked when the project closes or switches, when the session ends, and when the app exits.
+  - A connection with a missing, wrong or revoked token is refused before any Project API code runs.
+- **The MCP envelope.** Re-open the P6 decision, SDK or thin serializer, with the P6 record's criteria (revision 2026-07-28 support, stdio, schemas served verbatim, MSRV, licence, audit, maintenance). Record it.
+- **`tools/list`** from the committed artifacts, filtered by the grant if D5 says so.
+
+### Tests
+
+- Handshake with a scripted client over the real pipe or socket: `initialize`, then `tools/list`, byte-identical to the committed artifacts.
+- Refused: no token, a wrong token, a revoked token, a token from another project, a token from a previous app run.
+- The helper exits when the app closes the channel and when the agent closes stdin. No helper process outlives either.
+- The pipe or socket refuses another user (where the OS allows a test).
+
+### Acceptance
+
+Standard checks pass. The security review and the adversarial check are recorded. A live pass on Windows: a scripted client connects to a debug build on a scratch project and lists the tools.
+
+## T1b. Tool calls with real identities
+
+### Goal
+
+The scripted client calls every tool through the helper. Each call runs as the agent session's own principal, under its grant, against its own project.
+
+### Tasks
+
+- **A real principal** in `contracts/context.rs` (today: `Test` and `Dev` only): one per agent session, carried by its token.
+- **Grants** from D4, recorded per project (brief §4).
+- **Receipts** (W4): owned by the agent session. A reconnecting helper with the same token sees its own receipts. Another session's operation id answers `unknown`, as today. D6 sets the restart behaviour.
+- **Carried from P6:**
+  - bound the raw message before parsing (today the 64 KiB budget measures re-encoded `arguments`);
+  - reject duplicate JSON keys, which collapse silently when parsed.
+- **`Cancelled` and `ShuttingDown`** (`contracts/error.rs`, declared for track T): answered when a call is cancelled, and while Litria closes.
+- **Release builds.** The Project API stops being debug-only: remove the dead-code allowances that name track T (`lib.rs`, `bridge.rs`, `commands.rs`, `useProjectApiBridge.js`). The development call stays debug-only.
+
+### Tests
+
+- Every committed request fixture through the real pipe, as P6 ran the read catalog's in process.
+- Principal binding: a call under session A cannot read or apply session B's plan or operation.
+- Project switch mid-call: the call answers `workspaceChanged` and nothing is applied.
+- Oversized and padded messages are refused before parsing; duplicate keys are refused.
+- Closing the app during a call answers `shuttingDown` or ends the helper; nothing is half-applied (W4 recovery holds).
+
+### Acceptance
+
+Standard checks pass. The adversarial check is recorded. A live pass: the scripted client reads a file, prepares an edit and applies it in a debug build, and the receipt belongs to its session.
+
+## T2a. Conversations that outlive their tab
+
+### Goal
+
+In an open project, every terminal session (a shell now, an agent conversation after T2b) keeps running when its tab or the drawer closes. It stops only when the person ends it or the project closes. A project can hold several sessions, each in its own tab.
+
+### What the terminal does today (checked 2026-10-14)
+
+- One session per project (`terminal_session_manager.rs` keys sessions by project).
+- The drawer's content component starts the session the first time it is shown and, under the default `terminalDrawerClose: end`, ends it whenever it stops being visible. The drawer passes `isVisible = isActive && isOpen` (`TopDrawerShell.jsx`), so the session also ends on:
+  - the X button;
+  - a click outside the drawer;
+  - Escape while focus is outside the terminal (Escape typed into the terminal is consumed by xterm and does not close the drawer);
+  - switching the drawer to Logs, Scaffold or Settings.
+- `terminalDrawerClose: hide` (since 2026-08-01, off by default) keeps the session alive behind the closed drawer, with the renderer still mounted.
+- Switching projects and quitting always end it.
+- No other drawer reads its visibility. The terminal is the only view that owns a resource's lifetime.
+
+### Owner rulings (2026-10-14)
+
+> "keep it working. the drawers are context awareness for the user's focus 'I am here right now' … they have become sources of truth for the users focus … no sources of truth for the project but for the users focus."
+
+- **A hidden session keeps working.** Closing its tab or the drawer hides it; nothing pauses or ends.
+- **Drawers are the person's focus, not the project's truth.** A drawer answers "where am I looking right now". It never decides whether something exists or keeps running.
+- **Several sessions per project.**
+- **Switching projects still closes everything for that project** and loads the other.
+- **Sessions stay as tabs.** The tabs are meant to become the framework for a later conversation panel.
+
+### Tasks
+
+- **Move the session's lifetime from the view to the terminal domain.** `TerminalDomain` (JavaScript) and `terminal_session_manager.rs` (Rust) own sessions, keyed by project and session. The drawer only attaches a view to a session and detaches it.
+  - [Orchestration §1.2](../../Orchestration.md#12-runtime-lifecycle-principles) rule 1 makes "whoever calls spawn" the owner. That is how the drawer came to own the session. Amend §1.2 with the owner's ruling: views attach to resources, they never own their lifetime, and drawers are the person's focus. Settle whether a guard can enforce it (for example, no drawer content calls a session's start or end).
+- **Several sessions per project**, one tab each: new, switch, rename, end. Ending is deliberate: an End action on the tab, or the session's own `exit`.
+- **Hiding never ends.** Closing a tab, closing the drawer, switching drawer tabs, clicking outside, Escape: all hide.
+- **Retire `terminalDrawerClose`.** Its `end` value contradicts the ruling. Add a dated note to ADR-019, which lists it, and remove it from the preferences registry (and from the settings-key guard, if it lists keys).
+- **Each tab shows its session's state:** running, needs you, or ended. Sources, settled with evidence per program: the terminal attention signals a program sends (the bell, and the desktop-notification escape sequences), output since the tab was last viewed, and the exit status. A hidden session that is waiting for a permission answer must be visible from outside the drawer.
+- **The screen while hidden.** The view stays mounted, as `hide` does today, so its screen is kept. If the window's web view reloads, the process survives in Rust but the screen does not. Settle with evidence: a repaint on reattach (a resize makes full-screen programs redraw), or a screen buffer kept in Rust.
+- **Project switch and quit** end every session of the project in the existing order (`useTerminalLifecycle`'s teardown). Before a switch while sessions are running, an inline notice says so (never a modal).
+- **Bounds:** a cap on sessions per project; the existing per-session flow-control watermarks.
+
+### Tests
+
+- Closing a tab, closing the drawer, switching drawer tabs and clicking outside each leave the session's process alive (the same process id), and reopening shows the same session.
+- Two sessions in one project keep separate input, output and size.
+- End stops the session's whole process tree (Job Object on Windows, process group on Unix), and only that session's.
+- Switching projects ends every session of the old project; none survives into the new one.
+- A bell from a hidden session marks its tab, and viewing the tab clears it.
+- The retired preference: a stored `terminalDrawerClose` value is ignored without error.
+
+### Acceptance
+
+Standard checks pass. A live pass on Windows with shells only. T2a ships on its own; it needs nothing from T1.
+
+## T2b. Starting the user's own agent
+
+### Goal
+
+From Litria, the person starts their installed Claude Code or Codex for the open project, as a T2a session. The agent connects to Litria's tools. Its own sign-in, settings and skills apply. When the project reopens, its conversations can be continued. Stop, closing and crashing leave nothing running. All of this is proven on Windows **without a single model call**.
+
+### Tasks
+
+The tasks follow D1. For route A:
+
+- **Detection.** Find an installed `claude` and `codex` without starting a session or touching the network. Show a hint when one is missing; never install.
+  - Windows: an npm `.cmd` shim needs `cmd /C`, and an emptied environment needs `SystemRoot` and `COMSPEC`. Language-server spawning hit both.
+- **Start.** Run the agent as a T2a session for the project, as the session's own process, not typed into a shell (so the token never reaches shell history). Add Litria's MCP server for that session only: `claude --mcp-config`, and `codex -c mcp_servers.<name>…`. Never edit the person's own config files.
+- **Environment** per D3.
+- **Naming** per §3: "Claude Agent" or "runs Claude Code"; no "GPT" or OpenAI names in Litria's own labels.
+- **Lifecycle** (brief §6, T2a): the session's Job Object (Windows) or process group (Unix) owns the agent and its descendants, including the helper and the person's other MCP servers. Closing its tab or the drawer hides it and it keeps working. Ending it, switching the project and closing the window end them. Never touch an agent session Litria did not start.
+- **Continue after the project reopens.** Litria records, per project, each agent conversation it started: the agent, the conversation's id, a title and when it ran. Never its content: the conversation stays the agent's own.
+  - Claude Code takes an id at start (`--session-id`). How Litria learns a Codex conversation's id is settled with evidence (Codex records its own; `codex resume` takes an id).
+  - When the project opens, an inline notice offers to continue them (the W4b reopen notice is the model). Continuing runs the agent's own resume (`claude --resume <id>`, `codex resume <id>`) with Litria's tools added again, and leaves it idle.
+  - Checked 2026-10-14 against the installed versions (Claude Code 2.1.185, Codex 0.162): both have the flags above, and Codex filters its resume list to the current folder.
+  - Text typed but not sent when the project closed is not recoverable. The notice does not claim otherwise.
+- **Version record.** The `claude` and `codex` versions qualified, written down (dependency change policy). Litria does not pin the person's install, but it states what was tested.
+
+### Tests
+
+**Keyless pass on Windows** (live, debug build, scratch project). Each agent gets an empty settings folder, a scratch `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, holding one test skill and **no sign-in**:
+
+1. The agent starts from Litria and is idle: no prompt is sent.
+2. Litria's side logs a real `initialize` and `tools/list` from the agent's helper.
+3. The agent's own screen shows Litria's tools next to its own, if it has a local view that needs no model call (candidates: `/mcp`, `claude mcp list`). Each candidate is checked; one that needs a model call or a sign-in moves this check to T4.
+4. The test skill is visible to the agent, by the same rule.
+5. Signed out, the agent reports that sign-in is needed, and Litria's terminal shows it plainly.
+6. Closing the agent's tab or the drawer leaves it running (T2a).
+7. Ending the session, switching the project, closing the window, and killing the Litria process each leave no agent, helper or MCP child running (process list before and after). The agent's own interrupt stops its turn without ending it.
+8. A `claude` session started outside Litria survives all of the above.
+9. After the project reopens, the notice lists the conversations, and continuing one starts the agent's resume with Litria's tools listed. Whether resuming sends anything to the model is checked here if it can be seen without a sign-in, and in T4 otherwise.
+
+### Acceptance
+
+Standard checks pass. The keyless pass is recorded with the versions tested. Any check that could not run without a model call is listed and carried to T4, not marked passed.
+
+## T3. Files changed outside Litria
+
+### Goal
+
+When another program changes a project file on disk, Litria notices. A file open with no unsaved changes reloads. A file with unsaved changes keeps both versions and asks. Saving never silently overwrites a newer version on disk.
+
+### Why this is in track T
+
+The agent's own file tools write straight to disk, and the owner ruled they are never turned off. On 2026-10-14 a search found that Litria watches no files and that saving checks nothing on disk:
+- no file watcher, focus refresh or "changed on disk" handling in `src/` or `src-tauri/src/`;
+- `saveCoordinator.saveOneTab` writes the tab's text without comparing the disk version.
+
+So, untested so far: an agent edits a file that is open with unsaved changes, the person saves, and the agent's edit is gone. This affects any outside editor, not only agents. The brief (§8, §10 "native edit coexistence") makes this a gate before agents may edit natively.
+
+### Tasks
+
+- **Reproduce on `main` first**, with an outside write to an open clean file and to an open dirty file, then a save (as W1a reproduced its defects before fixing them).
+- **Detect.** Settle with evidence: a file watcher (a new crate, so a dependency decision) or polling the open files. Focus-only checks are not enough: the person may be watching the agent inside Litria, so Litria never loses focus.
+- **Clean tab:** reload from disk; the editor, syntax and graph follow (the existing re-index path).
+- **Dirty tab:** keep both versions and offer a choice inline (a pill, never a modal). Neither version is lost.
+- **Save:** check the disk version the tab was based on before writing. If it changed, do not overwrite; show the same choice. W3 deferred "replace if the disk revision matches" because nothing needed it yet. This save is the consumer it was waiting for.
+- **Created, renamed and deleted files** reach the file tree and the graph.
+
+### Tests
+
+- The reproduction, now fixed.
+- Outside writes during typing and during a save in flight.
+- A rename and a delete by another program while the file is open.
+- An outside write to a file the disclosure policy withholds (no content leaks into Litria's UI that the policy would deny an agent).
+
+### Acceptance
+
+Standard checks pass. The adversarial check (check-then-write saving) is recorded. A live pass with a script standing in for the agent's writes.
+
+## T4. Real tasks, first release
+
+### Goal
+
+Short real tasks with each agent, on the owner's own API key, prove the whole path. Track T's first user-facing release follows.
+
+### Tasks
+
+- Re-check §3's provider pages. Record any change.
+- Owner-run tasks, a handful per agent, on a scratch project:
+  - reads through Litria's tools (`litria_project_context`, `litria_graph_query`, `litria_files_read`);
+  - an edit through `litria_changes_prepare` and `litria_changes_apply`, approved in the agent's own prompt;
+  - an edit through the agent's own file tool, with the file open and unsaved in Litria (T3);
+  - the person's Stop during a streaming turn. The provider may still bill for the request already sent (ADR-031 §4); Litria never says otherwise;
+  - closing Litria mid-apply, then reopening: the W4b notice names the files and nothing replays.
+- Anything T2b carried here because it needed a model call.
+- The posture note for users: what Litria's tools can and cannot guarantee next to the agent's own tools (brief §8: native edits do not get Litria's revision checks or receipts).
+
+### Acceptance
+
+Every task recorded with the agent versions and outcomes. Release per the [release policy](../../../Agents/docs/release-policy.md).
+
+## T5. macOS and Linux
+
+### Goal
+
+T2a's sessions, T2b's keyless pass and T4's tasks on macOS and Linux.
+
+### Tasks
+
+- The socket's permissions, process-group cleanup and parent-death cleanup on each OS (brief §6: a frontend callback alone does not cover crashes).
+- Windows-only results stated as such until this passes.
+
+## 6. Carry-over ledger
+
+Everything earlier work handed to track T, and where it lands:
+
+| From | Item | Lands in |
+|---|---|---|
+| P6 | A real transport (the adapter is test-only) | T1a |
+| P6 | SDK or thin serializer, re-opened with criteria | T1a |
+| P6 | Bound the raw message before parsing | T1b |
+| P6 | Duplicate JSON keys | T1b |
+| P6 | `tools/list` filtered by grant | D5, T1a |
+| P1/contracts | Real principals (`Principal` is `Test` or `Dev`) | T1b |
+| Brief §4 | Grants from project grant records | D4, T1b |
+| W4 | Re-binding a reconnecting agent to its receipts | T1b, D6 |
+| W4a | Operation ownership is the in-process principal | T1b |
+| W2 | Review surface; `PersonReview` off until one exists | Deferred (§1). The agent's own prompt is the review |
+| contracts/error.rs | `Cancelled`, `ShuttingDown` | T1b |
+| P3 | Small-context budget measurement | Deferred with the local-model route |
+| Release builds | Project API code allowed as dead code until a transport exists | T1b |
+| Brief §10 | Runtime and platform qualification | T2b, T5 |
+| Brief §10 | Cloud and local routes | T4 (cloud); local deferred |
+| Brief §10 | Authentication and persistence | T2b (the agent owns it, D2) |
+| Brief §10 | Foreground lifecycle | T2a, T2b, T4, T5 |
+| Brief §10 | Native edit coexistence | T3 |
+| Brief §10 | Product usability | T2a, T2b, T4 |
+| Owner, 2026-10-14 | A terminal session ends when its tab or the drawer closes, losing prompts and context | T2a |
+| Owner, 2026-10-14 | Conversations must not be lost when the project closes | T2b (continue on reopen) |
+| ADR-019 | `terminalDrawerClose` preference | T2a (retired) |
+
+## 7. Residual risks
+
+- **Same-user programs.** Another program running as the same user can read the token from the agent's process and connect. The brief (§9) puts same-user malware outside the guarantee. Short-lived tokens bound to one session limit the window.
+- **The agent's own tools are not Litria's.** Native edits get no revision check, receipt or undo from Litria (ADR-031 §5). T3 protects the person's unsaved work and newer disk versions. It does not make native edits reviewable.
+- **Providers move.** Claude Code and Codex change fast, and OpenAI calls `app-server` experimental. Qualification records versions, and §3 is re-checked before release.
+- **In-flight billing.** Stopping cannot recall a request already sent to the provider.

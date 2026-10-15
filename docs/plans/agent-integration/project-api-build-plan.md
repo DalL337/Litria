@@ -2084,6 +2084,8 @@ Then:
 
 A separate plan owns these once a runtime is chosen. No P or W slice may add a listener, socket or external process.
 
+> **Note (2026-10-14):** that plan is drafted: the [track T build plan](track-t-build-plan.md). The owner ruled its decisions the same day. Its §6 maps every item above, and every other item earlier slices carried to track T, to a slice.
+
 ## Acceptance record
 
 Done on acceptance (2026-09-30, PR #85). The items below are kept as written:
