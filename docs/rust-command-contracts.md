@@ -36,7 +36,7 @@ The debug-only `crash_test_panic`, `project_api_dev_call` and `project_api_dev_r
 
 | Command | Defined in | Frontend caller | Notes |
 |---|---|---|---|
-| `terminal_spawn` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | Async. Adds a session (several per project); refuses past the caps, a different folder for the project, or while quitting. A start whose project closed meanwhile ends the new session and reports `terminal.project_closed`. |
+| `terminal_spawn` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | Async. Adds a session (several per project); refuses past the caps, a different folder for the project, or while quitting. A start whose project closed meanwhile, or sent by a page that has since reloaded, ends the new session (or is refused) and reports `terminal.project_closed`. |
 | `terminal_input` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | Sync on purpose (order). Takes `sessionId`. Ok means queued for the session's writer thread, not written. |
 | `terminal_resize` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | Sync on purpose. Takes `sessionId`. |
 | `terminal_session_end` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | Async. Takes `sessionId`; ends that session's whole process tree. Replies `stillEnding` when the teardown outlives its 3 s budget. |
