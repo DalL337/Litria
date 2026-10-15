@@ -1,7 +1,27 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-06 — **targeted dependency fix (branch `chore/source-map-js-1.2.2`)**:
+> **Last reviewed**: 2026-10-14 — **terminal sessions that outlive their tab (track T slice T2a, branch `feat/t2a-terminal-sessions`)**:
+> - **Why.** Security policy Rule 1: the process-spawning terminal commands changed (`terminal_spawn` now adds a session instead of replacing one; end, pause and resume take a session id; `terminal_end_project`, `terminal_busy_sessions` and `terminal_take_reload_report` are new; `terminal_session_start` is gone).
+> - **What holds.**
+>   - The shell is still chosen only from the allowlist; nothing in T2a widens what can run.
+>   - Caps: 8 sessions per project, 24 in total counting starts in flight and teardowns still running, checked and reserved under one lock (a webview cannot exceed them by racing starts; tested with 16 concurrent starts).
+>   - A project keeps one folder while it has sessions.
+>   - Session ids are 128 random bits, validated (32 lowercase hex) before any lookup; project ids are capped at 256 bytes. A command reaches a session only through its own project.
+>   - A start whose project closed (switch, Exit to Launcher, page reload, quit) is ended, never registered. Nothing can start in a project while it closes.
+>   - End stops the whole process tree: the Job Object is dropped before the pseudoconsole closes (closing first can wedge the in-box console host), and on Unix the shell's own and the terminal's foreground process groups are signalled, never group 0, 1 or Litria's own.
+>   - The Job Object is now assigned through the child's own handle, and a failure is logged with the session id (it was silent).
+>   - Teardown runs off the UI thread within a 3 s budget; a page reload ends every session before any script runs.
+>   - Adversarial check (journal `.research/2026-10-14-t2a-terminal-sessions.md`): two findings, both fixed. A session lock was held through the pseudoconsole close (suspected, confirmed by inspection; fixed). An unknown busy state read as idle, so a switch could end a running program unasked (reproduced on Windows; verified fixed on Windows).
+> - **Residual.**
+>   - A webview (an XSS in Litria's own UI first) can still start shells under any project id and folder: Rust keeps no record of the open project. The caps bound it. Pre-existing.
+>   - The Job Object is still assigned after the shell starts; a shell starts nothing before it reads input. Gap G2 for agents (T2b).
+>   - On Unix, a background job in a process group of its own survives End (track T slice T5).
+>   - Graceful End types Ctrl+C and `exit` into the foreground program; T2b's agent sessions need another strategy.
+> - **Erratum on "Terminal execution boundary — GOOD" (2026-07-16) below:** the environment is NOT filtered to the allowlist. portable-pty's `CommandBuilder::new` starts from the whole process environment (plus the Windows registry environment), and `terminal_pty.rs` only overlays the allowlisted keys; it never clears the environment, and the allowlist lookup is case-sensitive. The tests check the computed map, not the child's environment. Found 2026-10-14 by reading the code (suspected, confirmed by inspection; tracked as gap G1 in `docs/plans/ideas/brief-run-application.md`). Not changed by T2a: clearing the environment changes every terminal, so the owner rules on it before track T's agent slice.
+> - **Scans.** `npm audit` 0. `cargo audit`: **4 new advisories published today against `rustls` 0.23.45** (RUSTSEC-2026-0346 medium, -0347/-0348/-0349 low), reached only through `ureq` 3.3.0 (the language-server download manager's HTTPS client). The fix is `rustls` ≥ 0.23.46, a lockfile bump, held by the ≥24 h release-age gate; a separate dependency change, not part of T2a. The 9 allowed warnings are unchanged. The `windows` crate gains the `Win32_System_JobObjects` feature (no new crate).
+>
+> **Reviewed**: 2026-10-06 — **targeted dependency fix (branch `chore/source-map-js-1.2.2`)**:
 > - **What changed.** Dependabot alert #10 (GHSA-68fv-2mgg-jv7q, high) opened 2026-10-07 02:50 UTC on `source-map-js` 1.2.1. A crafted indexed source map with huge section offsets ties up the event loop (denial of service). 1.2.2 fixes it.
 > - **Exposure.** Development only, through two paths, both wanting `^1.2.1`:
 >   - `postcss` 8.5.25;
@@ -358,6 +378,7 @@ Language packs are `&'static str` in Rust source. Not loaded from config files, 
 
 ### Terminal execution boundary — GOOD *(audited 2026-07-16)*
 `terminal_policy.rs` allowlists the shell executable (`powershell.exe|pwsh.exe|cmd.exe` / `sh|bash|zsh`), validates `project_root` through `path_guard`, and filters the child environment to an allowlist that explicitly drops `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS`, `BASH_ENV`, `PROMPT_COMMAND`, `PYTHONPATH` (test-enforced). `terminal_spawn` is not an arbitrary-executable primitive.
+> **Erratum (2026-10-14):** the environment claim is wrong — the child inherits the whole environment; only the allowlisted keys are overlaid. See the 2026-10-14 review entry at the top. The executable allowlist and `path_guard` claims stand.
 
 ### Project-name validation — GOOD (but see ISSUE 12) *(audited 2026-07-16)*
 `blank_project::validate_project_name` rejects path separators, `.`/`..`, control chars, Win32 forbidden chars, trailing dots, and reserved device names (CON, NUL, COM1…) — test-covered. Used by the Blank and Python creation paths.

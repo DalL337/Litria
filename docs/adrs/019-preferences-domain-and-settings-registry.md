@@ -1,6 +1,13 @@
 # ADR-019: Preferences Domain & Context-Aware Settings Registry
 
 ## Status
+- Amended (2026-10-14 — owner ruling, track T slice T2a: **`terminalDrawerClose` retired**.
+  Closing the terminal drawer never ends a session now: sessions belong to the project
+  and end only when the person ends them, the project closes, or Litria quits. With no
+  choice left, the preference no longer meets the Behavior room's admission bar ("two
+  reasonable users genuinely want different behavior"). A value already stored in a
+  preferences file stays there, inert. The rows below that mention the terminal drawer
+  are history.)
 - Amended (2026-08-01 — later-phase ledger, owner rulings: **terminal-hide capability
   shipped** — the `terminalDrawerClose` preference is live, its `comingSoon` gate removed;
   the unit was kept deliberately narrow of any future console work, which needs its own
@@ -14,7 +21,7 @@
   the Library room partially arrived early — theme create/rename/delete lives in the
   Preferences panel; the materials parameter contract shipped with Slice 3
   (`src/theme/materialParams.js`).)
-- Accepted — design settled 2026-07-10; delivery slices 1–4 shipped 2026-07-11 (PRs #117–#120). Later-phase items (Library growth with the Theme & Material rework, per-project theme via choice/library split, ADR-005 consent-review rows, terminal hide capability) remain open in their owning tracks.
+- Accepted — design settled 2026-07-10; delivery slices 1–4 shipped 2026-07-11 (PRs #117–#120). Later-phase items (Library growth with the Theme & Material rework, per-project theme via choice/library split, ADR-005 consent-review rows, terminal hide capability) remain open in their owning tracks. *(2026-10-14: the terminal hide capability shipped 2026-08-01 and was then superseded by sessions that never end on close; see the first status line.)*
 
 ## Date
 - 2026-07-10

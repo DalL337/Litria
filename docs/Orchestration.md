@@ -32,6 +32,20 @@ servers, watchers) — on both the JS and Rust sides.
 1. Resource lifecycle ownership: every spawned resource has exactly one owner responsible
    for cleanup. The owner is whoever calls spawn/open/connect. Shared access uses
    reference-counted handles with a single teardown coordinator.
+   *Amended 2026-10-14 (owner ruling, track T slice T2a): a view is never that owner.*
+   The terminal drawer had become the owner of its shell because it called spawn, so
+   hiding the drawer killed the shell and lost the person's work. The rule now reads:
+   - **The owner is a domain**, keyed by the project (or whatever the resource belongs
+     to). Whoever *asks* for a resource — a click, a pill — asks the domain.
+   - **Views attach and detach; they never start or end a resource because they mounted,
+     unmounted, appeared or disappeared.** A person's gesture inside a view (New, End)
+     goes to the domain like any other request.
+   - **Drawers express the person's focus — "I am here right now" — not the project's
+     truth.** Hiding a drawer (closing it, switching drawers, clicking outside,
+     Escape) only hides.
+   - Enforcement: `test/domains/drawerLifetimeContract.test.mjs` fails if an effect in
+     `src/drawers/` or in the terminal renderer calls a session's start or end, and
+     `test/domains/terminalDrawer.test.mjs` proves every hide path ends nothing.
 2. Teardown cascade ordering: shutdown follows a strict sequence — signal intent, flush
    buffers, wait with timeout, force kill, join/reap. Misordering causes hangs, leaks, or
    data loss.
@@ -202,16 +216,21 @@ marked below.
 14. `TerminalDomain`
 - Module: `src/terminal/terminalDomain.js` — wired via `createTerminalDomain` +
   `useTerminalLifecycle` in App.jsx.
-- Storage adapter: `src/terminal/terminalStorage.js` (Tauri invoke/event wrappers).
-- Owns: terminal session lifecycle (start/end/teardown), active session state
-  (sessionId/projectId binding), input/resize proxying, event listener lifecycle,
-  backpressure coordination.
+- Storage adapter: `src/terminal/terminalStorage.js` (Tauri invoke wrappers and the
+  per-session event stream: a bounded replay plus the domain's tap).
+- Owns *(rewritten 2026-10-14, track T slice T2a)*: terminal session lifetime, several
+  sessions per project, one tab each (`starting` / `running` / `ended`); the current
+  project (starts are refused without one, so nothing starts in a closing project);
+  the first shell on the terminal rail's open gesture (`ensureSession`); per-session
+  input/resize/pause/resume; which tab the person is viewing (focus, reported by the
+  drawer); the busy query behind the notice before a switch.
 - Does not own: terminal UI rendering (xterm.js lives in the presentation layer), drawer
-  open/close state, pill notification state.
+  open/close state, pill notification state, the notice pill itself
+  (`src/app/terminalEndGate.js`).
 - Depends on: infrastructure adapters only; no UI imports, no other domain imports.
-- Rust backend: `terminal_session_manager.rs`, `terminal_ipc_bridge.rs`,
-  `terminal_policy.rs`, `terminal_types.rs` (+ vendored portable-pty with sideloaded
-  ConPTY — see PR #106).
+- Rust backend: `terminal_session_manager.rs` (the session registry), `terminal_pty.rs`
+  (one session's pseudoconsole and threads), `terminal_policy.rs`, `terminal_types.rs`
+  (+ vendored portable-pty with sideloaded ConPTY — see PR #106).
 
 15. `PillDomain`
 - Module: `src/terminal/pillDomain.js` — pill notification state (queue, ids, listeners).

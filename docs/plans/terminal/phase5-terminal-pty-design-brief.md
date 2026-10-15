@@ -82,7 +82,7 @@ Lifecycle rule:
 - Project switch/close must force deterministic `running|starting|stopping -> ended`.
 
 Invariants (hard requirements):
-1. Exactly one active `sessionId` per active `projectInstance`.
+1. Exactly one active `sessionId` per active `projectInstance`. *(Superseded 2026-10-14, track T slice T2a: a project holds several sessions, at most 8, one tab each. Invariants 2 and 3 stand.)*
 2. Project switch/close is authoritative and must force backend session teardown regardless of drawer/view mount state.
 3. Litria app shutdown must leave zero terminal child processes and zero active terminal sessions.
 

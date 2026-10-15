@@ -279,13 +279,17 @@ event streams — interactive CLIs work end-to-end inside the app.
 - Win10 interactive-prompt fix shipped in the installer (ConPTY pair
   sideloaded; graceful fallback to in-box conhost)
 - Flow control survives floods (`cat huge-file`) without freezing typing
-- Process-completion pills (success/failure) even while the drawer is
-  hidden
-- **Drawer close is preference-steered**: End (default) stops the shell;
-  Hide keeps the session alive for instant reopen. Project switch and app
-  exit always hard-kill — clean shutdown is not steerable
+- **Several terminals per project, one tab each** (2026-10-14): closing the
+  drawer, switching drawers or clicking outside only hides them, and every
+  session keeps running. A session ends when you end it, when its shell
+  exits (its tab shows that it ended, with the exit code), when the project
+  closes, or when Litria quits. End stops the session's whole process tree.
+- Switching projects (or Exit to Launcher) while a terminal is running a
+  program shows an inline notice first; idle shells end without asking
+- Suggested commands (install offers) run in a terminal tab of their own
 
-*Built on:* terminal PTY plan + ADR-019 (`terminalDrawerClose`).
+*Built on:* terminal PTY plan + track T slice T2a
+(`docs/plans/agent-integration/track-t-build-plan.md`).
 
 ---
 
@@ -342,7 +346,7 @@ guard makes hard-coding a settings key a build failure.
 - Current registry: theme, energy (Live/Calm, project-overridable), wire
   drop behavior (project-overridable), default project location, default
   base theme, splash screen, build-trace pause, build-log auto-send,
-  terminal drawer close, eleven grid settings (shared with the HUD's Grid
+  eleven grid settings (shared with the HUD's Grid
   widget), and paths withheld from AI agents (read by the Project API, which
   release builds don't expose yet)
 - Settings drawer refit: Theme / Accent / Material pills with a

@@ -111,7 +111,8 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 |---|---|---|---|
 | T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Not started |
 | T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Not started |
-| T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes | — (alongside T1 and T3) | Not started |
+| T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Built 2026-10-14, branch `feat/t2a-terminal-sessions`, PR pending (see [T2a record](#t2a-record)) |
+| T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
 | T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows | T1b, T2a, D1–D3 | Not started |
 | T3 | Files changed outside Litria: detect, reload, keep both on conflict, never overwrite on save | — (alongside T1 and T2a) | Not started |
 | T4 | Real tasks on the owner's API key; first release | T2b, T3 | Not started |
@@ -192,6 +193,8 @@ In an open project, every terminal session (a shell now, an agent conversation a
   - a click outside the drawer;
   - Escape while focus is outside the terminal (Escape typed into the terminal is consumed by xterm and does not close the drawer);
   - switching the drawer to Logs, Scaffold or Settings.
+
+  > **Erratum (2026-10-14, the T2a mapping):** only Terminal and Logs are top drawers. Scaffold and Settings live in the left drawer; clicking them while the terminal is open lands on the top drawer's scrim, which closes it. The effect was the same: the session ended.
 - `terminalDrawerClose: hide` (since 2026-08-01, off by default) keeps the session alive behind the closed drawer, with the renderer still mounted.
 - Switching projects and quitting always end it.
 - No other drawer reads its visibility. The terminal is the only view that owns a resource's lifetime.
@@ -230,6 +233,39 @@ In an open project, every terminal session (a shell now, an agent conversation a
 ### Acceptance
 
 Standard checks pass. A live pass on Windows with shells only. T2a ships on its own; it needs nothing from T1.
+
+### T2a record
+
+> **Built 2026-10-14 on branch `feat/t2a-terminal-sessions`** (PR pending the owner's merge). Journal `.research/2026-10-14-t2a-terminal-sessions.md`. The code was mapped by nine read-only agents, the design attacked by four critics before any code was written, and the branch reviewed by four lenses, each checked by a skeptic.
+>
+> **Decisions made while building** (the plan did not settle them; each is the smaller, safer reading of the owner's rulings, and is open to the owner):
+> - **A running tab has no close.** It has End, the deliberate action. Hiding is selecting another tab, closing the drawer, switching drawers, clicking outside or Escape. The Tasks and Tests lines above that say "closing a tab hides it" read that way. An ended tab has an × that removes it.
+> - **The first shell comes from a gesture**, never from the drawer becoming visible: opening the terminal from its rail on a project with no tab starts one (one start in flight per project). A project with no tab otherwise shows "New terminal". Ending the last tab never starts another.
+> - **The notice before a switch is in this slice**, not later: without it, a switch would end hidden running work without a word. It appears only when a terminal is running a program (Windows: the session's Job holds more than the shell; Unix: the terminal's foreground group is not the shell's). Idle shells end without asking. It is an inline pill: its button switches (or closes the project), dismissing it stays. A newer switch cancels a pill still waiting. When the busy state is unknown, it counts as busy.
+> - **End asks first only when the session is running a program**, inline on the tab.
+> - **A page reload ends every session.** A reload lands on the launcher with no project open, so this is the project closing. It happens in Rust as the page starts to load, so nothing the new page starts can race it, and the launcher reports once how many sessions ended. Reattaching after a reload is not built.
+> - **Command pills (install offers) run in a shell tab of their own**, named after the command and typed after the shell's first output, never into an existing tab (which might be running a server, an editor or, after T2b, an agent). A pill raised in another project runs nothing.
+> - **"Needs you" moves to T2a-2.** It needs per-program evidence (the research found Claude Code sends nothing by default in Litria's terminal; Codex sends a bell when it thinks it is unfocused; both support the Program Status Protocol, OSC 7501). This slice shows `starting`, `running` and `ended` (with the exit code).
+>
+> **What changed, Rust** (`terminal_session_manager.rs`, `terminal_pty.rs`, `commands.rs`, `lib.rs`):
+> - One registry lock over live sessions, starts in flight, sessions still ending, and the quit flag. Caps: 8 per project, 24 in total counting starts and unfinished teardowns. One folder per project. A start whose project closed meanwhile is ended, never registered. Random 128-bit session ids, validated before lookup.
+> - Spawn, end, end-project and end-all run off the UI thread; each teardown runs on its own thread within a 3 s budget (below the frontend's 5 s). Quit runs once and waits, bounded, for teardowns and starts in flight. Input, resize, pause and resume stay synchronous so their order holds.
+> - A writer thread owns the PTY input; input still queued when a session ends is dropped. An exit watcher reports a shell that exits by itself: on Windows the output pipe never breaks while the console host holds its reference handle, so the reader could not see it. Output is decoded as UTF-8 across reads. Nothing reaches the webview from a session being ended.
+> - End's order: Ctrl+C and `exit`, a 2 s wait, then the process tree (Windows: the Job Object dropped; Unix: the shell's and the foreground process groups), and the Job dropped before the pseudoconsole closes. Closing first can wedge the in-box console host. A session dropped without End is ended on another thread.
+> - Removed: `terminal_session_start` (no caller) and `terminal_ipc_bridge.rs` (no listener).
+>
+> **What changed, frontend:** `TerminalDomain` owns the sessions; `terminalStorage` gives each session a bounded, non-draining replay (StrictMode's double mount no longer loses the banner) and a tap the domain reads with no view attached; the drawer is a tab strip over kept-mounted screens, inactive ones hidden and moved out of the clipped stack so xterm stops rendering them; the renderer fits only a measured box, reports its real size once, lifts a pause it held when it unmounts, releases its WebGL context, and gives up focus when hidden; `useTerminalLifecycle` keeps the domain's current project (starts are refused while a project closes) and its backstop ends only the previous project; `terminalDrawerClose` is retired.
+>
+> **Docs:** Orchestration §1.2 rule 1 amended (views never own a resource's lifetime; drawers are focus) and the TerminalDomain entry rewritten; implementation policy Rule 1 amended; ADR-019 status; CAPABILITIES; README; the crash investigation's out-of-scope note; the PTY brief's invariant 1 and the terminal PRD's item 5 superseded; the Run brief's gaps G2/G5/G7; the multi-session brief; the Rust module and command inventories; the security audit (a dated entry, and an erratum: the terminal environment is not filtered to its allowlist, gap G1, for the owner before T2b).
+>
+> **Adversarial check** (journal): two findings, both fixed. A session lock was held through the pseudoconsole close, so a resize at that moment could block the UI thread (suspected, confirmed by inspection). An unknown busy state read as idle, so a switch could end a running program unasked (reproduced on Windows against the first commit; verified fixed on Windows).
+>
+> **Evidence** (Windows 10 19045 unless stated):
+> - `cargo build` 0 warnings; `cargo test` all pass, including 17 registry tests with fake sessions (concurrent caps, a project closed or quit during a start, a wedged teardown inside its budget, other sessions responsive while one ends) and four real-shell tests (isolation, a self-exit with its code, End stopping a running program, the drop backstop), run against both the in-box console host and the sideloaded 1.24 host.
+> - `npm run test:domains` all pass, including the drawer driven in StrictMode through every hide path (nothing ends, the same screen stays mounted), the switch coordinator (terminals end before the database closes; a busy terminal asks; nothing starts while a project closes), the gate, the domain through the real event stream, and a contract test that fails on `main`'s drawer.
+> - Guards 7/7; `npm run build`.
+> - Linux and macOS: see the PR (container run and CI).
+> - Live pass on Windows: see the PR.
 
 ## T2b. Starting the user's own agent
 
