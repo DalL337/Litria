@@ -12,7 +12,8 @@ pub(crate) enum Principal {
     #[cfg_attr(not(test), allow(dead_code))] // constructed only by tests
     Test,
     /// Debug builds only: `project_api_dev_call`, for driving the live app
-    /// over CDP. Real agent principals arrive with the transport (track T).
+    /// over CDP. Real agent principals arrive with tool calls (track T,
+    /// slice T1b).
     #[cfg_attr(not(debug_assertions), allow(dead_code))] // the dev call is debug-only
     Dev,
 }

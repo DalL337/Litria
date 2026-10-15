@@ -9,6 +9,22 @@ use crate::contracts::context::{Grant, Principal};
 use crate::contracts::project_api::files_read::FilesReadOp;
 use crate::contracts::project_api::{catalog, test_dispatcher};
 
+/// Every capability in the catalog.
+pub(super) fn whole_catalog() -> Grant {
+    Grant::of(catalog().iter().map(|entry| entry.capability))
+}
+
+/// P6 pinned the mapping to the stateless revision with every tool listed;
+/// these keep its tests there. The handshake revisions have their own tests
+/// below.
+pub(super) fn tools_list() -> Value {
+    super::tools_list(Revision::V2026_07_28, &whole_catalog())
+}
+
+pub(super) fn tools_call(dispatcher: &Dispatcher, context: &CallContext, params: &Value) -> Result<Value, Value> {
+    super::tools_call(dispatcher, context, params, Revision::V2026_07_28)
+}
+
 pub(super) fn tool<'a>(list: &'a Value, name: &str) -> &'a Value {
     list["tools"]
         .as_array()
@@ -187,6 +203,57 @@ fn errors_never_echo_the_call() {
 }
 
 #[test]
-fn the_revision_is_the_one_the_briefs_target() {
-    assert_eq!(REVISION, "2026-07-28");
+fn the_revisions_are_named_as_the_specification_names_them() {
+    assert_eq!(Revision::V2026_07_28.as_str(), "2026-07-28");
+    assert_eq!(Revision::V2025_11_25.as_str(), "2025-11-25");
+    assert_eq!(Revision::V2025_06_18.as_str(), "2025-06-18");
+    // The handshake serves exactly what the installed agents ask for
+    // (Claude Code 2.1.185: 2025-11-25; Codex 0.162: 2025-06-18), newest first.
+    assert_eq!(Revision::HANDSHAKE, [Revision::V2025_11_25, Revision::V2025_06_18]);
+    assert_eq!(Revision::handshake("2025-06-18"), Some(Revision::V2025_06_18));
+    assert_eq!(Revision::handshake("2026-07-28"), None, "the stateless revision has no handshake");
+    assert_eq!(Revision::handshake("2025-03-26"), None, "no outputSchema in 2025-03-26");
+}
+
+/// A handshake revision's results are the stateless ones minus `resultType`,
+/// which only 2026-07-28 defines.
+#[test]
+fn handshake_results_carry_no_result_type() {
+    for revision in Revision::HANDSHAKE {
+        let list = super::tools_list(revision, &whole_catalog());
+        assert!(list.get("resultType").is_none(), "{}: {list}", revision.as_str());
+        let mut stateless = tools_list();
+        stateless.as_object_mut().unwrap().remove("resultType");
+        assert_eq!(list, stateless, "{}", revision.as_str());
+
+        let params = json!({ "name": FilesReadOp::NAME, "arguments": { "documents": [{ "path": "src/auth.ts" }], "source": "disk" } });
+        let result = super::tools_call(&test_dispatcher(), &context(), &params, revision).unwrap();
+        assert!(result.get("resultType").is_none(), "{result}");
+        assert_eq!(result["isError"], false);
+        let denied = json!({ "name": "litria_project_context" });
+        let error = super::tools_call(&test_dispatcher(), &context(), &denied, revision).unwrap();
+        assert!(error.get("resultType").is_none(), "{error}");
+        assert_eq!(error["isError"], true);
+    }
+}
+
+/// Track T plan D5: the list shows what the grant allows, in catalog order,
+/// and nothing else.
+#[test]
+fn the_list_shows_only_granted_tools() {
+    let names = |grant: &Grant| -> Vec<String> {
+        super::tools_list(Revision::V2025_11_25, grant)["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let all: Vec<String> = catalog().iter().map(|entry| entry.name.to_owned()).collect();
+    assert_eq!(names(&whole_catalog()), all);
+    assert!(names(&Grant::default()).is_empty());
+    let reads = Grant::of(catalog().iter().filter(|entry| entry.read_only).map(|entry| entry.capability));
+    let expected: Vec<String> = catalog().iter().filter(|e| e.read_only).map(|e| e.name.to_owned()).collect();
+    assert_eq!(names(&reads), expected);
+    assert!(!names(&reads).iter().any(|name| name == "litria_changes_apply"));
 }

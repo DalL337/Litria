@@ -1,38 +1,78 @@
-//! MCP adapter proof (contract-schemas brief §9; Project API build plan P6).
-//! No SDK and no transport: this builds the `tools/list` result and the
-//! `tools/call` results an adapter publishes, from the catalog and the
-//! COMMITTED artifacts, embedded the way the application will embed them,
-//! following MCP revision 2026-07-28. Track T adds the transport and moves the
-//! adapter into the application; until then it is test-only (plan §1).
+//! The MCP adapter (contract-schemas brief §9; Project API build plan P6;
+//! track T slice T1a): the `tools/list` result and the `tools/call` results
+//! Litria's MCP connection serves, built from the catalog and the COMMITTED
+//! artifacts, embedded in the application.
 //!
-//! SDK or thin serializer (P6 decision, 2026-10-11): the thin serializer, and
-//! no new crate. Without a transport an SDK would bring only its protocol
-//! envelope and session machinery, which is track T's subject; what the
-//! adapter itself owns is this mapping, pinned here by tests to the revision.
-//! Whatever SDK track T picks must serve the committed schemas verbatim.
+//! Revisions (T1a, 2026-10-15). P6 proved this mapping against 2026-07-28,
+//! the stateless revision. The agents people have installed still open with
+//! the `initialize` handshake of an earlier revision: Claude Code 2.1.185
+//! asks for 2025-11-25 and Codex 0.162 for 2025-06-18 (captured live, track T
+//! plan T1a record). So results are shaped for the revision the connection
+//! negotiated: `resultType` exists only in 2026-07-28 and is left out
+//! elsewhere (2026-07-28 clients treat its absence as `complete`). The
+//! connection serves the handshake revisions; the 2026-07-28 shape stays
+//! pinned by the P6 tests until the connection is dual-era.
 //!
-//! Mapping (S0, extended in P6):
+//! SDK or thin serializer: the thin serializer and no new crate (P6, re-decided
+//! in T1a with the P6 criteria; the record is in the track T plan).
+//!
+//! Mapping (S0, extended in P6 and T1a):
 //! - `inputSchema` is the inbound request schema; `outputSchema` the outbound
 //!   result schema. Annotations: `readOnlyHint` from the catalog, and
 //!   `openWorldHint: false` — the Project API never reaches outside the
 //!   project.
-//! - Every result says `resultType: "complete"` (the revision's servers MUST).
+//! - `tools/list` shows only the tools the connection's grant allows (track T
+//!   plan D5), in catalog order.
 //! - A contract failure is a tool execution error: `isError: true`, the error
 //!   JSON as text content, and no `structuredContent` — any structured result
 //!   must conform to `outputSchema`, which an error does not. Input validation
-//!   errors are tool execution errors too, as the revision directs.
+//!   errors are tool execution errors too, as the revisions direct.
 //! - An unknown tool, or a call whose parameters are not a `CallToolRequest`
 //!   (no string `name`, `arguments` not an object), is a protocol error:
 //!   JSON-RPC −32602, with a fixed message that never echoes the call.
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::catalog::Dispatcher;
-use super::context::CallContext;
+use super::context::{CallContext, Grant};
 use super::error::{ContractError, ErrorCode};
 
-/// The MCP revision this mapping follows.
-pub(crate) const REVISION: &str = "2026-07-28";
+/// The MCP revisions this mapping shapes results for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Revision {
+    /// The handshake revision Codex 0.162 asks for.
+    V2025_06_18,
+    /// The handshake revision Claude Code 2.1.185 asks for.
+    V2025_11_25,
+    /// The stateless revision: no `initialize`, and `resultType` on every
+    /// result. Only the P6 tests use it until the connection is dual-era.
+    #[cfg_attr(not(test), allow(dead_code))] // the dual-era connection is a T1a follow-up
+    V2026_07_28,
+}
+
+impl Revision {
+    /// The revisions the `initialize` handshake can settle on, newest first.
+    /// Not 2025-03-26: it has no `outputSchema` or `structuredContent`, which
+    /// every tool here publishes.
+    pub(crate) const HANDSHAKE: [Revision; 2] = [Revision::V2025_11_25, Revision::V2025_06_18];
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Revision::V2025_06_18 => "2025-06-18",
+            Revision::V2025_11_25 => "2025-11-25",
+            Revision::V2026_07_28 => "2026-07-28",
+        }
+    }
+
+    /// The handshake revision named `text`, if it is one this side serves.
+    pub(crate) fn handshake(text: &str) -> Option<Revision> {
+        Self::HANDSHAKE.into_iter().find(|revision| revision.as_str() == text)
+    }
+
+    fn has_result_type(self) -> bool {
+        self == Revision::V2026_07_28
+    }
+}
 
 /// JSON-RPC "Invalid params": MCP's code for an unknown tool or a malformed
 /// `tools/call`.
@@ -46,6 +86,7 @@ pub(crate) mod embedded {
     use serde_json::Value;
 
     pub(crate) const CATALOG: &str = "catalog.json";
+    #[cfg_attr(not(test), allow(dead_code))] // read by the artifact tests
     pub(crate) const ERROR: &str = "error.schema.json";
 
     macro_rules! artifacts {
@@ -85,13 +126,15 @@ pub(crate) mod embedded {
     }
 }
 
-/// The `tools/list` result: every operation in the catalog, in catalog order.
-pub(crate) fn tools_list() -> Value {
+/// The `tools/list` result for `revision`: every operation `grant` allows, in
+/// catalog order.
+pub(crate) fn tools_list(revision: Revision, grant: &Grant) -> Value {
     let catalog = embedded::json(embedded::CATALOG);
     let tools: Vec<Value> = catalog["operations"]
         .as_array()
         .expect("catalog operations")
         .iter()
+        .filter(|operation| grant.allows(operation["capability"].as_str().expect("capability")))
         .map(|operation| {
             json!({
                 "name": operation["name"],
@@ -105,12 +148,18 @@ pub(crate) fn tools_list() -> Value {
             })
         })
         .collect();
-    json!({ "resultType": "complete", "tools": tools })
+    shaped(revision, [("tools", Value::Array(tools))])
 }
 
 /// A `tools/call` request's `params`. `Ok` is a `CallToolResult`; `Err` is a
 /// JSON-RPC error object.
-pub(crate) fn tools_call(dispatcher: &Dispatcher, context: &CallContext, params: &Value) -> Result<Value, Value> {
+#[cfg_attr(not(test), allow(dead_code))] // the connection answers tools/call from T1b
+pub(crate) fn tools_call(
+    dispatcher: &Dispatcher,
+    context: &CallContext,
+    params: &Value,
+    revision: Revision,
+) -> Result<Value, Value> {
     let Some(params) = params.as_object() else {
         return Err(malformed());
     };
@@ -123,31 +172,50 @@ pub(crate) fn tools_call(dispatcher: &Dispatcher, context: &CallContext, params:
         Some(arguments @ Value::Object(_)) => serde_json::to_vec(arguments).expect("arguments serialize"),
         Some(_) => return Err(malformed()),
     };
-    call_tool(dispatcher, context, name, &raw)
+    call_tool(dispatcher, context, name, &raw, revision)
 }
 
 /// One call with its arguments already encoded: the byte budget measures
 /// exactly these bytes.
+#[cfg_attr(not(test), allow(dead_code))] // the connection answers tools/call from T1b
 pub(crate) fn call_tool(
     dispatcher: &Dispatcher,
     context: &CallContext,
     name: &str,
     arguments: &[u8],
+    revision: Revision,
 ) -> Result<Value, Value> {
     match dispatcher.dispatch(context, name, arguments) {
-        Ok(value) => Ok(json!({
-            "resultType": "complete",
-            "content": [{ "type": "text", "text": value.to_string() }],
-            "structuredContent": value,
-            "isError": false,
-        })),
+        Ok(value) => Ok(shaped(
+            revision,
+            [
+                ("content", json!([{ "type": "text", "text": value.to_string() }])),
+                ("structuredContent", value),
+                ("isError", Value::Bool(false)),
+            ],
+        )),
         Err(error) if error.code == ErrorCode::UnknownOperation => Err(protocol_error(&error.message)),
-        Err(error) => Ok(json!({
-            "resultType": "complete",
-            "content": [{ "type": "text", "text": error_text(&error) }],
-            "isError": true,
-        })),
+        Err(error) => Ok(shaped(
+            revision,
+            [
+                ("content", json!([{ "type": "text", "text": error_text(&error) }])),
+                ("isError", Value::Bool(true)),
+            ],
+        )),
     }
+}
+
+/// A result object for `revision`: `resultType` first where the revision has
+/// it, then the fields.
+fn shaped<const N: usize>(revision: Revision, fields: [(&str, Value); N]) -> Value {
+    let mut result = Map::new();
+    if revision.has_result_type() {
+        result.insert("resultType".into(), Value::from("complete"));
+    }
+    for (key, value) in fields {
+        result.insert(key.into(), value);
+    }
+    Value::Object(result)
 }
 
 fn malformed() -> Value {

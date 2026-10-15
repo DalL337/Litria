@@ -12,8 +12,8 @@
 //! boundary, catalog and error compile into the application; `JsonSchema` is
 //! derived only under `cfg(test)`, so schemars 1.x stays a dev-dependency and
 //! the shipped graph gains no crate. The running application never generates
-//! schemas; when a transport publishes them (track T), it embeds the committed
-//! files.
+//! schemas; the MCP connection (track T, T1a) publishes the committed files,
+//! embedded by `mcp`.
 //!
 //! Design: docs/adrs/033-contract-schema-source-of-truth.md,
 //! docs/plans/contracts/brief-contract-schemas.md, and for the Project API
@@ -27,6 +27,7 @@ pub(crate) mod boundary;
 pub(crate) mod catalog;
 pub(crate) mod context;
 pub(crate) mod error;
+pub(crate) mod mcp;
 pub(crate) mod project_api;
 pub(crate) mod project_api_bridge;
 
@@ -34,5 +35,3 @@ pub(crate) mod project_api_bridge;
 mod artifacts;
 #[cfg(test)]
 mod fixtures;
-#[cfg(test)]
-mod mcp;
