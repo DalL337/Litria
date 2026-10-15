@@ -845,6 +845,37 @@ mod tests {
     }
 
     #[test]
+    fn quit_during_a_start_ends_the_new_session_and_waits_for_it() {
+        let registry = Registry::new();
+        let entered = Gate::closed();
+        let release = Gate::closed();
+        let starting = {
+            let registry = Arc::clone(&registry);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            thread::spawn(move || {
+                registry.start("p", root("p"), |_| {
+                    entered.open();
+                    release.wait();
+                    Ok(Fake::default())
+                })
+            })
+        };
+        entered.wait();
+        let quitting = {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || registry.quit())
+        };
+        // Quit waits for the start in flight.
+        thread::sleep(Duration::from_millis(100));
+        assert!(!quitting.is_finished());
+        release.open();
+        assert_eq!(starting.join().unwrap().unwrap_err().code(), "terminal.project_closed");
+        quitting.join().unwrap();
+        assert_eq!(registry.counts(), (0, 0, 0));
+    }
+
+    #[test]
     fn quit_refuses_new_starts_and_waits_for_teardowns() {
         let registry = Registry::new();
         start(&registry, "p").unwrap();

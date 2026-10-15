@@ -303,6 +303,19 @@ test('busySessions maps the busy session ids to the project tabs', async () => {
   assert.equal(await domain.commands.isBusy(b.key), true);
 });
 
+test('when the busy check fails, every running tab counts as busy', async () => {
+  // Unknown must lead to the question before a switch, never to ending a
+  // running program unasked.
+  const backend = fakeBackend();
+  backend.adapters.busy = async () => ({ ok: false, error: { code: 'terminal.busy.failed' } });
+  const domain = domainWith(backend);
+  const a = await started(domain, backend);
+  const b = await started(domain, backend);
+  backend.spawns[1].channel.emit(exited(0));
+  assert.deepEqual(await domain.commands.busySessions('p1'), [{ key: a.key, label: 'Terminal 1' }]);
+  assert.equal(await domain.commands.isBusy(b.key), false, 'an ended tab is never busy');
+});
+
 test('renaming changes the label; viewing changes focus only', async () => {
   const backend = fakeBackend();
   const domain = domainWith(backend);

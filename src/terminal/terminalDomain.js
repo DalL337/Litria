@@ -196,11 +196,16 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout } = 
   const busySessions = async (projectId) => {
     if (!projectId) return [];
     const response = await io.busy(projectId);
-    if (!response.ok || !Array.isArray(response.data)) return [];
-    const busyIds = new Set(response.data);
-    return (state.order.get(projectId) ?? [])
+    const tabs = (state.order.get(projectId) ?? [])
       .map((key) => state.tabs.get(key))
-      .filter((tab) => tab?.sessionId && busyIds.has(tab.sessionId))
+      .filter((tab) => tab?.sessionId && tab.status === 'running');
+    // When the answer is unknown, every running tab counts as busy: one extra
+    // question before a switch, rather than ending a running program unasked.
+    const busyIds = response.ok && Array.isArray(response.data)
+      ? new Set(response.data)
+      : new Set(tabs.map((tab) => tab.sessionId));
+    return tabs
+      .filter((tab) => busyIds.has(tab.sessionId))
       .map((tab) => ({ key: tab.key, label: tab.label }));
   };
 

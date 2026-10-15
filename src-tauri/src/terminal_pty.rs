@@ -705,7 +705,11 @@ impl PtyInner {
         self.shutdown.store(true, Ordering::SeqCst);
         self.flow_control.resume();
         self.closing.store(true, Ordering::SeqCst);
-        drop(self.input.lock().unwrap_or_else(PoisonError::into_inner).take());
+        // Each part is taken out first and dropped after its lock is
+        // released: a guard in the same statement would stay held through the
+        // drop, and closing a pseudoconsole can take a long time.
+        let input = self.input.lock().unwrap_or_else(PoisonError::into_inner).take();
+        drop(input);
 
         let mut state = self.wait_for_exit(GRACEFUL_EXIT);
         if matches!(state, ProcessState::Running) {
@@ -718,8 +722,12 @@ impl PtyInner {
         }
 
         #[cfg(target_os = "windows")]
-        drop(self.job.lock().unwrap_or_else(PoisonError::into_inner).take());
-        drop(self.master.lock().unwrap_or_else(PoisonError::into_inner).take());
+        {
+            let job = self.job.lock().unwrap_or_else(PoisonError::into_inner).take();
+            drop(job);
+        }
+        let master = self.master.lock().unwrap_or_else(PoisonError::into_inner).take();
+        drop(master);
 
         let threads = std::mem::take(&mut *self.threads.lock().unwrap_or_else(PoisonError::into_inner));
         let short = short_id(&self.session_id);
@@ -806,9 +814,11 @@ impl PtyInner {
             JobObjectBasicAccountingInformation, QueryInformationJobObject,
             JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
         };
+        // When the answer is unknown, say busy: the cost is one extra question
+        // before a switch, against ending a running program without one.
         let job = self.job.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(job) = job.as_ref() else {
-            return false;
+            return true;
         };
         let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         // SAFETY: the job handle stays open while the guard holds it, and the
@@ -823,7 +833,7 @@ impl PtyInner {
             )
         };
         // The shell itself is one process in its job.
-        queried.is_ok() && info.ActiveProcesses > 1
+        queried.is_err() || info.ActiveProcesses > 1
     }
 
     #[cfg(unix)]
@@ -832,7 +842,8 @@ impl PtyInner {
         let foreground = master.as_ref().and_then(|m| m.process_group_leader());
         match (foreground, self.shell_pid) {
             (Some(foreground), Some(pid)) => foreground as u32 != pid,
-            _ => false,
+            // Unknown: say busy (see the Windows version).
+            _ => true,
         }
     }
 }
@@ -993,6 +1004,86 @@ mod tests {
         assert_eq!(s.decode(b"ok\xE2\x82"), "ok");
         assert_eq!(s.finish(), "\u{FFFD}");
         assert_eq!(s.finish(), "");
+    }
+
+    // ── The writer thread ───────────────────────────────────────────────────
+
+    /// A writer whose first write blocks until the test lets it go.
+    struct HeldWriter {
+        written: Arc<Mutex<Vec<u8>>>,
+        entered: Arc<std::sync::Barrier>,
+        release: Arc<std::sync::Barrier>,
+        held: bool,
+    }
+
+    impl Write for HeldWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if !self.held {
+                self.held = true;
+                self.entered.wait();
+                self.release.wait();
+            }
+            self.written.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn input_still_queued_when_a_session_ends_is_never_written() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let writer = HeldWriter {
+            written: Arc::clone(&written),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+            held: false,
+        };
+        let (queue, received) = mpsc::sync_channel(INPUT_QUEUE);
+        let closing = Arc::new(AtomicBool::new(false));
+        let handle = spawn_writer_thread(Box::new(writer), received, Arc::clone(&closing), "test").unwrap();
+
+        queue.send(WriterMsg::Input(b"first\r".to_vec())).unwrap();
+        entered.wait();
+        // Queued behind a write that is blocked, as a paste into a busy shell.
+        queue.send(WriterMsg::Input(b"second\r".to_vec())).unwrap();
+        closing.store(true, Ordering::SeqCst);
+        drop(queue);
+        release.wait();
+        handle.join().unwrap();
+
+        let written = String::from_utf8(written.lock().unwrap().clone()).unwrap();
+        assert_eq!(written, "first\r\x03exit\r\n");
+    }
+
+    #[test]
+    fn the_writer_writes_queued_input_in_order() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        struct Recorder(Arc<Mutex<Vec<u8>>>);
+        impl Write for Recorder {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (queue, received) = mpsc::sync_channel(INPUT_QUEUE);
+        let closing = Arc::new(AtomicBool::new(false));
+        let handle =
+            spawn_writer_thread(Box::new(Recorder(Arc::clone(&written))), received, Arc::clone(&closing), "test")
+                .unwrap();
+        for part in ["a", "b", "c"] {
+            queue.send(WriterMsg::Input(part.as_bytes().to_vec())).unwrap();
+        }
+        queue.send(WriterMsg::Reply(CURSOR_REPLY)).unwrap();
+        drop(queue);
+        handle.join().unwrap();
+        assert_eq!(written.lock().unwrap().as_slice(), b"abc\x1b[1;1R");
     }
 
     // ── de_verbatim ─────────────────────────────────────────────────────────
