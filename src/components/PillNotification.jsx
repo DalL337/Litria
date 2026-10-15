@@ -4,12 +4,6 @@ import { X, ChevronDown, Copy, FileDown, Terminal as TerminalIcon } from 'lucide
 import { useTopDrawers } from '../drawers/TopDrawerContext';
 
 const AUTO_DISMISS_MS = 8000;
-// Action pills: how long to wait for the terminal session to exist after
-// opening the drawer (spawn is drawer-driven), and a settle delay so the
-// injected command lands after the shell's startup banner/prompt.
-const SESSION_POLL_MS = 250;
-const SESSION_POLL_TRIES = 40;
-const SHELL_SETTLE_MS = 600;
 
 function PillNotification({ pillDomain, terminalDomain, buildLogActions = null }) {
   const [pills, setPills] = useState([]);
@@ -84,32 +78,32 @@ function PillNotification({ pillDomain, terminalDomain, buildLogActions = null }
     setStatusById((prev) => ({ ...prev, [pill.id]: path ? 'Saved' : 'Save failed' }));
   }, [buildLogActions]);
 
-  // Action pill (ADR-020 Slice 4): open the visible terminal, wait for the
-  // drawer-driven spawn to yield a session, then TYPE the pill's command
-  // into it — the user watches it run. The pill dismisses on activation;
-  // its onActivated persists the "actioned" flag.
+  // Action pill (ADR-020 Slice 4): the command runs in the visible terminal,
+  // which is the consent and the record — the person watches it run. It gets
+  // a shell tab of its own, named after the command (track T slice T2a), so it
+  // is never typed into a tab already running something (a dev server, an
+  // editor, an agent). The domain types it after the shell's first output.
+  // The pill dismisses on activation; its onActivated persists the flag.
   const handleActivate = useCallback(async (pill) => {
-    openDrawer('terminal');
-    if (!pill.command) return;
+    if (!pill.command) {
+      openDrawer('terminal');
+      return;
+    }
     pillDomain?.commands.dismissPill(pill.id);
+    if (!terminalDomain) return;
+    // A pill raised in another project never runs here.
+    const currentProjectId = terminalDomain.selectors.getCurrentProjectId();
+    if (!currentProjectId || (pill.projectId && pill.projectId !== currentProjectId)) return;
     try {
       pill.onActivated?.();
     } catch {
       // Flag persistence is best-effort; the command still runs.
     }
-    if (!terminalDomain) return;
-    for (let attempt = 0; attempt < SESSION_POLL_TRIES; attempt++) {
-      const session = terminalDomain.selectors.getActiveSession?.();
-      if (session?.sessionId) {
-        await new Promise((resolve) => setTimeout(resolve, SHELL_SETTLE_MS));
-        terminalDomain.commands.sendInput({
-          projectId: session.projectId,
-          input: `${pill.command}\r`,
-        });
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, SESSION_POLL_MS));
-    }
+    openDrawer('terminal');
+    await terminalDomain.commands.startSession({
+      label: pill.command,
+      initialInput: `${pill.command}\r`,
+    });
   }, [openDrawer, pillDomain, terminalDomain]);
 
   // Callback pill (ADR-005 A3, Slice 5): class-1 consent — the click runs

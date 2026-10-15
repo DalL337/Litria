@@ -1,15 +1,38 @@
 use crate::errors::{CommandError, CommandResult};
 use crate::terminal_policy;
+use crate::terminal_session_manager::TerminalSession;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::JoinHandle;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 
 const READ_BUF_SIZE: usize = 32 * 1024;
-const TEARDOWN_TIMEOUT_MS: u64 = 2000;
+/// How long a shell gets to obey Ctrl+C and `exit` before End kills it.
+const GRACEFUL_EXIT: Duration = Duration::from_millis(2000);
+/// After each kill step, how long to wait for the process to be gone.
+const KILL_WAIT: Duration = Duration::from_millis(500);
+/// Bounded joins at the end of `end`. A thread still running after its bound
+/// is left behind and logged: a hung join must never hold the caller.
+const READER_JOIN: Duration = Duration::from_secs(2);
+const HELPER_JOIN: Duration = Duration::from_secs(1);
+/// The exit watcher polls the process this often.
+const EXIT_POLL: Duration = Duration::from_millis(200);
+/// After a self-exit, give the reader a moment to forward the program's last
+/// output before the exit marker goes out.
+const EXIT_SETTLE: Duration = Duration::from_millis(150);
+/// Input messages waiting for the writer thread. Keystrokes are tiny; a full
+/// queue means the program stopped reading its input.
+const INPUT_QUEUE: usize = 1024;
+const WRITER_POLL: Duration = Duration::from_millis(50);
+/// Typed into the shell when the person ends the session: Ctrl+C cancels the
+/// line being edited, then `exit` (PowerShell, pwsh, cmd.exe, sh, bash and zsh
+/// all accept it). Track T's agent sessions (T2b) need another strategy: this
+/// text would reach the agent as a prompt.
+const SHELL_EXIT_SEQUENCE: &[u8] = b"\x03exit\r\n";
 
 /// ConPTY startup handshake (see HandshakeFilter): how deep into the output
 /// stream we keep looking for the host's initial cursor query before giving
@@ -96,6 +119,61 @@ impl HandshakeFilter {
     }
 }
 
+/// Decodes PTY output as UTF-8 across reads.
+///
+/// A read can end in the middle of a multi-byte character. Decoding each read
+/// on its own turned both halves into U+FFFD. This carries an incomplete
+/// trailing sequence (at most 3 bytes) into the next read, and still replaces
+/// bytes that are invalid wherever they occur.
+struct Utf8Stream {
+    carry: Vec<u8>,
+}
+
+impl Utf8Stream {
+    fn new() -> Self {
+        Self { carry: Vec::new() }
+    }
+
+    fn decode(&mut self, bytes: &[u8]) -> String {
+        let mut input = std::mem::take(&mut self.carry);
+        input.extend_from_slice(bytes);
+        let mut out = String::with_capacity(input.len());
+        let mut rest: &[u8] = &input;
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(valid) => {
+                    out.push_str(valid);
+                    break;
+                }
+                Err(error) => {
+                    let (valid, after) = rest.split_at(error.valid_up_to());
+                    // Safe: `valid_up_to` marks the end of valid UTF-8.
+                    out.push_str(std::str::from_utf8(valid).unwrap_or_default());
+                    match error.error_len() {
+                        Some(len) => {
+                            out.push(char::REPLACEMENT_CHARACTER);
+                            rest = &after[len..];
+                        }
+                        None => {
+                            // An incomplete sequence at the end: keep it for
+                            // the next read.
+                            self.carry = after.to_vec();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Whatever is still held when the stream ends is not a whole character.
+    fn finish(&mut self) -> String {
+        let rest = std::mem::take(&mut self.carry);
+        String::from_utf8_lossy(&rest).into_owned()
+    }
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(tag = "event", content = "data")]
 pub(crate) enum TerminalEvent {
@@ -120,49 +198,75 @@ impl FlowControl {
     }
 
     fn pause(&self) {
-        if let Ok(mut guard) = self.paused.lock() {
-            *guard = true;
-        }
+        *self.paused.lock().unwrap_or_else(PoisonError::into_inner) = true;
     }
 
     fn resume(&self) {
-        if let Ok(mut guard) = self.paused.lock() {
-            *guard = false;
-            self.resume_signal.notify_one();
-        }
+        *self.paused.lock().unwrap_or_else(PoisonError::into_inner) = false;
+        self.resume_signal.notify_one();
     }
 
     fn wait_if_paused(&self, shutdown: &AtomicBool) {
-        if let Ok(mut guard) = self.paused.lock() {
-            while *guard && !shutdown.load(Ordering::SeqCst) {
-                let result = self
-                    .resume_signal
-                    .wait_timeout(guard, Duration::from_millis(100))
-                    .expect("flow control lock must not be poisoned");
-                guard = result.0;
-            }
+        let mut guard = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
+        while *guard && !shutdown.load(Ordering::SeqCst) {
+            guard = match self.resume_signal.wait_timeout(guard, Duration::from_millis(100)) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
         }
     }
 }
 
+/// One PTY-backed terminal session.
+///
+/// Every method takes `&self`. The session manager hands out `Arc` clones, so
+/// input, resize and pause never wait on an End running on another thread.
+/// Ending is explicit (`end`) and idempotent. Dropping a session that was
+/// never ended hands the work to a new thread, never to the caller's: the
+/// caller may be the UI thread, and ending can take seconds.
 pub(crate) struct PtySession {
-    // master and writer are wrapped in Option so teardown() can drop them
-    // BEFORE joining the reader thread. This is required on Windows ConPTY:
-    // the reader thread blocks in `read()` on the master pipe and the read
-    // syscall does not observe our `shutdown` flag, so the only way to make
-    // the reader exit is to close the host side of the pipe by dropping the
-    // master. Without this, `reader_handle.join()` could hang indefinitely.
-    // See docs/plans/persistence/project-switch-crash-investigation.md.
-    master: Option<Box<dyn MasterPty + Send>>,
-    // Arc-shared with the reader thread, which answers the ConPTY startup
-    // cursor handshake (see HandshakeFilter) on this same writer.
-    writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
+    inner: Arc<PtyInner>,
+}
+
+struct PtyInner {
+    session_id: String,
+    // Option so `end` can close the pseudoconsole (drop the master) once the
+    // processes are gone, and so `resize` can tell the session has ended.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
+    // The only way input reaches the writer thread. `end` takes it.
+    input: Mutex<Option<SyncSender<WriterMsg>>>,
+    // Tells the writer thread to drop queued input and type the exit
+    // sequence once its queue is drained.
+    closing: Arc<AtomicBool>,
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
-    reader_handle: Option<JoinHandle<()>>,
+    #[cfg(unix)]
+    shell_pid: Option<u32>,
     shutdown: Arc<AtomicBool>,
     flow_control: Arc<FlowControl>,
+    threads: Mutex<SessionThreads>,
+    ended: AtomicBool,
+    exit_code: Mutex<Option<i32>>,
     #[cfg(target_os = "windows")]
-    _job: Option<win32job::Job>,
+    job: Mutex<Option<win32job::Job>>,
+}
+
+#[derive(Default)]
+struct SessionThreads {
+    reader: Option<JoinHandle<()>>,
+    writer: Option<JoinHandle<()>>,
+    watcher: Option<JoinHandle<()>>,
+}
+
+/// What the writer thread writes, in the order it was queued.
+enum WriterMsg {
+    Input(Vec<u8>),
+    /// The startup handshake reply (see HandshakeFilter).
+    Reply(&'static [u8]),
+}
+
+enum ProcessState {
+    Exited(Option<i32>),
+    Running,
 }
 
 /// Convert a Windows verbatim path (\\?\C:\... or \\?\UNC\server\share\...)
@@ -191,12 +295,23 @@ fn de_verbatim(path: &std::path::Path) -> std::path::PathBuf {
     })
 }
 
+/// Spawns a shell in a new pseudoconsole and starts its three threads:
+/// - the reader forwards output to `channel`;
+/// - the writer owns the PTY input and writes queued input in order;
+/// - the exit watcher notices the shell exiting by itself, sends `Exited` and
+///   calls `on_exit`.
+///
+/// The exit watcher exists because the reader cannot see a self-exit on
+/// Windows: the console host keeps running while it holds its reference
+/// handle (the vendored crate never releases it), so the output pipe breaks
+/// only when the pseudoconsole is closed.
 pub(crate) fn spawn_pty(
-    _session_id: &str,
+    session_id: &str,
     validated: &crate::execution_policy::ValidatedExecutionBoundary,
     cols: u16,
     rows: u16,
     channel: Channel<TerminalEvent>,
+    on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) -> CommandResult<PtySession> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -212,6 +327,21 @@ pub(crate) fn spawn_pty(
                 format!("Failed to open PTY: {e}"),
             )
         })?;
+
+    // Take the reader and the writer before anything is spawned, so a failure
+    // here cannot leave a shell running that nothing owns.
+    let reader = pair.master.try_clone_reader().map_err(|e| {
+        CommandError::internal(
+            "terminal.io_failed",
+            format!("Failed to clone PTY reader: {e}"),
+        )
+    })?;
+    let writer = pair.master.take_writer().map_err(|e| {
+        CommandError::internal(
+            "terminal.io_failed",
+            format!("Failed to take PTY writer: {e}"),
+        )
+    })?;
 
     let mut cmd = CommandBuilder::new(&validated.executable);
     // Suppress the startup banner for PowerShell
@@ -237,47 +367,69 @@ pub(crate) fn spawn_pty(
         )
     })?;
     drop(pair.slave);
+    #[cfg(unix)]
+    let shell_pid = child.process_id();
 
     #[cfg(target_os = "windows")]
-    let job = setup_job_object(&child);
+    let job = setup_job_object(child.as_ref(), session_id);
 
-    let reader = pair.master.try_clone_reader().map_err(|e| {
-        CommandError::internal(
-            "terminal.io_failed",
-            format!("Failed to clone PTY reader: {e}"),
-        )
-    })?;
-
-    let writer = pair.master.take_writer().map_err(|e| {
-        CommandError::internal(
-            "terminal.io_failed",
-            format!("Failed to take PTY writer: {e}"),
-        )
-    })?;
-
+    let (input_tx, input_rx) = mpsc::sync_channel(INPUT_QUEUE);
     let shutdown = Arc::new(AtomicBool::new(false));
+    let closing = Arc::new(AtomicBool::new(false));
     let flow_control = Arc::new(FlowControl::new());
     let child = Arc::new(Mutex::new(child));
-    let writer: Arc<Mutex<Option<Box<dyn Write + Send>>>> = Arc::new(Mutex::new(Some(writer)));
-    let reader_handle = spawn_reader_thread(
-        reader,
-        channel,
-        Arc::clone(&shutdown),
-        Arc::clone(&flow_control),
-        Arc::clone(&child),
-        Arc::clone(&writer),
-    );
 
-    Ok(PtySession {
-        master: Some(pair.master),
-        writer,
-        child,
-        reader_handle: Some(reader_handle),
-        shutdown,
-        flow_control,
-        #[cfg(target_os = "windows")]
-        _job: job,
-    })
+    // From here on the session owns everything: an early return drops it,
+    // and Drop ends it on another thread.
+    let session = PtySession {
+        inner: Arc::new(PtyInner {
+            session_id: session_id.to_string(),
+            master: Mutex::new(Some(pair.master)),
+            input: Mutex::new(Some(input_tx.clone())),
+            closing: Arc::clone(&closing),
+            child: Arc::clone(&child),
+            #[cfg(unix)]
+            shell_pid,
+            shutdown: Arc::clone(&shutdown),
+            flow_control: Arc::clone(&flow_control),
+            threads: Mutex::new(SessionThreads::default()),
+            ended: AtomicBool::new(false),
+            exit_code: Mutex::new(None),
+            #[cfg(target_os = "windows")]
+            job: Mutex::new(job),
+        }),
+    };
+
+    let short = short_id(session_id);
+    let threads = SessionThreads {
+        writer: Some(spawn_writer_thread(writer, input_rx, closing, &short).map_err(thread_error)?),
+        reader: Some(
+            spawn_reader_thread(
+                reader,
+                channel.clone(),
+                Arc::clone(&shutdown),
+                flow_control,
+                Some(input_tx),
+                &short,
+            )
+            .map_err(thread_error)?,
+        ),
+        watcher: Some(spawn_exit_watcher(child, shutdown, channel, on_exit, &short).map_err(thread_error)?),
+    };
+    *session.inner.threads.lock().unwrap_or_else(PoisonError::into_inner) = threads;
+    Ok(session)
+}
+
+fn thread_error(error: std::io::Error) -> CommandError {
+    CommandError::internal(
+        "terminal.spawn_failed",
+        format!("Failed to start a terminal thread: {error}"),
+    )
+}
+
+/// The first eight characters of a session id, for thread names and logs.
+fn short_id(session_id: &str) -> String {
+    session_id.chars().take(8).collect()
 }
 
 fn spawn_reader_thread(
@@ -285,133 +437,211 @@ fn spawn_reader_thread(
     channel: Channel<TerminalEvent>,
     shutdown: Arc<AtomicBool>,
     flow_control: Arc<FlowControl>,
-    child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
-    writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut tmp = vec![0u8; READ_BUF_SIZE];
-        let mut handshake = HandshakeFilter::new();
+    mut reply: Option<SyncSender<WriterMsg>>,
+    short: &str,
+) -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name(format!("terminal-reader-{short}"))
+        .spawn(move || {
+            let mut tmp = vec![0u8; READ_BUF_SIZE];
+            let mut handshake = HandshakeFilter::new();
+            let mut utf8 = Utf8Stream::new();
 
-        // Send per read, no coalescing. The old 5ms coalesce buffer could
-        // only flush ON a subsequent read — bytes arriving <5ms after a send
-        // sat stranded until the NEXT output event. The sideloaded ConPTY
-        // host splits each keystroke repaint into several quick writes, so
-        // the tail of every echo stranded until the following keystroke:
-        // rendering ran one action behind the user (owner-reported). The OS
-        // pipe already batches floods naturally — while we send one chunk,
-        // the next read drains everything that accumulated — so per-read
-        // sends cost nothing during heavy output and are latency-free while
-        // typing.
-        loop {
-            if shutdown.load(Ordering::SeqCst) {
-                break;
-            }
-            flow_control.wait_if_paused(&shutdown);
+            // Send per read, no coalescing. The old 5ms coalesce buffer could
+            // only flush ON a subsequent read — bytes arriving <5ms after a send
+            // sat stranded until the NEXT output event. The sideloaded ConPTY
+            // host splits each keystroke repaint into several quick writes, so
+            // the tail of every echo stranded until the following keystroke:
+            // rendering ran one action behind the user (owner-reported). The OS
+            // pipe already batches floods naturally — while we send one chunk,
+            // the next read drains everything that accumulated — so per-read
+            // sends cost nothing during heavy output and are latency-free while
+            // typing.
+            loop {
+                if shutdown.load(Ordering::SeqCst) {
+                    // Unix: stop at once. This thread's duplicate of the master
+                    // is what keeps the terminal from hanging up, so holding it
+                    // until EOF could wait forever on a surviving background job.
+                    #[cfg(unix)]
+                    break;
+                } else {
+                    flow_control.wait_if_paused(&shutdown);
+                }
 
-            match reader.read(&mut tmp) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let (forward, reply_needed) = handshake.push(&tmp[..n]);
-                    if reply_needed {
-                        if let Ok(mut guard) = writer.lock() {
-                            if let Some(w) = guard.as_mut() {
-                                let _ = w.write_all(CURSOR_REPLY);
-                                let _ = w.flush();
+                match reader.read(&mut tmp) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        // Windows, after End: keep draining until the console
+                        // host exits (closing the pseudoconsole makes it), and
+                        // send nothing. An undrained pipe can stall the host's
+                        // shutdown, and output from a session being ended must
+                        // not reach the webview.
+                        if shutdown.load(Ordering::SeqCst) {
+                            continue;
+                        }
+                        let (forward, reply_needed) = handshake.push(&tmp[..n]);
+                        if reply_needed {
+                            if let Some(tx) = &reply {
+                                let _ = tx.try_send(WriterMsg::Reply(CURSOR_REPLY));
+                            }
+                        }
+                        if handshake.done {
+                            // The handshake happens once; holding a sender any
+                            // longer would only keep the writer's queue open.
+                            reply = None;
+                        }
+                        if !forward.is_empty() {
+                            let chunk = utf8.decode(&forward);
+                            if !chunk.is_empty() {
+                                let _ = channel.send(TerminalEvent::Output { chunk });
                             }
                         }
                     }
-                    if !forward.is_empty() {
-                        let chunk = String::from_utf8_lossy(&forward).to_string();
-                        let _ = channel.send(TerminalEvent::Output { chunk });
-                    }
                 }
-                Err(_) => break,
             }
-        }
 
-        // Send exit event — try to reap exit code from the child process
-        let exit_code = child
-            .lock()
-            .ok()
-            .and_then(|mut c| c.try_wait().ok().flatten())
-            .map(|status| status.exit_code() as i32);
-        let _ = channel.send(TerminalEvent::Exited { exit_code });
-    })
+            if !shutdown.load(Ordering::SeqCst) {
+                let tail = utf8.finish();
+                if !tail.is_empty() {
+                    let _ = channel.send(TerminalEvent::Output { chunk: tail });
+                }
+            }
+        })
+}
+
+/// The writer thread owns the PTY input outright, so nothing else ever waits on
+/// a lock while a write is blocked (a full input pipe blocks until the program
+/// reads). Input, the handshake reply and the exit sequence all arrive in order.
+fn spawn_writer_thread(
+    mut writer: Box<dyn Write + Send>,
+    queue: Receiver<WriterMsg>,
+    closing: Arc<AtomicBool>,
+    short: &str,
+) -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name(format!("terminal-writer-{short}"))
+        .spawn(move || {
+            let mut broken = false;
+            loop {
+                match queue.recv_timeout(WRITER_POLL) {
+                    Ok(message) => {
+                        // Once the session is ending, queued input is dropped:
+                        // a paste still waiting must not run as the shell exits.
+                        if closing.load(Ordering::SeqCst) || broken {
+                            continue;
+                        }
+                        let bytes: &[u8] = match &message {
+                            WriterMsg::Input(bytes) => bytes,
+                            WriterMsg::Reply(bytes) => bytes,
+                        };
+                        broken = writer.write_all(bytes).and_then(|_| writer.flush()).is_err();
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        if closing.load(Ordering::SeqCst) {
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            if closing.load(Ordering::SeqCst) && !broken {
+                let _ = writer.write_all(SHELL_EXIT_SEQUENCE);
+                let _ = writer.flush();
+            }
+            // Dropping the writer closes the input side. On Unix its Drop also
+            // writes "\n" + VEOF, which can block on a full terminal; that is
+            // this thread's problem, and its join is bounded.
+            drop(writer);
+        })
+}
+
+fn spawn_exit_watcher(
+    child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    shutdown: Arc<AtomicBool>,
+    channel: Channel<TerminalEvent>,
+    on_exit: Box<dyn FnOnce() + Send + 'static>,
+    short: &str,
+) -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name(format!("terminal-exit-{short}"))
+        .spawn(move || {
+            let exit_code = loop {
+                if shutdown.load(Ordering::SeqCst) {
+                    return;
+                }
+                // The lock is held for one non-blocking query at a time, so
+                // `end` can always take it to kill the process.
+                let status = child.lock().unwrap_or_else(PoisonError::into_inner).try_wait();
+                match status {
+                    Ok(Some(status)) => break Some(status.exit_code() as i32),
+                    Ok(None) => thread::sleep(EXIT_POLL),
+                    // The process can no longer be queried: treat it as gone.
+                    Err(_) => break None,
+                }
+            };
+            thread::sleep(EXIT_SETTLE);
+            if shutdown.load(Ordering::SeqCst) {
+                return;
+            }
+            let _ = channel.send(TerminalEvent::Exited { exit_code });
+            on_exit();
+        })
 }
 
 #[cfg(target_os = "windows")]
 fn setup_job_object(
-    child: &Box<dyn portable_pty::Child + Send + Sync>,
+    child: &(dyn portable_pty::Child + Send + Sync),
+    session_id: &str,
 ) -> Option<win32job::Job> {
-    let pid = match child.process_id() {
-        Some(pid) => pid,
-        None => return None,
-    };
-
-    let job = match win32job::Job::create() {
-        Ok(j) => j,
-        Err(_) => return None,
-    };
-
-    let mut info = match job.query_extended_limit_info() {
-        Ok(i) => i,
-        Err(_) => return None,
-    };
-    info.limit_kill_on_job_close();
-    if job.set_extended_limit_info(&mut info).is_err() {
-        return None;
+    // The job is what End uses to stop everything the shell started. It is
+    // assigned through the child's own handle, after the shell is already
+    // running: anything the shell starts in that window escapes it (a shell
+    // starts nothing before it reads input; T2b's agents may need the job
+    // assigned before the process runs).
+    let assigned = (|| -> Result<win32job::Job, String> {
+        let handle = child
+            .as_raw_handle()
+            .ok_or_else(|| "the process has no handle".to_string())?;
+        let job = win32job::Job::create().map_err(|e| format!("{e:?}"))?;
+        let mut info = job.query_extended_limit_info().map_err(|e| format!("{e:?}"))?;
+        info.limit_kill_on_job_close();
+        job.set_extended_limit_info(&mut info).map_err(|e| format!("{e:?}"))?;
+        job.assign_process(handle as isize).map_err(|e| format!("{e:?}"))?;
+        Ok(job)
+    })();
+    match assigned {
+        Ok(job) => Some(job),
+        Err(error) => {
+            eprintln!(
+                "[terminal_pty] session {}: no job object ({error}); ending it will stop only the shell",
+                short_id(session_id)
+            );
+            None
+        }
     }
+}
 
-    // Open the child process handle and assign to job.
-    unsafe {
-        use windows::Win32::System::Threading::{OpenProcess, PROCESS_ALL_ACCESS};
-        use windows::Win32::Foundation::CloseHandle;
-        let handle = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
-            Ok(h) => h,
-            Err(_) => return None,
+impl TerminalSession for PtySession {
+    /// Queues input for the writer thread. Ok means queued, not written: the
+    /// writer writes in order and stops at the first failed write.
+    fn write_input(&self, data: &[u8]) -> CommandResult<()> {
+        let input = self.inner.input.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(queue) = input.as_ref() else {
+            return Err(session_ended());
         };
-        let assign_result = job.assign_process(handle.0 as isize);
-        let _ = CloseHandle(handle);
-        if assign_result.is_err() {
-            return None;
+        match queue.try_send(WriterMsg::Input(data.to_vec())) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(CommandError::conflict(
+                "terminal.input_backlog",
+                "The terminal program is not reading its input.",
+            )),
+            Err(TrySendError::Disconnected(_)) => Err(session_ended()),
         }
     }
 
-    Some(job)
-}
-
-impl PtySession {
-    pub(crate) fn write_input(&self, data: &[u8]) -> CommandResult<()> {
-        let mut writer_guard = self.writer.lock().map_err(|_| {
-            CommandError::internal("terminal.internal.lock_poisoned", "Terminal writer lock is poisoned.")
-        })?;
-        let writer = writer_guard.as_mut().ok_or_else(|| {
-            CommandError::internal(
-                "terminal.writer_unavailable",
-                "Terminal writer has been torn down.",
-            )
-        })?;
-        writer.write_all(data).map_err(|e| {
-            CommandError::internal(
-                "terminal.io_failed",
-                format!("Failed to write to PTY: {e}"),
-            )
-        })?;
-        writer.flush().map_err(|e| {
-            CommandError::internal(
-                "terminal.io_failed",
-                format!("Failed to flush PTY writer: {e}"),
-            )
-        })
-    }
-
-    pub(crate) fn resize(&self, cols: u16, rows: u16) -> CommandResult<()> {
-        let master = self.master.as_ref().ok_or_else(|| {
-            CommandError::internal(
-                "terminal.master_unavailable",
-                "PTY master has been torn down.",
-            )
-        })?;
+    fn resize(&self, cols: u16, rows: u16) -> CommandResult<()> {
+        let master = self.inner.master.lock().unwrap_or_else(PoisonError::into_inner);
+        let master = master.as_ref().ok_or_else(session_ended)?;
         master
             .resize(PtySize {
                 rows,
@@ -427,154 +657,224 @@ impl PtySession {
             })
     }
 
-    pub(crate) fn pause_output(&self) {
-        self.flow_control.pause();
+    fn pause_output(&self) {
+        self.inner.flow_control.pause();
     }
 
-    pub(crate) fn resume_output(&self) {
-        self.flow_control.resume();
+    fn resume_output(&self) {
+        self.inner.flow_control.resume();
     }
 
-    pub(crate) fn teardown(&mut self) -> Option<i32> {
+    /// Whether the shell is running something: a program of its own, not just
+    /// its prompt. A command running inside the shell process itself (a
+    /// PowerShell cmdlet, a shell builtin) does not count.
+    fn is_busy(&self) -> bool {
+        if self.inner.ended.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.inner.has_child_processes()
+    }
+
+    /// Ends the session and everything it started; see `PtyInner::end`.
+    fn end(&self) -> Option<i32> {
+        self.inner.end()
+    }
+}
+
+impl PtyInner {
+    /// Ends the session. Blocking, idempotent, bounded.
+    ///
+    /// Order (docs/plans/persistence/project-switch-crash-investigation.md,
+    /// and the T2a design critique):
+    /// 1. Stop forwarding output and lift any pause.
+    /// 2. Let the writer type Ctrl+C and `exit`, and wait for the shell. A
+    ///    clean exit is what lets the console host shut down promptly.
+    /// 3. If the shell is still running, stop it and everything it started:
+    ///    the job on Windows, the session's process groups on Unix.
+    /// 4. Windows: drop the job (kill on close) BEFORE closing the
+    ///    pseudoconsole. Closing it while a killed client is still attached
+    ///    can wedge the in-box console host forever; with the job gone first,
+    ///    a wedge could leak at most an idle host and a thread.
+    /// 5. Close the pseudoconsole (drop the master), then join the threads,
+    ///    each with a bound.
+    fn end(&self) -> Option<i32> {
+        if self.ended.swap(true, Ordering::SeqCst) {
+            return *self.exit_code.lock().unwrap_or_else(PoisonError::into_inner);
+        }
+
         self.shutdown.store(true, Ordering::SeqCst);
         self.flow_control.resume();
+        self.closing.store(true, Ordering::SeqCst);
+        drop(self.input.lock().unwrap_or_else(PoisonError::into_inner).take());
 
-        // STEP 1: Tell the shell to exit GRACEFULLY by sending it commands.
-        //
-        // Why: on Windows, force-killing PowerShell via TerminateProcess does
-        // NOT cause conhost.exe (the console host that brokers between
-        // PowerShell and the ConPTY pipes) to clean up reliably. conhost
-        // lingers, the pipes stay alive, the reader thread stays blocked
-        // in `read()`, and we leak both the reader thread and conhost.exe
-        // on every project switch. After 3-4 leaks the renderer hangs
-        // because the IPC bridge / message pump can't keep up.
-        //
-        // The fix is to make the shell exit CLEANLY. A clean PowerShell
-        // exit triggers conhost to detect the dead child and exit itself,
-        // which closes ALL handles to the read pipe, which causes the
-        // reader's blocking read() to return EOF, which lets the reader
-        // thread join in milliseconds.
-        //
-        // The two-byte sequence:
-        //   0x03           — Ctrl+C, cancels any in-progress command line
-        //   "exit\r\n"     — runs the exit cmdlet (works for PowerShell,
-        //                    pwsh, cmd.exe, and most other Windows shells)
-        //
-        // If the shell ignores these or is in a bad state, wait_or_kill
-        // below will force-kill it after 2 seconds and the Job-object
-        // drop in step 5 will sweep up any remaining processes.
-        //
-        // See docs/plans/persistence/project-switch-crash-investigation.md.
-        if let Ok(mut writer_guard) = self.writer.lock() {
-            if let Some(writer) = writer_guard.as_mut() {
-                let _ = writer.write_all(&[0x03]);
-                let _ = writer.write_all(b"exit\r\n");
-                let _ = writer.flush();
-            }
+        let mut state = self.wait_for_exit(GRACEFUL_EXIT);
+        if matches!(state, ProcessState::Running) {
+            self.stop_process_tree();
+            state = self.wait_for_exit(KILL_WAIT);
+        }
+        if matches!(state, ProcessState::Running) {
+            let _ = self.child.lock().unwrap_or_else(PoisonError::into_inner).kill();
+            state = self.wait_for_exit(KILL_WAIT);
         }
 
-        // STEP 2: Wait for the shell to exit (up to 2 seconds), then force
-        // kill if it hasn't. With the graceful exit sent above, normal
-        // PowerShell exits in 50-200ms.
-        let exit_code = self.wait_or_kill();
-
-        // STEP 3: Drop the writer (closes host stdin write side).
-        if let Ok(mut writer_guard) = self.writer.lock() {
-            let _ = writer_guard.take();
-        }
-
-        // STEP 4: Drop the master pipe (closes host master handles).
-        drop(self.master.take());
-
-        // STEP 5: Drop the Job object (Windows). With `kill_on_job_close`
-        // set during construction, this immediately kills any remaining
-        // processes assigned to the job — a no-op if the graceful exit
-        // and wait_or_kill above already cleaned up, but a hard backstop
-        // if anything is still alive.
         #[cfg(target_os = "windows")]
-        {
-            let _ = self._job.take();
-        }
+        drop(self.job.lock().unwrap_or_else(PoisonError::into_inner).take());
+        drop(self.master.lock().unwrap_or_else(PoisonError::into_inner).take());
 
-        // STEP 6: Join the reader thread, bounded by a 2-second timeout
-        // backstop. With a clean shell exit, this should complete in a
-        // few milliseconds because conhost.exe has detected the dead
-        // child and closed the read pipe naturally.
-        if let Some(handle) = self.reader_handle.take() {
-            join_with_timeout(handle, Duration::from_secs(2));
-        }
+        let threads = std::mem::take(&mut *self.threads.lock().unwrap_or_else(PoisonError::into_inner));
+        let short = short_id(&self.session_id);
+        join_bounded(threads.reader, READER_JOIN, "reader", &short);
+        join_bounded(threads.writer, HELPER_JOIN, "writer", &short);
+        join_bounded(threads.watcher, HELPER_JOIN, "exit watcher", &short);
 
-        exit_code
+        let code = match state {
+            ProcessState::Exited(code) => code,
+            ProcessState::Running => None,
+        };
+        *self.exit_code.lock().unwrap_or_else(PoisonError::into_inner) = code;
+        code
     }
 
-    fn wait_or_kill(&self) -> Option<i32> {
-        let mut child = match self.child.lock() {
-            Ok(c) => c,
-            Err(_) => return None,
-        };
-
-        // Try to wait with a timeout by polling.
-        let deadline = Instant::now() + Duration::from_millis(TEARDOWN_TIMEOUT_MS);
+    fn wait_for_exit(&self, timeout: Duration) -> ProcessState {
+        let deadline = Instant::now() + timeout;
         loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    return Some(status.exit_code() as i32);
-                }
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(_) => break,
+            let status = self.child.lock().unwrap_or_else(PoisonError::into_inner).try_wait();
+            match status {
+                Ok(Some(status)) => return ProcessState::Exited(Some(status.exit_code() as i32)),
+                Ok(None) => {}
+                Err(_) => return ProcessState::Exited(None),
+            }
+            if Instant::now() >= deadline {
+                return ProcessState::Running;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn stop_process_tree(&self) {
+        // Kill on close: dropping the only job handle ends every process in it.
+        let job = self.job.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if job.is_some() {
+            drop(job);
+        } else {
+            let _ = self.child.lock().unwrap_or_else(PoisonError::into_inner).kill();
+        }
+    }
+
+    #[cfg(unix)]
+    fn stop_process_tree(&self) {
+        self.signal_process_groups(libc::SIGHUP);
+        if matches!(self.wait_for_exit(Duration::from_millis(250)), ProcessState::Running) {
+            self.signal_process_groups(libc::SIGKILL);
+        }
+    }
+
+    /// Signals the shell's own process group and the terminal's foreground
+    /// group. The shell leads its own session (portable-pty calls setsid), so
+    /// its group id is its pid. A background job in a group of its own is not
+    /// reached (residual, verified on macOS and Linux in track T slice T5).
+    #[cfg(unix)]
+    fn signal_process_groups(&self, signal: libc::c_int) {
+        let own_group = unsafe { libc::getpgrp() };
+        let mut groups: Vec<libc::pid_t> = Vec::new();
+        if let Some(pid) = self.shell_pid {
+            groups.push(pid as libc::pid_t);
+        }
+        if let Some(master) = self.master.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            if let Some(foreground) = master.process_group_leader() {
+                groups.push(foreground);
             }
         }
-
-        // Timeout — force kill.
-        let _ = child.kill();
-
-        // One final wait to reap.
-        match child.try_wait() {
-            Ok(Some(status)) => Some(status.exit_code() as i32),
-            _ => None,
+        groups.sort_unstable();
+        groups.dedup();
+        for group in groups {
+            // Never group 0 or 1, never Litria's own group: kill(-pgid) with a
+            // bad id signals far more than this session.
+            if group > 1 && group != own_group {
+                unsafe {
+                    libc::killpg(group, signal);
+                }
+            }
         }
     }
+
+    #[cfg(target_os = "windows")]
+    fn has_child_processes(&self) -> bool {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::JobObjects::{
+            JobObjectBasicAccountingInformation, QueryInformationJobObject,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        };
+        let job = self.job.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(job) = job.as_ref() else {
+            return false;
+        };
+        let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        // SAFETY: the job handle stays open while the guard holds it, and the
+        // buffer is the structure this information class fills.
+        let queried = unsafe {
+            QueryInformationJobObject(
+                Some(HANDLE(job.handle() as *mut core::ffi::c_void)),
+                JobObjectBasicAccountingInformation,
+                &mut info as *mut _ as *mut core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                None,
+            )
+        };
+        // The shell itself is one process in its job.
+        queried.is_ok() && info.ActiveProcesses > 1
+    }
+
+    #[cfg(unix)]
+    fn has_child_processes(&self) -> bool {
+        let master = self.master.lock().unwrap_or_else(PoisonError::into_inner);
+        let foreground = master.as_ref().and_then(|m| m.process_group_leader());
+        match (foreground, self.shell_pid) {
+            (Some(foreground), Some(pid)) => foreground as u32 != pid,
+            _ => false,
+        }
+    }
+}
+
+fn session_ended() -> CommandError {
+    CommandError::not_found("terminal.session_ended", "The terminal session has ended.")
 }
 
 impl Drop for PtySession {
-    /// Backstop for any code path that constructs a `PtySession` but forgets
-    /// to call `teardown()` explicitly. Detected via `reader_handle.is_some()`
-    /// — `teardown()` takes the handle, so a Some value means teardown hasn't
-    /// run. Without this Drop impl, the reader thread would leak (the OS Job
-    /// object kills the child process, but the reader thread has no way to
-    /// know it should exit until the master pipe is dropped).
+    /// Backstop for a session dropped without `end` (an error path, a test).
+    /// The work goes to a new thread: the dropping thread may be the UI thread.
     fn drop(&mut self) {
-        if self.reader_handle.is_some() {
-            let _ = self.teardown();
+        if self.inner.ended.load(Ordering::SeqCst) {
+            return;
+        }
+        let inner = Arc::clone(&self.inner);
+        let spawned = thread::Builder::new()
+            .name(format!("terminal-drop-{}", short_id(&inner.session_id)))
+            .spawn(move || {
+                inner.end();
+            });
+        if spawned.is_err() {
+            self.inner.end();
         }
     }
 }
 
-/// Join a thread with a timeout backstop. If the join exceeds the timeout,
-/// detach the joiner and log a warning. This is the safety net for
-/// `PtySession::teardown` to prevent an unbounded join from hanging callers
-/// when the OS pipe doesn't break cleanly after the child is killed.
-///
-/// Worst case: one leaked joiner thread per timeout, which itself blocks
-/// until the original reader thread eventually exits (usually at process
-/// teardown). Acceptable trade-off vs panicking or aborting.
-fn join_with_timeout(handle: JoinHandle<()>, timeout: Duration) {
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        let _ = handle.join();
-        let _ = tx.send(());
-    });
-    if rx.recv_timeout(timeout).is_err() {
-        eprintln!(
-            "[terminal_pty] reader thread join timed out after {:?}, detaching",
-            timeout
-        );
+/// Joins a thread with a bound. A thread still running after its bound is left
+/// behind and logged: the caller must never hang on it.
+fn join_bounded(handle: Option<JoinHandle<()>>, timeout: Duration, what: &str, short: &str) {
+    let Some(handle) = handle else {
+        return;
+    };
+    let deadline = Instant::now() + timeout;
+    while !handle.is_finished() {
+        if Instant::now() >= deadline {
+            eprintln!("[terminal_pty] session {short}: {what} thread still running after {timeout:?}; leaving it");
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
     }
+    let _ = handle.join();
 }
 
 #[cfg(test)]
@@ -669,6 +969,32 @@ mod tests {
         assert_eq!(forward, b"abcd");
     }
 
+    // ── Utf8Stream ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn utf8_stream_joins_a_character_split_across_reads() {
+        let mut s = Utf8Stream::new();
+        // "é" is C3 A9; "€" is E2 82 AC.
+        assert_eq!(s.decode(b"caf\xC3"), "caf");
+        assert_eq!(s.decode(b"\xA9 \xE2\x82"), "é ");
+        assert_eq!(s.decode(b"\xAC!"), "€!");
+        assert_eq!(s.finish(), "");
+    }
+
+    #[test]
+    fn utf8_stream_replaces_invalid_bytes_and_keeps_going() {
+        let mut s = Utf8Stream::new();
+        assert_eq!(s.decode(b"a\xFFb\xC3\x28c"), "a\u{FFFD}b\u{FFFD}(c");
+    }
+
+    #[test]
+    fn utf8_stream_finish_releases_an_unfinished_tail() {
+        let mut s = Utf8Stream::new();
+        assert_eq!(s.decode(b"ok\xE2\x82"), "ok");
+        assert_eq!(s.finish(), "\u{FFFD}");
+        assert_eq!(s.finish(), "");
+    }
+
     // ── de_verbatim ─────────────────────────────────────────────────────────
 
     #[cfg(windows)]
@@ -693,5 +1019,203 @@ mod tests {
             de_verbatim(Path::new(r"\\?\UNC\server\share\dir")),
             Path::new(r"\\server\share\dir")
         );
+    }
+
+    // ── Real shells ─────────────────────────────────────────────────────────
+    //
+    // These spawn the platform's default shell in a real pseudoconsole. On
+    // Windows a test executable loads the in-box console host (conpty.dll is
+    // staged beside the app, not beside target/debug/deps); the app ships the
+    // sideloaded host. Every test runs under a watchdog, so a wedged console
+    // fails the test instead of hanging the suite.
+
+    mod real_shells {
+        use super::*;
+        use crate::execution_policy::ValidatedExecutionBoundary;
+        use tauri::ipc::InvokeResponseBody;
+
+        const WATCHDOG: Duration = Duration::from_secs(45);
+        const WAIT: Duration = Duration::from_secs(20);
+
+        fn with_watchdog(body: impl FnOnce() + Send + 'static) {
+            let (done, finished) = mpsc::channel::<()>();
+            let handle = thread::spawn(move || {
+                body();
+                let _ = done.send(());
+            });
+            match finished.recv_timeout(WATCHDOG) {
+                Ok(()) => handle.join().unwrap(),
+                Err(_) if handle.is_finished() => {
+                    if let Err(panic) = handle.join() {
+                        std::panic::resume_unwind(panic);
+                    }
+                }
+                Err(_) => panic!("watchdog: still running after {WATCHDOG:?}"),
+            }
+        }
+
+        #[derive(Default)]
+        struct Seen {
+            output: String,
+            exits: Vec<Option<i32>>,
+        }
+
+        fn capture() -> (Channel<TerminalEvent>, Arc<Mutex<Seen>>) {
+            let seen = Arc::new(Mutex::new(Seen::default()));
+            let sink = Arc::clone(&seen);
+            let channel = Channel::new(move |body: InvokeResponseBody| {
+                if let InvokeResponseBody::Json(json) = body {
+                    let value: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+                    let mut seen = sink.lock().unwrap();
+                    match value["event"].as_str() {
+                        Some("Output") => {
+                            seen.output.push_str(value["data"]["chunk"].as_str().unwrap_or_default())
+                        }
+                        Some("Exited") => seen.exits.push(value["data"]["exitCode"].as_i64().map(|c| c as i32)),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            });
+            (channel, seen)
+        }
+
+        fn boundary() -> ValidatedExecutionBoundary {
+            let root = std::env::temp_dir().to_string_lossy().to_string();
+            terminal_policy::validate_terminal_execution_boundary("real-shell-test", &root, None)
+                .expect("the temp dir is a valid project root")
+        }
+
+        fn spawn(seen_exit: Arc<AtomicBool>) -> (PtySession, Arc<Mutex<Seen>>) {
+            let (channel, seen) = capture();
+            let id = format!("{:032x}", rand::random::<u128>());
+            let session = spawn_pty(
+                &id,
+                &boundary(),
+                100,
+                30,
+                channel,
+                Box::new(move || seen_exit.store(true, Ordering::SeqCst)),
+            )
+            .expect("the default shell starts");
+            (session, seen)
+        }
+
+        fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+            let deadline = Instant::now() + WAIT;
+            while !done() {
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        fn output_of(seen: &Arc<Mutex<Seen>>) -> String {
+            seen.lock().unwrap().output.clone()
+        }
+
+        fn type_line(session: &PtySession, line: &str) {
+            session.write_input(format!("{line}\r").as_bytes()).unwrap();
+        }
+
+        /// The pid a line of output reports as `PID=<n>`.
+        fn reported_pid(output: &str) -> Option<u32> {
+            output
+                .split("PID=")
+                .skip(1)
+                .filter_map(|rest| {
+                    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    digits.parse().ok()
+                })
+                .last()
+        }
+
+        #[cfg(windows)]
+        fn process_alive(pid: u32) -> bool {
+            let listed = crate::platform::hidden_command("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+                .output()
+                .expect("tasklist runs");
+            String::from_utf8_lossy(&listed.stdout).contains(&format!("\"{pid}\""))
+        }
+
+        #[cfg(unix)]
+        fn process_alive(pid: u32) -> bool {
+            // Signal 0 checks existence. A zombie counts as gone here: its
+            // parent shell has exited too.
+            unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+                && !std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .map(|stat| stat.contains(") Z "))
+                    .unwrap_or(false)
+        }
+
+        #[test]
+        fn two_sessions_keep_their_own_input_and_output() {
+            with_watchdog(|| {
+                let (a, seen_a) = spawn(Arc::new(AtomicBool::new(false)));
+                let (b, seen_b) = spawn(Arc::new(AtomicBool::new(false)));
+                type_line(&a, "echo alpha-$((6*7))-done");
+                type_line(&b, "echo bravo-$((6*7))-done");
+                // PowerShell has no $((...)); both shells echo the typed text,
+                // so check the typed marker reached only its own session.
+                wait_for("alpha in session a", || output_of(&seen_a).contains("alpha-"));
+                wait_for("bravo in session b", || output_of(&seen_b).contains("bravo-"));
+                assert!(!output_of(&seen_a).contains("bravo-"));
+                assert!(!output_of(&seen_b).contains("alpha-"));
+                a.end();
+                b.end();
+            });
+        }
+
+        #[test]
+        fn a_shell_exiting_by_itself_is_reported_with_its_code() {
+            with_watchdog(|| {
+                let exited = Arc::new(AtomicBool::new(false));
+                let (session, seen) = spawn(Arc::clone(&exited));
+                type_line(&session, "exit 3");
+                wait_for("the exit watcher", || exited.load(Ordering::SeqCst));
+                assert_eq!(seen.lock().unwrap().exits, vec![Some(3)]);
+                assert_eq!(session.end(), Some(3));
+                // Ending sends no second exit marker.
+                assert_eq!(seen.lock().unwrap().exits.len(), 1);
+            });
+        }
+
+        #[test]
+        fn end_stops_a_running_program_and_reports_no_exit_event() {
+            with_watchdog(|| {
+                let (session, seen) = spawn(Arc::new(AtomicBool::new(false)));
+                // Give the shell time to reach its prompt; idle is not busy.
+                thread::sleep(Duration::from_millis(1500));
+                assert!(!session.is_busy(), "an idle shell is not busy");
+                #[cfg(windows)]
+                type_line(
+                    &session,
+                    "$p = Start-Process ping -ArgumentList '-n','300','127.0.0.1' -NoNewWindow -PassThru; \"PID=$($p.Id)\"",
+                );
+                #[cfg(unix)]
+                type_line(&session, "sh -c 'echo PID=$$; exec sleep 300'");
+                wait_for("the program's pid", || reported_pid(&output_of(&seen)).is_some());
+                let pid = reported_pid(&output_of(&seen)).unwrap();
+                assert!(process_alive(pid));
+                wait_for("the session to read as busy", || session.is_busy());
+
+                session.end();
+                wait_for("the program to stop", || !process_alive(pid));
+                assert!(seen.lock().unwrap().exits.is_empty(), "End sends no Exited");
+            });
+        }
+
+        #[test]
+        fn a_session_dropped_without_end_still_stops() {
+            with_watchdog(|| {
+                let (session, _seen) = spawn(Arc::new(AtomicBool::new(false)));
+                let inner = Arc::clone(&session.inner);
+                drop(session);
+                wait_for("the backstop to end the session", || {
+                    inner.ended.load(Ordering::SeqCst)
+                        && matches!(inner.child.lock().unwrap().try_wait(), Ok(Some(_)))
+                });
+            });
+        }
     }
 }

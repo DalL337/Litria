@@ -4,6 +4,7 @@ import {
   PREFERENCE_REGISTRY,
   PREFERENCE_SCOPES,
   PREFERENCE_PROPAGATIONS,
+  PREF_KEYS,
   entriesForPlace
 } from '../../src/preferences/registry.js';
 import { createPreferencesDomain } from '../../src/preferences/preferencesDomain.js';
@@ -116,11 +117,10 @@ test('boolean getEffective: stored false wins, invalid coerces to default', () =
   );
 });
 
-test('slice-1 registry covers energyLevel, appearance, terminalDrawerClose', () => {
+test('slice-1 registry covers energyLevel and appearance', () => {
   const keys = new Set(PREFERENCE_REGISTRY.map((e) => e.key));
   assert.ok(keys.has('energyLevel'));
   assert.ok(keys.has('appearance'));
-  assert.ok(keys.has('terminalDrawerClose'));
 });
 
 test('every entry declares projectOverridable explicitly', () => {
@@ -135,14 +135,23 @@ test('project-overridable entries surface in the project place', () => {
   assert.ok(!projectKeys.includes('appearance'), 'appearance override deferred to the drawer refit slice');
 });
 
-test('terminalDrawerClose is live — hide capability shipped 2026-08-01', () => {
-  const entry = PREFERENCE_REGISTRY.find((e) => e.key === 'terminalDrawerClose');
-  assert.ok(entry, 'terminalDrawerClose missing from registry');
-  assert.equal(entry.comingSoon, undefined, 'the comingSoon gate must be gone');
-  assert.deepEqual(entry.values, ['end', 'hide']);
-  assert.equal(entry.defaultValue, 'end');
-  assert.equal(entry.scope, 'global');
-  assert.equal(entry.projectOverridable, false, 'global by the ADR-019 classification table');
+test('terminalDrawerClose is retired (track T slice T2a, 2026-10-14)', () => {
+  // Closing the terminal drawer never ends a session now, so there is no
+  // choice left to offer.
+  assert.equal(PREFERENCE_REGISTRY.some((e) => e.key === 'terminalDrawerClose'), false);
+  assert.equal(PREF_KEYS.terminalDrawerClose, undefined);
+});
+
+test('a stored value for the retired terminalDrawerClose is inert', () => {
+  // A preferences file written by an older Litria still holds the key.
+  const domain = createPreferencesDomain({ values: { terminalDrawerClose: 'hide', energyLevel: 'calm' } });
+  for (const entry of PREFERENCE_REGISTRY) {
+    assert.doesNotThrow(() => domain.selectors.getEffective(entry.key), entry.key);
+  }
+  assert.equal(domain.selectors.getEffective('energyLevel'), 'calm');
+  // Saving another key keeps the stale line untouched, and nothing reads it.
+  const next = domain.commands.setValue({ key: 'energyLevel', value: 'live' });
+  assert.equal(next.terminalDrawerClose, 'hide');
 });
 
 // ---------------------------------------------------------------------------
@@ -217,12 +226,12 @@ test('setValue accepts a plain object for json entries', () => {
   assert.deepEqual(next.appearance, appearance);
 });
 
-test('setValue accepts terminalDrawerClose values now the capability shipped', () => {
+test('setValue validates enum values', () => {
   const domain = createPreferencesDomain({ values: {} });
-  const next = domain.commands.setValue({ key: 'terminalDrawerClose', value: 'hide' });
-  assert.equal(next.terminalDrawerClose, 'hide');
+  const next = domain.commands.setValue({ key: 'energyLevel', value: 'calm' });
+  assert.equal(next.energyLevel, 'calm');
   assert.throws(
-    () => domain.commands.setValue({ key: 'terminalDrawerClose', value: 'sideways' }),
+    () => domain.commands.setValue({ key: 'energyLevel', value: 'sideways' }),
     /invalid value/i
   );
   // The comingSoon refusal mechanism in validateForSet stays in the domain

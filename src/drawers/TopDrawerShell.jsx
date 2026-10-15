@@ -31,7 +31,13 @@ function TopDrawerShell({ height = 300 }) {
               key={drawer.id}
               className={`top-drawer-tab ${isActive ? 'is-active' : ''}`}
               type="button"
-              onClick={() => toggleDrawer(drawer.id)}
+              onClick={() => {
+                // The person's open gesture, not the drawer becoming visible:
+                // a drawer only shows things (docs/Orchestration.md §1.2), so
+                // whatever an open should start is the descriptor's call.
+                if (!isActive) drawer.onOpen?.();
+                toggleDrawer(drawer.id);
+              }}
               title={drawer.label}
               aria-pressed={isActive}
             >

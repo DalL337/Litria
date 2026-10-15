@@ -733,6 +733,170 @@
   font-size: 13px;
 }
 
+/* Terminal drawer (track T slice T2a): one tab per session, every session's
+   screen kept mounted. Inactive screens are hidden AND moved out of the
+   clipped stack: visibility alone leaves them on screen geometrically, and
+   xterm keeps rendering anything its IntersectionObserver sees. */
+.terminal-drawer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 6px 3px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.terminal-tab:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.terminal-tab.is-active {
+  color: #fff;
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.terminal-tab.is-ended .terminal-tab-label {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.terminal-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.terminal-tab-dot.is-running {
+  background: #4ade80;
+}
+
+.terminal-tab-dot.is-starting {
+  background: #facc15;
+}
+
+.terminal-tab-rename {
+  width: 120px;
+  padding: 0 4px;
+  border: 1px solid rgba(99, 102, 241, 0.6);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font: inherit;
+}
+
+.terminal-tab-action,
+.terminal-tab-new,
+.terminal-tab-confirm button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(200, 200, 210, 0.55);
+  cursor: pointer;
+}
+
+.terminal-tab-action {
+  width: 18px;
+  height: 18px;
+}
+
+.terminal-tab-new {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.terminal-tab-action:hover,
+.terminal-tab-new:hover,
+.terminal-tab-confirm button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.terminal-tab-confirm {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: rgba(253, 230, 138, 0.9);
+}
+
+.terminal-tab-confirm button {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.terminal-stack {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+.terminal-session {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  transform: translateX(calc(100% + 1px));
+}
+
+.terminal-session.is-active {
+  visibility: visible;
+  transform: none;
+}
+
+.terminal-empty {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.terminal-empty-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  background: rgba(99, 102, 241, 0.12);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.terminal-empty-new:hover {
+  background: rgba(99, 102, 241, 0.22);
+}
+
 /* Settings drawer pills (ADR-019 Slice 3) — selection at the point of use. */
 .drawer-pill-row {
   display: flex;

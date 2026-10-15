@@ -11,6 +11,7 @@ import { PREF_KEYS } from '../preferences/registry.js';
 import { buildBlankSeedRows } from '../project/blankSeed.js';
 import { clearAllDiagnostics } from '../lsp/diagnosticStore.js';
 import { withTimeout } from '../utils/withTimeout.js';
+import { createTerminalEndGate } from './terminalEndGate.js';
 
 // Workspace-style color defaults (ADR-014 / node visual language). Stored in
 // the project's editor_state KV store (no schema change) under `ws.*` keys.
@@ -52,6 +53,7 @@ export function useProjectLaunch({
   clearSelection,
   projectInstance,
   terminalDomain,
+  pillDomain = null,
   languageSupportDomain,
   showToast,
   setConnections,
@@ -64,6 +66,22 @@ export function useProjectLaunch({
   // before it just opened, even if React has not rendered it yet.
   const liveInstanceRef = useRef(projectInstance);
   liveInstanceRef.current = projectInstance;
+
+  // Closing a project ends its terminals. Busy ones get an inline notice
+  // first (track T slice T2a); idle shells end without asking.
+  const endGateRef = useRef(null);
+  if (!endGateRef.current && pillDomain) endGateRef.current = createTerminalEndGate({ pillDomain });
+  const confirmEndingTerminals = useCallback(async (action, subject) => {
+    const current = liveInstanceRef.current;
+    if (!current?.instanceId || !terminalDomain || !endGateRef.current) return true;
+    const busy = await terminalDomain.commands.busySessions(current.instanceId);
+    return endGateRef.current.confirm({
+      projectId: current.instanceId,
+      busyCount: busy.length,
+      action,
+      subject
+    });
+  }, [terminalDomain]);
 
   const getStorageErrorMessage = useCallback((error, fallback) => {
     if (!error || typeof error !== 'object') return fallback;
@@ -266,6 +284,9 @@ export function useProjectLaunch({
     const current = liveInstanceRef.current;
     if (!current || !current.instanceId) return;
     if (terminalDomain) {
+      // No project is current while it closes, so nothing can start a
+      // session in it. Rust's own budget (3 s) is below this timeout.
+      terminalDomain.commands.clearCurrentProject();
       await withTimeout(terminalDomain.commands.teardownAll(), 5000, 'terminal teardown');
     }
     if (languageSupportDomain) {
@@ -370,6 +391,12 @@ export function useProjectLaunch({
       ));
     }
 
+    // Busy terminals of the current project: ask before ending them. After
+    // the path check, so a bad path never prompts.
+    if (!(await confirmEndingTerminals('Switch', 'Switching'))) {
+      return;
+    }
+
     // Tear down the OLD project before opening the NEW one.
     const tearingDown = Boolean(liveInstanceRef.current?.instanceId);
     await teardownActiveProject();
@@ -420,6 +447,7 @@ export function useProjectLaunch({
     liveInstanceRef.current = opened;
   }, [
     guardUnsavedChanges,
+    confirmEndingTerminals,
     teardownActiveProject,
     resetToLauncher,
     getProjectStorageError,
@@ -474,10 +502,14 @@ export function useProjectLaunch({
     if (guardUnsavedChanges && !(await guardUnsavedChanges('exit-to-launcher'))) {
       return;
     }
+    if (!(await confirmEndingTerminals('Close project', 'Closing the project'))) {
+      return;
+    }
     await teardownActiveProject();
     resetToLauncher();
   }, [
     guardUnsavedChanges,
+    confirmEndingTerminals,
     teardownActiveProject,
     resetToLauncher
   ]);

@@ -321,22 +321,10 @@ export const PREFERENCE_REGISTRY = [
     place: ['preferences.global', 'hud.grid'],
     projectOverridable: false
   },
-  {
-    key: 'terminalDrawerClose',
-    room: 'behavior',
-    scope: 'global',
-    propagation: 'inherit',
-    type: 'enum',
-    values: ['end', 'hide'],
-    defaultValue: 'end',
-    label: 'Terminal drawer close',
-    caption: 'What closing the terminal drawer does to the running shell session. End stops the shell; Hide keeps it running for when you reopen the drawer.',
-    place: ['preferences.global'],
-    // Global by ADR-019's own classification ("Terminal drawer close: hide
-    // vs. kill — global | inherit"); no project layer. Capability shipped
-    // 2026-08-01 (hide-don't-kill in DrawerContentTerminal).
-    projectOverridable: false
-  },
+  // `terminalDrawerClose` (end | hide) was retired 2026-10-14, track T slice
+  // T2a: closing the drawer never ends a session now (owner ruling), so there
+  // is nothing left to choose. A value already stored in a preferences file
+  // stays there, inert: nothing reads it (ADR-019 status note).
   {
     key: 'apiWithheldPaths',
     room: 'behavior',
