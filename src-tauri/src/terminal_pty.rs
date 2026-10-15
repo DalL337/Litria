@@ -21,18 +21,21 @@ const READER_JOIN: Duration = Duration::from_secs(2);
 const HELPER_JOIN: Duration = Duration::from_secs(1);
 /// The exit watcher polls the process this often.
 const EXIT_POLL: Duration = Duration::from_millis(200);
-/// After a self-exit, give the reader a moment to forward the program's last
-/// output before the exit marker goes out.
-const EXIT_SETTLE: Duration = Duration::from_millis(150);
+/// After the output ends, how long the reader waits for the exit code.
+const EXIT_CODE_WAIT: Duration = Duration::from_secs(2);
+/// After End's Ctrl+C, how long a running program gets to stop before its
+/// tree is stopped instead.
+const BUSY_GRACE: Duration = Duration::from_millis(1000);
 /// Input messages waiting for the writer thread. Keystrokes are tiny; a full
 /// queue means the program stopped reading its input.
 const INPUT_QUEUE: usize = 1024;
 const WRITER_POLL: Duration = Duration::from_millis(50);
-/// Typed into the shell when the person ends the session: Ctrl+C cancels the
-/// line being edited, then `exit` (PowerShell, pwsh, cmd.exe, sh, bash and zsh
-/// all accept it). Track T's agent sessions (T2b) need another strategy: this
-/// text would reach the agent as a prompt.
-const SHELL_EXIT_SEQUENCE: &[u8] = b"\x03exit\r\n";
+/// End's keystrokes: Ctrl+C cancels the line being edited or the program in
+/// front; `exit` is typed only when the shell itself is at its prompt
+/// (PowerShell, pwsh, cmd.exe, sh, bash and zsh all accept it). Text typed
+/// into a running program would reach it as input.
+const CTRL_C: &[u8] = b"\x03";
+const SHELL_EXIT: &[u8] = b"exit\r\n";
 
 /// ConPTY startup handshake (see HandshakeFilter): how deep into the output
 /// stream we keep looking for the host's initial cursor query before giving
@@ -187,6 +190,9 @@ pub(crate) enum TerminalEvent {
 struct FlowControl {
     paused: Mutex<bool>,
     resume_signal: Condvar,
+    /// Set when a session's last output must reach the view (a self-exit):
+    /// from then on nothing can pause the reader.
+    draining: AtomicBool,
 }
 
 impl FlowControl {
@@ -194,10 +200,14 @@ impl FlowControl {
         Self {
             paused: Mutex::new(false),
             resume_signal: Condvar::new(),
+            draining: AtomicBool::new(false),
         }
     }
 
     fn pause(&self) {
+        if self.draining.load(Ordering::SeqCst) {
+            return;
+        }
         *self.paused.lock().unwrap_or_else(PoisonError::into_inner) = true;
     }
 
@@ -206,9 +216,15 @@ impl FlowControl {
         self.resume_signal.notify_one();
     }
 
+    /// Lift any pause for good.
+    fn drain(&self) {
+        self.draining.store(true, Ordering::SeqCst);
+        self.resume();
+    }
+
     fn wait_if_paused(&self, shutdown: &AtomicBool) {
         let mut guard = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
-        while *guard && !shutdown.load(Ordering::SeqCst) {
+        while *guard && !shutdown.load(Ordering::SeqCst) && !self.draining.load(Ordering::SeqCst) {
             guard = match self.resume_signal.wait_timeout(guard, Duration::from_millis(100)) {
                 Ok((guard, _)) => guard,
                 Err(poisoned) => poisoned.into_inner().0,
@@ -233,11 +249,14 @@ struct PtyInner {
     // Option so `end` can close the pseudoconsole (drop the master) once the
     // processes are gone, and so `resize` can tell the session has ended.
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
-    // The only way input reaches the writer thread. `end` takes it.
+    // How input reaches the writer thread. `end` takes it.
     input: Mutex<Option<SyncSender<WriterMsg>>>,
-    // Tells the writer thread to drop queued input and type the exit
-    // sequence once its queue is drained.
+    // Writer: drop queued input from now on.
     closing: Arc<AtomicBool>,
+    // Writer: the input pipe may close (after End's graceful wait).
+    released: Arc<AtomicBool>,
+    // Set by the exit watcher when the shell exited by itself.
+    self_exited: Arc<AtomicBool>,
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     #[cfg(unix)]
     shell_pid: Option<u32>,
@@ -259,14 +278,26 @@ struct SessionThreads {
 
 /// What the writer thread writes, in the order it was queued.
 enum WriterMsg {
+    /// The person's typing (dropped once the session is ending).
     Input(Vec<u8>),
     /// The startup handshake reply (see HandshakeFilter).
     Reply(&'static [u8]),
+    /// End's own keystrokes (Ctrl+C, `exit`): written even while ending.
+    Control(&'static [u8]),
 }
 
 enum ProcessState {
     Exited(Option<i32>),
     Running,
+}
+
+impl ProcessState {
+    fn code(&self) -> Option<i32> {
+        match self {
+            ProcessState::Exited(code) => *code,
+            ProcessState::Running => None,
+        }
+    }
 }
 
 /// Convert a Windows verbatim path (\\?\C:\... or \\?\UNC\server\share\...)
@@ -296,10 +327,12 @@ fn de_verbatim(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Spawns a shell in a new pseudoconsole and starts its three threads:
-/// - the reader forwards output to `channel`;
+/// - the reader forwards output to `channel`; when the shell exits by
+///   itself, it forwards everything to the end and then sends `Exited`;
 /// - the writer owns the PTY input and writes queued input in order;
-/// - the exit watcher notices the shell exiting by itself, sends `Exited` and
-///   calls `on_exit`.
+/// - the exit watcher notices the shell exiting by itself and calls
+///   `on_exit`, which ends the session (closing the pseudoconsole is what
+///   lets the reader reach the end of the output on Windows).
 ///
 /// The exit watcher exists because the reader cannot see a self-exit on
 /// Windows: the console host keeps running while it holds its reference
@@ -376,6 +409,8 @@ pub(crate) fn spawn_pty(
     let (input_tx, input_rx) = mpsc::sync_channel(INPUT_QUEUE);
     let shutdown = Arc::new(AtomicBool::new(false));
     let closing = Arc::new(AtomicBool::new(false));
+    let released = Arc::new(AtomicBool::new(false));
+    let self_exited = Arc::new(AtomicBool::new(false));
     let flow_control = Arc::new(FlowControl::new());
     let child = Arc::new(Mutex::new(child));
 
@@ -387,6 +422,8 @@ pub(crate) fn spawn_pty(
             master: Mutex::new(Some(pair.master)),
             input: Mutex::new(Some(input_tx.clone())),
             closing: Arc::clone(&closing),
+            released: Arc::clone(&released),
+            self_exited: Arc::clone(&self_exited),
             child: Arc::clone(&child),
             #[cfg(unix)]
             shell_pid,
@@ -402,19 +439,20 @@ pub(crate) fn spawn_pty(
 
     let short = short_id(session_id);
     let threads = SessionThreads {
-        writer: Some(spawn_writer_thread(writer, input_rx, closing, &short).map_err(thread_error)?),
+        writer: Some(spawn_writer_thread(writer, input_rx, closing, released, &short).map_err(thread_error)?),
         reader: Some(
             spawn_reader_thread(
                 reader,
-                channel.clone(),
+                channel,
                 Arc::clone(&shutdown),
                 flow_control,
+                Arc::clone(&child),
                 Some(input_tx),
                 &short,
             )
             .map_err(thread_error)?,
         ),
-        watcher: Some(spawn_exit_watcher(child, shutdown, channel, on_exit, &short).map_err(thread_error)?),
+        watcher: Some(spawn_exit_watcher(child, shutdown, self_exited, on_exit, &short).map_err(thread_error)?),
     };
     *session.inner.threads.lock().unwrap_or_else(PoisonError::into_inner) = threads;
     Ok(session)
@@ -432,11 +470,28 @@ fn short_id(session_id: &str) -> String {
     session_id.chars().take(8).collect()
 }
 
+/// The shell's exit code, polled with short lock holds, for up to `timeout`.
+fn poll_exit_code(
+    child: &Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    timeout: Duration,
+) -> Option<i32> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let status = child.lock().unwrap_or_else(PoisonError::into_inner).try_wait();
+        match status {
+            Ok(Some(status)) => return Some(status.exit_code() as i32),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            _ => return None,
+        }
+    }
+}
+
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     channel: Channel<TerminalEvent>,
     shutdown: Arc<AtomicBool>,
     flow_control: Arc<FlowControl>,
+    child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     mut reply: Option<SyncSender<WriterMsg>>,
     short: &str,
 ) -> std::io::Result<JoinHandle<()>> {
@@ -474,8 +529,8 @@ fn spawn_reader_thread(
                         // Windows, after End: keep draining until the console
                         // host exits (closing the pseudoconsole makes it), and
                         // send nothing. An undrained pipe can stall the host's
-                        // shutdown, and output from a session being ended must
-                        // not reach the webview.
+                        // shutdown, and output from a session the person ended
+                        // must not reach the webview.
                         if shutdown.load(Ordering::SeqCst) {
                             continue;
                         }
@@ -500,10 +555,17 @@ fn spawn_reader_thread(
                 }
             }
 
+            // The output ended without anyone ending the session: the shell
+            // exited by itself. Everything it printed has been forwarded; the
+            // exit marker goes last.
             if !shutdown.load(Ordering::SeqCst) {
                 let tail = utf8.finish();
                 if !tail.is_empty() {
                     let _ = channel.send(TerminalEvent::Output { chunk: tail });
+                }
+                let exit_code = poll_exit_code(&child, EXIT_CODE_WAIT);
+                if !shutdown.load(Ordering::SeqCst) {
+                    let _ = channel.send(TerminalEvent::Exited { exit_code });
                 }
             }
         })
@@ -511,11 +573,15 @@ fn spawn_reader_thread(
 
 /// The writer thread owns the PTY input outright, so nothing else ever waits on
 /// a lock while a write is blocked (a full input pipe blocks until the program
-/// reads). Input, the handshake reply and the exit sequence all arrive in order.
+/// reads). Input, the handshake reply and End's keystrokes arrive in order. The
+/// input pipe stays open until End releases it, after its graceful wait:
+/// closing it early can make the console host send a close event before the
+/// shell has run `exit`.
 fn spawn_writer_thread(
     mut writer: Box<dyn Write + Send>,
     queue: Receiver<WriterMsg>,
     closing: Arc<AtomicBool>,
+    released: Arc<AtomicBool>,
     short: &str,
 ) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
@@ -525,28 +591,27 @@ fn spawn_writer_thread(
             loop {
                 match queue.recv_timeout(WRITER_POLL) {
                     Ok(message) => {
-                        // Once the session is ending, queued input is dropped:
-                        // a paste still waiting must not run as the shell exits.
-                        if closing.load(Ordering::SeqCst) || broken {
-                            continue;
-                        }
                         let bytes: &[u8] = match &message {
+                            // End's own keystrokes, written even while ending.
+                            WriterMsg::Control(bytes) => bytes,
+                            // Once the session is ending, queued input is
+                            // dropped: a paste still waiting must not run as
+                            // the shell exits.
+                            _ if closing.load(Ordering::SeqCst) => continue,
                             WriterMsg::Input(bytes) => bytes,
                             WriterMsg::Reply(bytes) => bytes,
                         };
-                        broken = writer.write_all(bytes).and_then(|_| writer.flush()).is_err();
+                        if !broken {
+                            broken = writer.write_all(bytes).and_then(|_| writer.flush()).is_err();
+                        }
                     }
                     Err(RecvTimeoutError::Timeout) => {
-                        if closing.load(Ordering::SeqCst) {
+                        if released.load(Ordering::SeqCst) {
                             break;
                         }
                     }
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
-            }
-            if closing.load(Ordering::SeqCst) && !broken {
-                let _ = writer.write_all(SHELL_EXIT_SEQUENCE);
-                let _ = writer.flush();
             }
             // Dropping the writer closes the input side. On Unix its Drop also
             // writes "\n" + VEOF, which can block on a full terminal; that is
@@ -558,14 +623,14 @@ fn spawn_writer_thread(
 fn spawn_exit_watcher(
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     shutdown: Arc<AtomicBool>,
-    channel: Channel<TerminalEvent>,
+    self_exited: Arc<AtomicBool>,
     on_exit: Box<dyn FnOnce() + Send + 'static>,
     short: &str,
 ) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name(format!("terminal-exit-{short}"))
         .spawn(move || {
-            let exit_code = loop {
+            loop {
                 if shutdown.load(Ordering::SeqCst) {
                     return;
                 }
@@ -573,17 +638,16 @@ fn spawn_exit_watcher(
                 // `end` can always take it to kill the process.
                 let status = child.lock().unwrap_or_else(PoisonError::into_inner).try_wait();
                 match status {
-                    Ok(Some(status)) => break Some(status.exit_code() as i32),
+                    Ok(Some(_)) => break,
                     Ok(None) => thread::sleep(EXIT_POLL),
                     // The process can no longer be queried: treat it as gone.
-                    Err(_) => break None,
+                    Err(_) => break,
                 }
-            };
-            thread::sleep(EXIT_SETTLE);
+            }
             if shutdown.load(Ordering::SeqCst) {
                 return;
             }
-            let _ = channel.send(TerminalEvent::Exited { exit_code });
+            self_exited.store(true, Ordering::SeqCst);
             on_exit();
         })
 }
@@ -665,9 +729,9 @@ impl TerminalSession for PtySession {
         self.inner.flow_control.resume();
     }
 
-    /// Whether the shell is running something: a program of its own, not just
-    /// its prompt. A command running inside the shell process itself (a
-    /// PowerShell cmdlet, a shell builtin) does not count.
+    /// Whether the shell is running something: any process of its own. A
+    /// command running inside the shell process itself (a PowerShell cmdlet,
+    /// a shell builtin) does not count; the frontend adds recent output.
     fn is_busy(&self) -> bool {
         if self.inner.ended.load(Ordering::SeqCst) {
             return false;
@@ -682,36 +746,59 @@ impl TerminalSession for PtySession {
 }
 
 impl PtyInner {
-    /// Ends the session. Blocking, idempotent, bounded.
-    ///
-    /// Order (docs/plans/persistence/project-switch-crash-investigation.md,
-    /// and the T2a design critique):
-    /// 1. Stop forwarding output and lift any pause.
-    /// 2. Let the writer type Ctrl+C and `exit`, and wait for the shell. A
-    ///    clean exit is what lets the console host shut down promptly.
-    /// 3. If the shell is still running, stop it and everything it started:
-    ///    the job on Windows, the session's process groups on Unix.
-    /// 4. Windows: drop the job (kill on close) BEFORE closing the
-    ///    pseudoconsole. Closing it while a killed client is still attached
-    ///    can wedge the in-box console host forever; with the job gone first,
-    ///    a wedge could leak at most an idle host and a thread.
-    /// 5. Close the pseudoconsole (drop the master), then join the threads,
-    ///    each with a bound.
+    /// Ends the session. Blocking, idempotent, bounded. A shell that exited by
+    /// itself takes the draining path; anything else (the person's End, a
+    /// project closing, quit) takes the stopping path.
     fn end(&self) -> Option<i32> {
         if self.ended.swap(true, Ordering::SeqCst) {
             return *self.exit_code.lock().unwrap_or_else(PoisonError::into_inner);
         }
+        let code = if self.self_exited.load(Ordering::SeqCst) {
+            self.end_after_exit()
+        } else {
+            self.end_by_request()
+        };
+        *self.exit_code.lock().unwrap_or_else(PoisonError::into_inner) = code;
+        code
+    }
 
+    /// The stopping path (docs/plans/persistence/project-switch-crash-
+    /// investigation.md, and the T2a design critique and review):
+    /// 1. Stop forwarding output, lift any pause, drop queued input.
+    /// 2. Ctrl+C. Only when nothing but the shell is left running is `exit`
+    ///    typed: text typed into a running program (an editor, an agent)
+    ///    would reach it as input. A clean exit is what lets the console host
+    ///    shut down promptly.
+    /// 3. Whatever is still running is stopped with everything it started:
+    ///    the job on Windows, the session's process groups on Unix.
+    /// 4. The input pipe is released, then the pseudoconsole closed (the job
+    ///    dropped first on Windows: closing while a killed client is still
+    ///    attached can wedge the in-box console host), then the threads joined,
+    ///    each with a bound.
+    fn end_by_request(&self) -> Option<i32> {
         self.shutdown.store(true, Ordering::SeqCst);
-        self.flow_control.resume();
+        self.flow_control.drain();
         self.closing.store(true, Ordering::SeqCst);
         // Each part is taken out first and dropped after its lock is
         // released: a guard in the same statement would stay held through the
         // drop, and closing a pseudoconsole can take a long time.
-        let input = self.input.lock().unwrap_or_else(PoisonError::into_inner).take();
-        drop(input);
+        let control = self.input.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let send = |bytes: &'static [u8]| {
+            if let Some(queue) = &control {
+                let _ = queue.try_send(WriterMsg::Control(bytes));
+            }
+        };
 
-        let mut state = self.wait_for_exit(GRACEFUL_EXIT);
+        send(CTRL_C);
+        let at_prompt = !self.has_child_processes() || self.wait_until_idle(BUSY_GRACE);
+        let mut state = if at_prompt {
+            send(SHELL_EXIT);
+            self.wait_for_exit(GRACEFUL_EXIT)
+        } else {
+            self.wait_for_exit(Duration::ZERO)
+        };
+        drop(control);
+
         if matches!(state, ProcessState::Running) {
             self.stop_process_tree();
             state = self.wait_for_exit(KILL_WAIT);
@@ -721,6 +808,32 @@ impl PtyInner {
             state = self.wait_for_exit(KILL_WAIT);
         }
 
+        self.released.store(true, Ordering::SeqCst);
+        self.close_and_join();
+        state.code()
+    }
+
+    /// The draining path: the shell exited by itself. Nothing is suppressed
+    /// until the reader has forwarded the end of the output (it sends the exit
+    /// marker last); whatever the shell left running ends with it.
+    fn end_after_exit(&self) -> Option<i32> {
+        self.flow_control.drain();
+        self.closing.store(true, Ordering::SeqCst);
+        self.released.store(true, Ordering::SeqCst);
+        let input = self.input.lock().unwrap_or_else(PoisonError::into_inner).take();
+        drop(input);
+        #[cfg(unix)]
+        self.stop_process_tree();
+        let state = self.wait_for_exit(Duration::ZERO);
+        // On Windows, dropping the job ends what the shell left running, and
+        // closing the pseudoconsole makes the console host flush and exit, so
+        // the reader reaches the end of the output.
+        self.close_and_join();
+        self.shutdown.store(true, Ordering::SeqCst);
+        state.code()
+    }
+
+    fn close_and_join(&self) {
         #[cfg(target_os = "windows")]
         {
             let job = self.job.lock().unwrap_or_else(PoisonError::into_inner).take();
@@ -734,13 +847,20 @@ impl PtyInner {
         join_bounded(threads.reader, READER_JOIN, "reader", &short);
         join_bounded(threads.writer, HELPER_JOIN, "writer", &short);
         join_bounded(threads.watcher, HELPER_JOIN, "exit watcher", &short);
+    }
 
-        let code = match state {
-            ProcessState::Exited(code) => code,
-            ProcessState::Running => None,
-        };
-        *self.exit_code.lock().unwrap_or_else(PoisonError::into_inner) = code;
-        code
+    /// Waits up to `timeout` for the shell to have no process of its own.
+    fn wait_until_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if !self.has_child_processes() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 
     fn wait_for_exit(&self, timeout: Duration) -> ProcessState {
@@ -770,24 +890,39 @@ impl PtyInner {
         }
     }
 
+    /// Unix: SIGHUP, then SIGKILL to whatever is left. The groups are captured
+    /// once, before any signal: once the shell dies the terminal's foreground
+    /// group can no longer be read, and a job that ignores SIGHUP must still
+    /// get SIGKILL even though the shell itself is gone.
     #[cfg(unix)]
     fn stop_process_tree(&self) {
-        self.signal_process_groups(libc::SIGHUP);
-        if matches!(self.wait_for_exit(Duration::from_millis(250)), ProcessState::Running) {
-            self.signal_process_groups(libc::SIGKILL);
+        let groups = self.session_groups();
+        signal_groups(&groups, libc::SIGHUP);
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while groups.iter().any(|&g| group_alive(g)) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
         }
+        let survivors: Vec<libc::pid_t> = groups.into_iter().filter(|&g| group_alive(g)).collect();
+        signal_groups(&survivors, libc::SIGKILL);
     }
 
-    /// Signals the shell's own process group and the terminal's foreground
-    /// group. The shell leads its own session (portable-pty calls setsid), so
-    /// its group id is its pid. A background job in a group of its own is not
-    /// reached (residual, verified on macOS and Linux in track T slice T5).
+    /// The shell's own process group (it leads its session: portable-pty calls
+    /// setsid, so the group id is its pid), the terminal's foreground group,
+    /// and the group of each of the shell's children (each job of a shell with
+    /// job control has one). A process that left all of these (setsid, a
+    /// daemon) is not reached; see track T slice T5.
     #[cfg(unix)]
-    fn signal_process_groups(&self, signal: libc::c_int) {
+    fn session_groups(&self) -> Vec<libc::pid_t> {
         let own_group = unsafe { libc::getpgrp() };
         let mut groups: Vec<libc::pid_t> = Vec::new();
         if let Some(pid) = self.shell_pid {
             groups.push(pid as libc::pid_t);
+            for child in child_pids(pid).unwrap_or_default() {
+                let group = unsafe { libc::getpgid(child) };
+                if group > 0 {
+                    groups.push(group);
+                }
+            }
         }
         if let Some(master) = self.master.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
             if let Some(foreground) = master.process_group_leader() {
@@ -796,15 +931,10 @@ impl PtyInner {
         }
         groups.sort_unstable();
         groups.dedup();
-        for group in groups {
-            // Never group 0 or 1, never Litria's own group: kill(-pgid) with a
-            // bad id signals far more than this session.
-            if group > 1 && group != own_group {
-                unsafe {
-                    libc::killpg(group, signal);
-                }
-            }
-        }
+        // Never group 0 or 1, never Litria's own group: kill(-pgid) with a bad
+        // id signals far more than this session.
+        groups.retain(|&g| g > 1 && g != own_group);
+        groups
     }
 
     #[cfg(target_os = "windows")]
@@ -836,16 +966,79 @@ impl PtyInner {
         queried.is_err() || info.ActiveProcesses > 1
     }
 
+    /// Unix: any child of the shell, running, stopped (Ctrl+Z) or in the
+    /// background. Unknown says busy (see the Windows version).
     #[cfg(unix)]
     fn has_child_processes(&self) -> bool {
-        let master = self.master.lock().unwrap_or_else(PoisonError::into_inner);
-        let foreground = master.as_ref().and_then(|m| m.process_group_leader());
-        match (foreground, self.shell_pid) {
-            (Some(foreground), Some(pid)) => foreground as u32 != pid,
-            // Unknown: say busy (see the Windows version).
-            _ => true,
+        match self.shell_pid.and_then(child_pids) {
+            Some(children) => !children.is_empty(),
+            None => true,
         }
     }
+}
+
+#[cfg(unix)]
+fn signal_groups(groups: &[libc::pid_t], signal: libc::c_int) {
+    for &group in groups {
+        unsafe {
+            libc::killpg(group, signal);
+        }
+    }
+}
+
+/// Whether a process group still has a member (signal 0 checks existence).
+#[cfg(unix)]
+fn group_alive(group: libc::pid_t) -> bool {
+    unsafe { libc::killpg(group, 0) == 0 }
+}
+
+/// The direct children of a process, or None if they cannot be listed.
+#[cfg(target_os = "linux")]
+fn child_pids(parent: u32) -> Option<Vec<libc::pid_t>> {
+    let mut children = Vec::new();
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<libc::pid_t>().ok()) else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        // "pid (comm) state ppid ...": the command name can hold spaces and
+        // parentheses, so the fields are read after the last ')'.
+        let ppid = stat
+            .rfind(')')
+            .and_then(|end| stat[end + 1..].split_whitespace().nth(1))
+            .and_then(|field| field.parse::<u32>().ok());
+        if ppid == Some(parent) {
+            children.push(pid);
+        }
+    }
+    Some(children)
+}
+
+#[cfg(target_os = "macos")]
+fn child_pids(parent: u32) -> Option<Vec<libc::pid_t>> {
+    let mut buffer = vec![0 as libc::pid_t; 256];
+    // SAFETY: the buffer is valid for its full size in bytes; libproc
+    // returns the number of pids it wrote, or -1.
+    let count = unsafe {
+        libc::proc_listchildpids(
+            parent as libc::pid_t,
+            buffer.as_mut_ptr() as *mut libc::c_void,
+            (buffer.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
+        )
+    };
+    if count < 0 {
+        return None;
+    }
+    buffer.truncate((count as usize).min(256));
+    buffer.retain(|&pid| pid > 0);
+    Some(buffer)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn child_pids(_parent: u32) -> Option<Vec<libc::pid_t>> {
+    None
 }
 
 fn session_ended() -> CommandError {
@@ -1044,16 +1237,31 @@ mod tests {
         };
         let (queue, received) = mpsc::sync_channel(INPUT_QUEUE);
         let closing = Arc::new(AtomicBool::new(false));
-        let handle = spawn_writer_thread(Box::new(writer), received, Arc::clone(&closing), "test").unwrap();
+        let released = Arc::new(AtomicBool::new(false));
+        let handle = spawn_writer_thread(
+            Box::new(writer),
+            received,
+            Arc::clone(&closing),
+            Arc::clone(&released),
+            "test",
+        )
+        .unwrap();
 
         queue.send(WriterMsg::Input(b"first\r".to_vec())).unwrap();
         entered.wait();
         // Queued behind a write that is blocked, as a paste into a busy shell.
         queue.send(WriterMsg::Input(b"second\r".to_vec())).unwrap();
+        // What End does: stop taking input, then its own keystrokes.
         closing.store(true, Ordering::SeqCst);
-        drop(queue);
+        queue.send(WriterMsg::Control(CTRL_C)).unwrap();
+        queue.send(WriterMsg::Control(SHELL_EXIT)).unwrap();
         release.wait();
+        // The input pipe stays open until End releases it.
+        thread::sleep(WRITER_POLL * 3);
+        assert!(!handle.is_finished(), "the writer holds the input open until released");
+        released.store(true, Ordering::SeqCst);
         handle.join().unwrap();
+        drop(queue);
 
         let written = String::from_utf8(written.lock().unwrap().clone()).unwrap();
         assert_eq!(written, "first\r\x03exit\r\n");
@@ -1074,9 +1282,15 @@ mod tests {
         }
         let (queue, received) = mpsc::sync_channel(INPUT_QUEUE);
         let closing = Arc::new(AtomicBool::new(false));
-        let handle =
-            spawn_writer_thread(Box::new(Recorder(Arc::clone(&written))), received, Arc::clone(&closing), "test")
-                .unwrap();
+        let released = Arc::new(AtomicBool::new(false));
+        let handle = spawn_writer_thread(
+            Box::new(Recorder(Arc::clone(&written))),
+            received,
+            Arc::clone(&closing),
+            released,
+            "test",
+        )
+        .unwrap();
         for part in ["a", "b", "c"] {
             queue.send(WriterMsg::Input(part.as_bytes().to_vec())).unwrap();
         }
@@ -1112,6 +1326,7 @@ mod tests {
         );
     }
 
+
     // ── Real shells ─────────────────────────────────────────────────────────
     //
     // These spawn the platform's default shell in a real pseudoconsole. On
@@ -1136,12 +1351,14 @@ mod tests {
             });
             match finished.recv_timeout(WATCHDOG) {
                 Ok(()) => handle.join().unwrap(),
-                Err(_) if handle.is_finished() => {
+                // The body ended without finishing: it panicked. Joining is
+                // prompt, and its own message is the one to report.
+                Err(RecvTimeoutError::Disconnected) => {
                     if let Err(panic) = handle.join() {
                         std::panic::resume_unwind(panic);
                     }
                 }
-                Err(_) => panic!("watchdog: still running after {WATCHDOG:?}"),
+                Err(RecvTimeoutError::Timeout) => panic!("watchdog: still running after {WATCHDOG:?}"),
             }
         }
 
@@ -1149,6 +1366,8 @@ mod tests {
         struct Seen {
             output: String,
             exits: Vec<Option<i32>>,
+            /// "O" per output chunk and "E" per exit, in arrival order.
+            order: Vec<&'static str>,
         }
 
         fn capture() -> (Channel<TerminalEvent>, Arc<Mutex<Seen>>) {
@@ -1160,9 +1379,13 @@ mod tests {
                     let mut seen = sink.lock().unwrap();
                     match value["event"].as_str() {
                         Some("Output") => {
-                            seen.output.push_str(value["data"]["chunk"].as_str().unwrap_or_default())
+                            seen.output.push_str(value["data"]["chunk"].as_str().unwrap_or_default());
+                            seen.order.push("O");
                         }
-                        Some("Exited") => seen.exits.push(value["data"]["exitCode"].as_i64().map(|c| c as i32)),
+                        Some("Exited") => {
+                            seen.exits.push(value["data"]["exitCode"].as_i64().map(|c| c as i32));
+                            seen.order.push("E");
+                        }
                         _ => {}
                     }
                 }
@@ -1208,10 +1431,10 @@ mod tests {
             session.write_input(format!("{line}\r").as_bytes()).unwrap();
         }
 
-        /// The pid a line of output reports as `PID=<n>`.
-        fn reported_pid(output: &str) -> Option<u32> {
+        /// The last `<marker>=<digits>` in the output.
+        fn reported_pid(output: &str, marker: &str) -> Option<u32> {
             output
-                .split("PID=")
+                .split(&format!("{marker}="))
                 .skip(1)
                 .filter_map(|rest| {
                     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -1220,23 +1443,71 @@ mod tests {
                 .last()
         }
 
-        #[cfg(windows)]
-        fn process_alive(pid: u32) -> bool {
-            let listed = crate::platform::hidden_command("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-                .output()
-                .expect("tasklist runs");
-            String::from_utf8_lossy(&listed.stdout).contains(&format!("\"{pid}\""))
+        fn pid_of(session: &PtySession, seen: &Arc<Mutex<Seen>>, marker: &str) -> u32 {
+            let _ = session;
+            wait_for(marker, || reported_pid(&output_of(seen), marker).is_some());
+            reported_pid(&output_of(seen), marker).unwrap()
         }
 
+        /// A process watched through a handle opened while it was known to be
+        /// alive, so a reused pid can never stand in for it.
+        #[cfg(windows)]
+        struct Watch(windows::Win32::Foundation::HANDLE);
+
+        #[cfg(windows)]
+        impl Watch {
+            fn new(pid: u32) -> Self {
+                use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+                Watch(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.expect("the process is running"))
+            }
+            fn alive(&self) -> bool {
+                use windows::Win32::Foundation::WAIT_TIMEOUT;
+                use windows::Win32::System::Threading::WaitForSingleObject;
+                unsafe { WaitForSingleObject(self.0, 0) == WAIT_TIMEOUT }
+            }
+        }
+
+        #[cfg(windows)]
+        impl Drop for Watch {
+            fn drop(&mut self) {
+                let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+            }
+        }
+
+        /// Unix: signal 0 checks existence; a zombie counts as gone (its
+        /// parent shell has exited too).
         #[cfg(unix)]
-        fn process_alive(pid: u32) -> bool {
-            // Signal 0 checks existence. A zombie counts as gone here: its
-            // parent shell has exited too.
-            unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-                && !std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        struct Watch(u32);
+
+        #[cfg(unix)]
+        impl Watch {
+            fn new(pid: u32) -> Self {
+                Watch(pid)
+            }
+            fn alive(&self) -> bool {
+                let pid = self.0;
+                let exists = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+                let zombie = std::fs::read_to_string(format!("/proc/{pid}/stat"))
                     .map(|stat| stat.contains(") Z "))
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                exists && !zombie
+            }
+        }
+
+        /// A long-running program that a typed Ctrl+C cannot stop, started
+        /// the way each platform makes only the tree kill able to end it.
+        /// Windows: a hidden console (not attached to the pseudoconsole, so
+        /// neither Ctrl+C nor closing the pseudoconsole reaches it: only the
+        /// Job can). Unix: SIGINT and SIGHUP ignored, so only SIGKILL to its
+        /// process group can.
+        fn start_stubborn_program(session: &PtySession, marker: &str) {
+            #[cfg(windows)]
+            type_line(
+                session,
+                &format!("$p = Start-Process ping -ArgumentList '-n','300','127.0.0.1' -WindowStyle Hidden -PassThru; \"{marker}=$($p.Id)\""),
+            );
+            #[cfg(unix)]
+            type_line(session, &format!("sh -c 'trap \"\" INT HUP; echo {marker}=$$; exec sleep 300'"));
         }
 
         #[test]
@@ -1246,8 +1517,8 @@ mod tests {
                 let (b, seen_b) = spawn(Arc::new(AtomicBool::new(false)));
                 type_line(&a, "echo alpha-$((6*7))-done");
                 type_line(&b, "echo bravo-$((6*7))-done");
-                // PowerShell has no $((...)); both shells echo the typed text,
-                // so check the typed marker reached only its own session.
+                // Both shells echo the typed text, so the typed marker is
+                // enough: it must reach only its own session.
                 wait_for("alpha in session a", || output_of(&seen_a).contains("alpha-"));
                 wait_for("bravo in session b", || output_of(&seen_b).contains("bravo-"));
                 assert!(!output_of(&seen_a).contains("bravo-"));
@@ -1258,41 +1529,67 @@ mod tests {
         }
 
         #[test]
-        fn a_shell_exiting_by_itself_is_reported_with_its_code() {
+        fn a_shell_exiting_by_itself_is_reported_with_its_code_after_its_output() {
             with_watchdog(|| {
                 let exited = Arc::new(AtomicBool::new(false));
                 let (session, seen) = spawn(Arc::clone(&exited));
-                type_line(&session, "exit 3");
+                thread::sleep(Duration::from_millis(1500));
+                // Paused: the last output waits in the pipe while the shell
+                // exits. It must still arrive, and before the exit marker.
+                session.pause_output();
+                #[cfg(windows)]
+                type_line(&session, "Write-Output ('END' + '-MARKER'); exit 3");
+                #[cfg(unix)]
+                type_line(&session, "echo END''-MARKER; exit 3");
                 wait_for("the exit watcher", || exited.load(Ordering::SeqCst));
-                assert_eq!(seen.lock().unwrap().exits, vec![Some(3)]);
+                // What the registry does on a self-exit.
                 assert_eq!(session.end(), Some(3));
-                // Ending sends no second exit marker.
-                assert_eq!(seen.lock().unwrap().exits.len(), 1);
+                let seen = seen.lock().unwrap();
+                assert!(seen.output.contains("END-MARKER"), "the last output arrived");
+                assert_eq!(seen.exits, vec![Some(3)]);
+                assert_eq!(seen.order.last(), Some(&"E"), "the exit marker comes last");
             });
         }
 
         #[test]
-        fn end_stops_a_running_program_and_reports_no_exit_event() {
+        fn end_stops_a_program_ctrl_c_cannot_and_only_its_own_session() {
+            with_watchdog(|| {
+                let (a, seen_a) = spawn(Arc::new(AtomicBool::new(false)));
+                let (b, seen_b) = spawn(Arc::new(AtomicBool::new(false)));
+                thread::sleep(Duration::from_millis(1500));
+                assert!(!a.is_busy(), "an idle shell is not busy");
+                start_stubborn_program(&a, "APID");
+                start_stubborn_program(&b, "BPID");
+                let program_a = Watch::new(pid_of(&a, &seen_a, "APID"));
+                let program_b = Watch::new(pid_of(&b, &seen_b, "BPID"));
+                wait_for("session a to read as busy", || a.is_busy());
+
+                a.end();
+                wait_for("a's program to stop", || !program_a.alive());
+                assert!(program_b.alive(), "b's program keeps running");
+                assert!(b.is_busy(), "b is still busy");
+                assert!(seen_a.lock().unwrap().exits.is_empty(), "End sends no Exited");
+                b.end();
+                wait_for("b's program to stop", || !program_b.alive());
+            });
+        }
+
+        #[test]
+        fn a_background_job_counts_as_busy_and_ends_with_its_session() {
             with_watchdog(|| {
                 let (session, seen) = spawn(Arc::new(AtomicBool::new(false)));
-                // Give the shell time to reach its prompt; idle is not busy.
                 thread::sleep(Duration::from_millis(1500));
-                assert!(!session.is_busy(), "an idle shell is not busy");
                 #[cfg(windows)]
                 type_line(
                     &session,
-                    "$p = Start-Process ping -ArgumentList '-n','300','127.0.0.1' -NoNewWindow -PassThru; \"PID=$($p.Id)\"",
+                    "$p = Start-Process ping -ArgumentList '-n','300','127.0.0.1' -WindowStyle Hidden -PassThru; \"JOB=$($p.Id)\"",
                 );
                 #[cfg(unix)]
-                type_line(&session, "sh -c 'echo PID=$$; exec sleep 300'");
-                wait_for("the program's pid", || reported_pid(&output_of(&seen)).is_some());
-                let pid = reported_pid(&output_of(&seen)).unwrap();
-                assert!(process_alive(pid));
-                wait_for("the session to read as busy", || session.is_busy());
-
+                type_line(&session, "sleep 300 & echo JOB=$!");
+                let job = Watch::new(pid_of(&session, &seen, "JOB"));
+                wait_for("the shell to read as busy", || session.is_busy());
                 session.end();
-                wait_for("the program to stop", || !process_alive(pid));
-                assert!(seen.lock().unwrap().exits.is_empty(), "End sends no Exited");
+                wait_for("the background job to stop", || !job.alive());
             });
         }
 
