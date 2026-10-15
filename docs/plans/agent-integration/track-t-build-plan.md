@@ -111,7 +111,7 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 |---|---|---|---|
 | T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Not started |
 | T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Not started |
-| T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Built 2026-10-14, branch `feat/t2a-terminal-sessions`, PR pending (see [T2a record](#t2a-record)) |
+| T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
 | T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
 | T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows | T1b, T2a, D1–D3 | Not started |
 | T3 | Files changed outside Litria: detect, reload, keep both on conflict, never overwrite on save | — (alongside T1 and T2a) | Not started |
@@ -236,7 +236,7 @@ Standard checks pass. A live pass on Windows with shells only. T2a ships on its 
 
 ### T2a record
 
-> **Built 2026-10-14 on branch `feat/t2a-terminal-sessions`** (PR pending the owner's merge). Journal `.research/2026-10-14-t2a-terminal-sessions.md`. The code was mapped by nine read-only agents, the design attacked by four critics before any code was written, and the branch reviewed by four lenses, each checked by a skeptic.
+> **Built 2026-10-14 on branch `feat/t2a-terminal-sessions`; merged 2026-10-15** (#137 → b70db3f, all checks green on its head). Journal `.research/2026-10-14-t2a-terminal-sessions.md`. The code was mapped by nine read-only agents, the design attacked by four critics before any code was written, and the branch reviewed by four lenses, each checked by a skeptic.
 >
 > **Decisions made while building** (the plan did not settle them; each is the smaller, safer reading of the owner's rulings, and is open to the owner):
 > - **A running tab has no close.** It has End, the deliberate action. Hiding is selecting another tab, closing the drawer, switching drawers, clicking outside or Escape. The Tasks and Tests lines above that say "closing a tab hides it" read that way. An ended tab has an × that removes it.
