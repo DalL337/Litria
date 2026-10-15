@@ -1,6 +1,6 @@
 # Track T build plan: connecting the user's own agents
 
-Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a). No code has been written for track T.** *(Proposed the same day.)*
+Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a built 2026-10-15 on `feat/t1a-mcp-connection`; gap G1 ruled the same day (D3 erratum). See the [slice map](#5-slice-map).
 
 Parents: [ADR-031](031-agent-integration-and-lifecycle.md) (decisions), [agent integration brief](brief-agent-integration.md) (design and the §10 gates), [Project API build plan](project-api-build-plan.md) (the P and W tracks this plan builds on; its "Track T" section is the stub this plan replaces).
 This document owns track T's sequencing and evidence. It owns no decisions: §2 lists what the owner rules on, and the brief stays the design authority.
@@ -63,6 +63,8 @@ Litria's terminal passes only an allow-list of environment variables (`terminal_
 - **Recommended:** for agent launches only, pass a short, named list of the agent's own variables through **unchanged**. Litria adds none and changes none. The ordinary terminal keeps its allow-list.
 - **Alternative:** keep the allow-list. People who set up their agent through variables get a hint instead.
 
+> **Erratum and owner ruling (2026-10-15):** the premise above is wrong. The terminal does not filter its environment: portable-pty starts from the whole process environment (plus, on Windows, the registry's), and Litria only overlays the allow-listed names (gap G1; security audit erratum of 2026-10-14). Litria sets no variable of its own. The owner ruled: **keep inheriting the user's environment**, as other IDE terminals do, and fix the docs and the tests that checked the overlay rather than the child. So an agent started in Litria's terminal sees exactly what it would see in the person's own terminal, and D3 needs no pass-through list. The fix (remove the overlay and its tests, keep `TERM`/`COLORTERM`/`TERM_PROGRAM`, strip only variables a launching program leaks in, such as `VSCODE_*`) is its own small change before T2b (board card `terminal-env-allowlist-not-enforced`).
+
 ### D4. What a started agent may do
 
 - **Recommended:** the whole Project API catalog, for the project it was started in only (reads, `litria_changes_prepare`, `litria_changes_apply`, `litria_operations_get`). This matches "the agent's own approval is enough".
@@ -109,7 +111,7 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
-| T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Not started |
+| T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Built 2026-10-15 on `feat/t1a-mcp-connection` (see [T1a record](#t1a-record)) |
 | T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Not started |
 | T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
 | T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
@@ -142,6 +144,8 @@ A scripted MCP client (no agent) connects to the running app through Litria's he
 ### Tests
 
 - Handshake with a scripted client over the real pipe or socket: `initialize`, then `tools/list`, byte-identical to the committed artifacts.
+
+  > **Erratum (2026-10-15, T1a):** "byte-identical" cannot hold over stdio, which forbids newlines inside a message, while the committed files are pretty-printed. The test checks each served schema equals its committed file as a JSON value (see the [T1a record](#t1a-record)).
 - Refused: no token, a wrong token, a revoked token, a token from another project, a token from a previous app run.
 - The helper exits when the app closes the channel and when the agent closes stdin. No helper process outlives either.
 - The pipe or socket refuses another user (where the OS allows a test).
@@ -149,6 +153,46 @@ A scripted MCP client (no agent) connects to the running app through Litria's he
 ### Acceptance
 
 Standard checks pass. The security review and the adversarial check are recorded. A live pass on Windows: a scripted client connects to a debug build on a scratch project and lists the tools.
+
+### T1a record
+
+> **Built 2026-10-15 on branch `feat/t1a-mcp-connection`.** Journal `.research/2026-10-15-track-t-next-slice.md`. Owner rulings the same day: the next slice is T1a; gap G1 is settled as "inherit the environment" (see the D3 erratum).
+>
+> **What the installed agents actually send** (captured 2026-10-15 with a logging stub server, scratch config folders, nothing signed in, no model call):
+> - **Claude Code 2.1.185** (`claude mcp list`, which connects and lists tools): `initialize` with `protocolVersion: "2025-11-25"` and capabilities `roots` and `elicitation`, then `notifications/initialized`, then `tools/list`; it ends by closing stdin. It passes its whole environment to the server.
+> - **Codex 0.162.0-alpha.17.2** (`codex debug prompt-input`, a local render; `codex mcp list` does not connect): `initialize` with `"2025-06-18"`, then `notifications/initialized`, then `tools/list` with a `_meta.progressToken`. It passes the server none of its own variables, only what its config names (`env`, `env_vars`).
+>
+> **Decisions settled with evidence:**
+> - **The handshake revisions, not 2026-07-28.** MCP 2026-07-28 removed `initialize`; a server that speaks only 2026-07-28 fails both installed agents (the specification's compatibility table: "Legacy client, modern server: fails"). Litria serves `initialize` for 2025-11-25 and 2025-06-18 (a requested revision it serves is echoed, any other gets 2025-11-25, which Claude Code 2.1.185 accepts), `notifications/initialized`, `ping` (also before `initialize`) and `tools/list`. Not 2025-03-26: it has no `outputSchema` or `structuredContent`. `server/discover`, the 2026-07-28 probe, gets "method not found" at once; the specification makes such clients fall back to `initialize` on any error. Claude Code negotiates 2026-07-28 by default from 2.1.292 (changelog, 2026-10-06), so T2b's keyless pass checks that fallback with a current Claude Code. Serving 2026-07-28 itself is a follow-up. Results for these revisions carry no `resultType` (a 2026-07-28 field); the P6 tests keep the 2026-07-28 shape pinned.
+> - **SDK or thin serializer: the thin serializer, again.** rmcp 3.5.1 (2026-10-05) is dual-era and accepts the committed schemas as raw JSON, but it needs tokio (the codebase uses none), about 50 crates with its server and stdio features, and schemars, which would go unused; it requires Rust 1.88 and edition 2024; its licence is moving from MIT to Apache-2.0; and its stdio reader has no size cap. The app never speaks stdio itself (it speaks the pipe), so the SDK's transport would go unused too. The envelope Litria needs is five methods.
+> - **The helper is the app's own binary** (`litria --mcp-helper`), checked in `main` before anything else starts: no window, no crash marker, no database. No bundle growth and no second binary to sign. On Windows, release builds are GUI-subsystem, so the helper can never open a console window.
+> - **The endpoint.** Windows: `\\.\pipe\litria-mcp-<128 random bits>`, DACL `D:P(A;;GA;;;<user SID>)`, `PIPE_REJECT_REMOTE_CLIENTS`, the first instance exclusive. Synchronous pipe handles serialize every operation, so the helper's two relay threads would deadlock; the pipe uses overlapped I/O, which also gives deadlines and cancellation. Unix: `<XDG_RUNTIME_DIR or temp>/litria-mcp-<random>/mcp.sock` in a directory created `0700` that `mkdir` refuses if it exists; a base too long for `sun_path` falls back to `/tmp` (macOS's `$TMPDIR` does).
+> - **The token hello.** Before any MCP the helper sends `{"litria":"hello","v":1,"token":…}`; the app answers `ready` or one `refused` for every reason. The token comes from the helper's environment (`LITRIA_MCP_ENDPOINT`, `LITRIA_MCP_TOKEN`), never a command line or a file. Claude Code passes its environment through, and Codex needs `env` or `env_vars` naming them (T2b).
+> - **Revocation without hooks.** A connection re-checks its session before every message and every second while idle: the session must not have ended and its epoch must still be the open project's. Epochs never repeat within a run, so a stale session is ended for good. Every path that changes the open project is covered, and nothing hooks the database commands. Ending a session cancels its connections at once; a page reload ends every session (as for terminals); exit ends them before the terminals.
+> - **Lifetime.** A token lives as long as its session, not on a timer, and is never persisted. T2b ends the session with its terminal session.
+>
+> **What changed:** `src-tauri/src/mcp_connection/` (new: `endpoint/`, `sessions.rs`, `server.rs`, `protocol.rs`, `helper.rs`, `mod.rs`); `contracts/mcp.rs` compiles into the app, with `Revision` and the grant filter on `tools/list` (D5); `project_api::agent_grant()` (D4: the whole catalog); `main.rs` branches on `--mcp-helper`; `lib.rs` wires the page-load and exit hooks and two debug-only commands, `project_api_dev_agent_session_start` and `project_api_dev_agent_session_end`; the `windows` crate gains four features of the same version. `tools/call` answers "method not found" until T1b. Release builds start no session until T2b.
+>
+> **Tests:** 54 new unit tests (endpoint 13, including the waiting-read/write deadlock case, 1 MiB both ways at once, deadline, cancel, shutdown, the DACL read back from the live pipe, a taken name; sessions 7; protocol 11, with Claude Code's and Codex's captured `initialize` verbatim; server 14, with every bad hello, the silent client, session end, project switch, the size cap, the per-session cap; helper 6; service 3, with the connection cap counting connections still saying hello), plus, in `contracts::mcp`, two new tests (the grant filter; results without `resultType`) and one rewritten (the revisions' names). `src-tauri/tests/mcp_helper.rs` runs the built binary as a helper: started by hand, a full handshake and a quiet exit on stdin close, a wrong token, the session ended, the project closed, Litria quitting, and the app process killed.
+>
+> **Adversarial check** (journal): guarantees, nine attacks with verdicts. One finding: the full suite under load showed a client connecting during shutdown could still be accepted. Sessions had already ended, so its token would have been refused, but "nobody new gets in" did not hold. Reproduced once on Windows, not deterministically; fixed (the accept thread re-checks after waking, and shutdown waits for it, at most 2 s); verified by 15 runs of the module and 3 of the full suite on Windows. Residuals in the security audit entry of 2026-10-15.
+>
+> **Evidence** (Windows 10 19045 unless stated):
+> - `cargo build` 0 warnings; `cargo test` 801 lib + 7 process tests pass, three full runs.
+> - Linux: the endpoint's real files in a `rust:1-bookworm` container (Docker Desktop's WSL2 kernel 6.6): 14 pass, including the `0700` directory and the taken name.
+> - Guards 7/7; `npm run test:domains` 1626/1626; `npm audit` 0; `cargo audit` unchanged (the four `rustls` advisories tracked separately, 9 allowed warnings).
+> - `cargo build --release` 0 warnings. The release binary is GUI-subsystem (PE header read: subsystem 2; the debug binary is 3, console).
+>
+> **Live pass** (Windows, a `tauri dev` build of the branch, scratch app data, throwaway projects; a scripted client spawning the real helper binary, as an agent does):
+> - The handshake: first answer in 23 ms; 2025-11-25 and 2025-06-18 each negotiated; the 8 tools in catalog order, with no `resultType`; `server/discover` and `tools/call` refused at once; the helper exits 0 when stdin closes; no helper process remains.
+> - The schemas served are the committed files as JSON values, all 16 of them. Their key order is not kept: `serde_json` sorts keys, and Litria does not turn on its `preserve_order` (it would change every `Value` in the app). Byte-identical output was never possible: MCP's stdio transport forbids newlines inside a message, and the committed files are pretty-printed. So the plan's "byte-identical" test reads "equal as JSON".
+> - The release helper: 459 ms to the first answer on the very first launch of the new binary, then 22–23 ms.
+> - Refused, each with its own exit code and a plain message, and never the token: no session (2), a wrong token (4), no endpoint (3). An ended session's token, the previous project's token after a switch, and an earlier run's token after a restart: 4.
+> - A connected helper exits (code 5) when its session ends (30 ms), when the project switches (1.0 s, the idle tick), when the page reloads (22 ms), when Litria quits normally (66 ms), and when Litria's process is killed (90 ms). No helper process outlived any of them.
+> - **The real agents, keyless** (fresh config folders, nothing signed in, no prompt), through the real helper with a logging tee in front:
+>   - Claude Code 2.1.185, `claude mcp list` and `claude mcp get`: **✔ Connected**. The tee shows its `initialize` (2025-11-25) answered in kind, then `tools/list` answered with the full catalog.
+>   - Codex 0.162.0-alpha.17.2, `codex debug prompt-input`: its `initialize` (2025-06-18) answered in kind, then `tools/list` answered with the full catalog. Codex ends its servers without closing stdin; the helper still exits.
+> - For T2b: `claude mcp get` prints a server's environment values, so a token written literally into a config would show there. T2b should pass it by reference (`${VAR}` expansion, documented for `.mcp.json`; whether `--mcp-config` honours it is unconfirmed and T2b checks it).
 
 ## T1b. Tool calls with real identities
 

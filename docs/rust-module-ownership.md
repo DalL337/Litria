@@ -10,7 +10,7 @@ The command inventory, with each command's frontend caller, is in [rust-command-
 - `lib.rs`
   - Composition only: plugin registration, the Tauri `setup` hook (bundled runtime extraction, crash hooks, window decorations), and the `invoke_handler` list.
   - Must not contain filesystem or path business logic.
-- `main.rs`: the binary entry point. On Windows release builds it sets the GUI subsystem, so no console window opens.
+- `main.rs`: the binary entry point. On Windows release builds it sets the GUI subsystem, so no console window opens. *(Since 2026-10-15, track T slice T1a)* `litria --mcp-helper` runs only the MCP helper (`mcp_connection/helper.rs`), checked before anything else starts: no window, no crash marker, no database.
 - `commands.rs`
   - The Tauri command adapters for project files, the terminal, language servers, the New Project wizard, crash logs, build logs and the clipboard, plus the debug-only Project API commands.
   - Thin wrappers that delegate to the owning module.
@@ -97,7 +97,8 @@ The command inventory, with each command's frontend caller, is in [rust-command-
     - the typed operation catalog and dispatcher;
     - call contexts and contract errors;
     - one submodule per contract family (`project_api/`, and `project_api_bridge/` since P2, whose direction is reversed: Rust emits its requests and reads its replies through the same boundary).
-  - Contract types derive `JsonSchema` only under `cfg(test)`. The schema generation, drift, fixture and MCP-proof modules are test-only.
+  - Contract types derive `JsonSchema` only under `cfg(test)`. The schema generation, drift and fixture modules are test-only.
+  - `mcp.rs`: the MCP adapter (P6). *(Since T1a)* it compiles into the app: it embeds the committed artifacts and shapes `tools/list` (filtered by the grant) and `tools/call` results for the revision a connection negotiated.
   - Committed artifacts live in `src-tauri/contracts/<family>/v<N>/`.
 - `project_api/` *(added 2026-09-30, Project API build plan P1)*
   - The ADR-031 Project API service behind the `project-api` contract family. Design: `docs/plans/agent-integration/brief-project-api-contract.md`.
@@ -111,6 +112,15 @@ The command inventory, with each command's frontend caller, is in [rust-command-
   - *(P3)* `context.rs`: `litria_project_context`.
   - *(P3)* `search.rs`: `litria_files_search` (buffer coverage, path-ordered merge, bounds, and the concurrent-search ceiling).
   - *(P3)* `walk.rs`: the search walker. It walks in path order, never follows links, applies the policy by name, and bounds the entries it examines. *(Since P4 gate item 1)* it also honours `.gitignore` files through the `ignore` crate's matcher.
+- `mcp_connection/` *(added 2026-10-15, track T slice T1a)*
+  - How an agent Litria started reaches the Project API: the agent runs `litria --mcp-helper` as a stdio MCP server; the helper connects to the app's local endpoint and presents its session's token; the app serves MCP on that connection. Plan: `docs/plans/agent-integration/track-t-build-plan.md` (T1a).
+  - `endpoint/`: the local channel, a named pipe on Windows (DACL for the current user only, remote clients rejected, first instance exclusive, overlapped I/O) and a Unix socket in a fresh `0700` directory. Reads take a deadline and can be cancelled from another thread.
+  - `sessions.rs`: agent sessions and their tokens. Only a token's SHA-256 is kept. A session is bound to one project open (its workspace epoch) and ends for good when that project closes, when it is ended, or when Litria exits. Every refusal reads the same.
+  - `server.rs`: one connection, from the token hello to its close; newline framing capped while reading; the session re-checked before every message and on an idle tick.
+  - `protocol.rs`: the MCP conversation (the `initialize` handshake revisions, `ping`, `tools/list`; `tools/call` from T1b).
+  - `helper.rs`: the helper's relay between stdio and the endpoint.
+  - `mod.rs`: the one service (bound when the first session starts, one accept thread, the connection cap), the page-load and exit hooks, and the hidden debug-only `test_support` for `src-tauri/tests/mcp_helper.rs`.
+  - It spawns nothing. Its only command adapters are the debug-only `project_api_dev_agent_session_start` and `project_api_dev_agent_session_end`; slice T2b starts sessions when it starts an agent.
 
 **Other**
 - `quote_pool.rs`: picks one quote from `quotes.json` for a blank project's generated README.
