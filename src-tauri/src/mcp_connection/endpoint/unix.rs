@@ -29,6 +29,9 @@ const MAX_SOCKET_PATH: usize = 100;
 
 const SOCKET_NAME: &str = "mcp.sock";
 
+/// `EINVAL`: 22 on Linux and macOS alike (no `libc` dependency for one number).
+const EINVAL: i32 = 22;
+
 fn base_dir() -> PathBuf {
     if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
         let runtime = PathBuf::from(runtime);
@@ -166,7 +169,15 @@ impl Stream {
                     Some(left)
                 }
             };
-            self.stream.set_read_timeout(wait)?;
+            match self.stream.set_read_timeout(wait) {
+                Ok(()) => {}
+                // macOS refuses SO_RCVTIMEO once the socket can no longer
+                // receive (the peer closed it, or `cancel` shut it down): the
+                // read below then returns at once, with what is left or 0.
+                // Linux allows the call. Found by CI on macos-14 (T1a).
+                Err(error) if error.raw_os_error() == Some(EINVAL) => {}
+                Err(error) => return Err(error),
+            }
             match (&self.stream).read(buf) {
                 Ok(0) if self.cancelled.load(Ordering::SeqCst) => return Ok(Read::Cancelled),
                 Ok(0) => return Ok(Read::Eof),
@@ -197,7 +208,15 @@ impl Stream {
             if left.is_zero() {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "the other side stopped reading"));
             }
-            self.stream.set_write_timeout(Some(left))?;
+            match self.stream.set_write_timeout(Some(left)) {
+                Ok(()) => {}
+                // As for reads: on macOS this fails once the socket is shut
+                // down, which for a write means the other side is gone.
+                Err(error) if error.raw_os_error() == Some(EINVAL) => {
+                    return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the other side closed"))
+                }
+                Err(error) => return Err(error),
+            }
             match (&self.stream).write(&data[sent..]) {
                 Ok(0) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the other side closed")),
                 Ok(written) => sent += written,
