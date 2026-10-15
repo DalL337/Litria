@@ -131,8 +131,12 @@ pub(crate) async fn terminal_spawn(
     rows: u16,
     on_event: Channel<TerminalEvent>,
 ) -> CommandResult<TerminalSessionStartedPayload> {
+    // Which page asked, taken before the hop: if it reloads while the shell
+    // starts, the session is never registered.
+    let page = terminal_session_manager::current_page();
     tauri::async_runtime::spawn_blocking(move || {
         terminal_session_manager::start_pty_session(
+            page,
             &project_id,
             &project_root,
             executable.as_deref(),

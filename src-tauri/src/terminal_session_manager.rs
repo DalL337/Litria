@@ -63,6 +63,10 @@ struct State<S> {
     ending: usize,
     quitting: bool,
     early_exits: HashSet<String>,
+    /// Bumped by every page (re)load. A start captures it when its command
+    /// arrives; a start from a page that has since reloaded is never
+    /// registered (its sweep already ran, and nothing would ever show it).
+    page: u64,
 }
 
 struct Live<S> {
@@ -109,6 +113,7 @@ impl<S: TerminalSession> Registry<S> {
                 ending: 0,
                 quitting: false,
                 early_exits: HashSet::new(),
+                page: 0,
             }),
             settled: Condvar::new(),
         })
@@ -120,17 +125,36 @@ impl<S: TerminalSession> Registry<S> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Starts a session. Under the lock: refuse while quitting, check the
-    /// project's folder and the caps, and reserve a slot. Outside it: spawn.
-    /// Then register the session, unless its project closed or Litria began
-    /// quitting meanwhile; such a session is ended at once.
+    /// The current page generation (see `State::page`).
+    pub(crate) fn page(&self) -> u64 {
+        self.lock().page
+    }
+
+    /// Starts a session on the current page.
+    #[cfg(test)]
     pub(crate) fn start(
         self: &Arc<Self>,
         project_id: &str,
         root: PathBuf,
         spawn: impl FnOnce(&str) -> CommandResult<S>,
     ) -> CommandResult<String> {
-        let token = self.reserve(project_id, &root)?;
+        let page = self.page();
+        self.start_on_page(page, project_id, root, spawn)
+    }
+
+    /// Starts a session. Under the lock: refuse while quitting or once the
+    /// page that asked has reloaded, check the project's folder and the caps,
+    /// and reserve a slot. Outside it: spawn. Then register the session,
+    /// unless its project closed, the page reloaded or Litria began quitting
+    /// meanwhile; such a session is ended at once.
+    pub(crate) fn start_on_page(
+        self: &Arc<Self>,
+        page: u64,
+        project_id: &str,
+        root: PathBuf,
+        spawn: impl FnOnce(&str) -> CommandResult<S>,
+    ) -> CommandResult<String> {
+        let token = self.reserve(page, project_id, &root)?;
         let mut reservation = Reservation {
             registry: self.as_ref(),
             token,
@@ -145,7 +169,7 @@ impl<S: TerminalSession> Registry<S> {
         self.settled.notify_all();
         let session = Arc::new(spawned?);
 
-        let cancelled = state.quitting || pending.map_or(true, |p| p.cancelled);
+        let cancelled = state.quitting || state.page != page || pending.map_or(true, |p| p.cancelled);
         let exited = state.early_exits.remove(&session_id);
         if cancelled || exited {
             state.ending += 1;
@@ -172,12 +196,18 @@ impl<S: TerminalSession> Registry<S> {
         Ok(session_id)
     }
 
-    fn reserve(&self, project_id: &str, root: &Path) -> CommandResult<u64> {
+    fn reserve(&self, page: u64, project_id: &str, root: &Path) -> CommandResult<u64> {
         let mut state = self.lock();
         if state.quitting {
             return Err(CommandError::conflict(
                 "terminal.shutting_down",
                 "Litria is closing.",
+            ));
+        }
+        if state.page != page {
+            return Err(CommandError::conflict(
+                "terminal.project_closed",
+                "The window reloaded while the terminal was starting.",
             ));
         }
 
@@ -303,8 +333,10 @@ impl<S: TerminalSession> Registry<S> {
         self.finish(taken, END_BUDGET)
     }
 
-    /// Like `end_all`, without waiting (a page reload). Returns how many.
-    pub(crate) fn end_all_detached(self: &Arc<Self>) -> usize {
+    /// A page (re)load: like `end_all`, without waiting, and every start the
+    /// old page asked for is refused from now on. Returns how many ended.
+    pub(crate) fn end_all_for_new_page(self: &Arc<Self>) -> usize {
+        self.lock().page += 1;
         let taken = self.take_all();
         let count = taken.len();
         self.finish_detached(taken);
@@ -524,8 +556,14 @@ fn registry() -> &'static Arc<Registry<PtySession>> {
     REGISTRY.get_or_init(Registry::new)
 }
 
-/// Starts a shell for a project (`terminal_spawn`).
+/// The page generation now, for `terminal_spawn` to capture on arrival.
+pub(crate) fn current_page() -> u64 {
+    registry().page()
+}
+
+/// Starts a shell for a project (`terminal_spawn`), on behalf of `page`.
 pub(crate) fn start_pty_session(
+    page: u64,
     project_id: &str,
     project_root: &str,
     executable: Option<&str>,
@@ -540,7 +578,8 @@ pub(crate) fn start_pty_session(
     let (cols, rows) = if cols == 0 || rows == 0 { (80, 24) } else { (cols, rows) };
 
     let registry = registry();
-    let session_id = registry.start(
+    let session_id = registry.start_on_page(
+        page,
         &validated.project_id,
         validated.project_root.clone(),
         |session_id| {
@@ -618,7 +657,7 @@ pub(crate) fn busy_sessions(project_id: &str) -> CommandResult<Vec<String>> {
 /// The page is (re)loading: whatever it showed is gone, and a reload lands on
 /// the launcher with no project open, so every session ends.
 pub(crate) fn end_all_for_page_load() {
-    let ended = registry().end_all_detached();
+    let ended = registry().end_all_for_new_page();
     if ended > 0 {
         RELOAD_ENDED.fetch_add(ended, Ordering::SeqCst);
     }
@@ -873,6 +912,73 @@ mod tests {
         assert_eq!(starting.join().unwrap().unwrap_err().code(), "terminal.project_closed");
         quitting.join().unwrap();
         assert_eq!(registry.counts(), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_start_asked_for_by_a_page_that_has_reloaded_is_refused() {
+        let registry = Registry::<Fake>::new();
+        let old_page = registry.page();
+        registry.end_all_for_new_page();
+        let refused = registry
+            .start_on_page(old_page, "p", root("p"), |_| Ok(Fake::default()))
+            .unwrap_err();
+        assert_eq!(refused.code(), "terminal.project_closed");
+        assert_eq!(registry.counts(), (0, 0, 0));
+        // The new page starts sessions as usual.
+        assert!(start(&registry, "p").is_ok());
+    }
+
+    #[test]
+    fn a_reload_during_a_start_ends_the_new_session() {
+        let registry = Registry::new();
+        let entered = Gate::closed();
+        let release = Gate::closed();
+        let page = registry.page();
+        let starting = {
+            let registry = Arc::clone(&registry);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            thread::spawn(move || {
+                registry.start_on_page(page, "p", root("p"), |_| {
+                    entered.open();
+                    release.wait();
+                    Ok(Fake::default())
+                })
+            })
+        };
+        entered.wait();
+        registry.end_all_for_new_page();
+        release.open();
+        assert_eq!(starting.join().unwrap().unwrap_err().code(), "terminal.project_closed");
+        wait_until("the registry to empty", || registry.counts() == (0, 0, 0));
+    }
+
+    #[test]
+    fn the_total_cap_counts_a_session_that_is_still_ending() {
+        let registry = Registry::new();
+        let gate = Gate::closed();
+        let wedged = {
+            let gate = Arc::clone(&gate);
+            registry
+                .start("w", root("w"), move |_| {
+                    Ok(Fake {
+                        end_gate: Some(gate),
+                        ..Fake::default()
+                    })
+                })
+                .unwrap()
+        };
+        assert_eq!(registry.end("w", &wedged).unwrap().still_ending, 1);
+        // Fill every other slot, project by project.
+        for n in 0..MAX_SESSIONS_TOTAL - 1 {
+            start(&registry, &format!("p{}", n / MAX_SESSIONS_PER_PROJECT)).unwrap();
+        }
+        assert_eq!(registry.counts(), (MAX_SESSIONS_TOTAL - 1, 0, 1));
+        let refused = start(&registry, "fresh").unwrap_err();
+        assert_eq!(refused.code(), "terminal.session_limit");
+        gate.open();
+        wait_until("the wedged teardown to finish", || registry.counts().2 == 0);
+        assert!(start(&registry, "fresh").is_ok());
     }
 
     #[test]
