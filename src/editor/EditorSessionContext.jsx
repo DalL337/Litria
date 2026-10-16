@@ -169,6 +169,11 @@ export function EditorSessionProvider({ children }) {
    * `onlyIfClean`: a reload, refused if the tab has unsaved changes now.
    * Returns whether it was taken.
    */
+  /** T3b: mark the tab's file deleted on disk (the tab stays open), or not. */
+  const markTabDiskMissing = useCallback((tabId, missing) => {
+    dispatch({ type: 'SET_TAB_DISK_MISSING', tabId, missing });
+  }, [dispatch]);
+
   const takeDiskVersion = useCallback((tabId, { code, keepMine = false, onlyIfClean = false }) => {
     const tab = latestRef.current.tabsById[tabId];
     if (!tab || typeof code !== 'string') return false;
@@ -353,6 +358,7 @@ export function EditorSessionProvider({ children }) {
     heldRevision,
     openInBackground,
     takeDiskVersion,
+    markTabDiskMissing,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,
@@ -390,6 +396,7 @@ export function EditorSessionProvider({ children }) {
     heldRevision,
     openInBackground,
     takeDiskVersion,
+    markTabDiskMissing,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,

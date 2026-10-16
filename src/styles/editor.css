@@ -183,6 +183,20 @@
   font-style: italic;
 }
 
+/* T3b: the tab's file was deleted on disk by another program; the tab stays. */
+.editor-tab-name.is-missing {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  opacity: 0.75;
+}
+
+.editor-tab-missing {
+  text-decoration: none;
+  display: inline-block;
+  margin-left: 4px;
+  opacity: 0.9;
+}
+
 .editor-tab-dot {
   display: inline-block;
   width: 7px;

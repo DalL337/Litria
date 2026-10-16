@@ -5,6 +5,7 @@ import { createFilesystemWriteManager } from '../../src/app/filesystemWriteManag
 import { createSyntaxDomain } from '../../src/app/syntaxDomain.js';
 import { createSyntaxAdapter } from '../../src/lsp/syntaxAdapter.js';
 import { normalizePath, getBasename } from '../../src/utils/path.js';
+import { takeExternalRename } from '../../src/lsp/externalRenames.js';
 
 // ---------------------------------------------------------------------------
 // The filesystem write manager tells SyntaxDomain about deletes, moves and
@@ -334,4 +335,41 @@ test('deleting an exporter on the canvas breaks the edge and drops the removed w
   assert.equal(edge.status, 'broken', 'the importer still imports it: a real, broken import');
   assert.equal(ctx.domain.selectors.getEdgeIdForConnection('conn_1'), null, 'the wire went with the piece');
   assert.deepEqual(edge.connectionIds, []);
+});
+
+// ---------------------------------------------------------------------------
+// Track T slice T3b: ANOTHER program renamed the file. Litria follows it (owner
+// ruling 2026-10-15) but writes nothing: not the file, and not its importers'
+// import lines, which are that program's to rewrite.
+// ---------------------------------------------------------------------------
+
+test("following another program's rename writes nothing, importers included", async () => {
+  const ctx = setup({ files: { 'src/utils.ts': UTILS_TS, 'src/app.ts': APP_TS }, pieces: PIECES });
+  const writes = [];
+  const adapter = createSyntaxAdapter({
+    syntaxDomain: ctx.domain,
+    projectRoot: '/proj',
+    readProjectFile: async (_root, rel) => ctx.disk.get(rel) ?? null,
+    writeProjectFile: async (_root, rel, text) => {
+      writes.push(rel);
+      ctx.disk.set(rel, text);
+      return true;
+    },
+  });
+  indexProject(ctx.domain, '/proj');
+
+  // The other program moves it on disk; Litria only follows.
+  ctx.disk.set('src/core.ts', ctx.disk.get('src/utils.ts'));
+  ctx.disk.delete('src/utils.ts');
+  const followed = await ctx.manager.followMove('src/utils.ts', 'src/core.ts');
+  assert.equal(followed.success, true);
+  await adapter.onFileRenamed('/proj/src/utils.ts', '/proj/src/core.ts');
+
+  assert.deepEqual(writes, [], 'no import line rewritten');
+  assert.equal(ctx.disk.get('src/app.ts'), APP_TS);
+  assert.ok(ctx.domain.selectors.getDefinitionsForFile('/proj/src/core.ts').length > 0, 'the new path is indexed');
+
+  // The mark was taken by that rename, once: nothing is left to silence a
+  // later rename of Litria's own.
+  assert.equal(takeExternalRename('/proj/src/core.ts'), false);
 });

@@ -12,6 +12,15 @@
 // - a save that finds a newer version on disk (`diskConflicts`) gets the same
 //   pill; nothing was written.
 //
+// Track T slice T3b: the folder tree too. Every few seconds it asks Rust for
+// one stamp of the project's folders (a folder's time changes when an entry in
+// it is created, deleted, renamed or moved). When the stamp moves, the tree,
+// the graph and the folder groups list the project again, and a file that went
+// missing is followed to its new path when exactly one newly listed file has
+// its text (another program's rename: owner ruling 2026-10-15). A canvas file
+// deleted with nothing unsaved keeps its piece and tab, marked missing, and
+// comes back with the file.
+//
 // It checks while Litria has focus too: the person may be watching an agent
 // inside Litria. A check never crosses projects: each runs for one load and
 // stops when another begins. Files with a save in flight are skipped, and the
@@ -19,11 +28,23 @@
 
 import { useEffect, useRef } from 'react';
 import { useEditorSession } from '../editor/EditorSessionContext';
-import { MAX_STAMPED_PATHS, describeConflict, describeDeleted, judgeDiskChange, pieceAfter, stampMoved } from './diskChanges.js';
+import {
+  MAX_RENAME_CANDIDATES,
+  MAX_STAMPED_PATHS,
+  describeConflict,
+  describeDeleted,
+  judgeDiskChange,
+  pairRenames,
+  pieceAfter,
+  stampMoved
+} from './diskChanges.js';
 import { forgetSavedTexts, isSaving, onDiskConflict, wasSavedText } from '../project/diskConflicts.js';
+import { forgetExternalRenames } from '../lsp/externalRenames.js';
 import { toProjectAbsPath } from '../utils/path.js';
 
 const CHECK_INTERVAL_MS = 1000;
+// The folder tree is checked on every second check (~2 s).
+const TREE_EVERY = 2;
 
 export function useDiskChanges({
   projectInstance,
@@ -34,11 +55,13 @@ export function useDiskChanges({
   syntaxDomain = null,
   pillDomain = null,
   bumpScaffoldRefresh = null,
+  // T3b: the write manager (its followMove follows another program's rename).
+  fsManagerRef = null,
   intervalMs = CHECK_INTERVAL_MS
 }) {
   const session = useEditorSession();
   const latest = useRef(null);
-  latest.current = { pieces, session, setPieces, projectDomain, syntaxDomain, pillDomain, bumpScaffoldRefresh };
+  latest.current = { pieces, session, setPieces, projectDomain, syntaxDomain, pillDomain, bumpScaffoldRefresh, fsManagerRef };
 
   const token = projectInstance?._dbState ?? null;
   const rootPath = projectInstance?.rootPath ?? null;
@@ -51,6 +74,13 @@ export function useDiskChanges({
     let timer = null;
     // The pill shown for each piece, and the disk version it is about.
     const notices = new Map();
+    // Pieces judged missing by this load's checks, kept here as well as on
+    // the piece: piece state lands a render later, and the tree check in the
+    // same tick must already see them.
+    const missingNow = new Set();
+    let checks = 0;
+    let treeStamp = null;
+    let listedFiles = null;
 
     const pieceOf = (id) => latest.current.pieces.find((piece) => piece.id === id) ?? null;
     const tabOf = (id) => latest.current.session.tabsById?.[id] ?? null;
@@ -86,7 +116,8 @@ export function useDiskChanges({
         ...current,
         code: read.text,
         workingCode: keepMine ? current.workingCode : read.text,
-        diskStamp: read.stamp ?? null
+        diskStamp: read.stamp ?? null,
+        diskMissing: false
       }));
       if (keepMine && tab) {
         // Their version is the base this save expects on disk: if it changed
@@ -155,6 +186,10 @@ export function useDiskChanges({
         return;
       }
       updatePiece(pieceId, (current) => pieceAfter(current, kind, read));
+      const missing = kind === 'gone' || kind === 'deleted';
+      if (missing) missingNow.add(pieceId);
+      else missingNow.delete(pieceId);
+      if (tab && (missing || tab.diskMissing === true)) latest.current.session.markTabDiskMissing(tab.id, missing);
       if (kind === 'touched') {
         // Back to the text Litria has (an outside change undone): nothing to
         // choose any more.
@@ -190,9 +225,68 @@ export function useDiskChanges({
       }
     };
 
+    // The files the tree lists now, or null if it could not be listed.
+    const listFiles = async () => {
+      const entries = await latest.current.projectDomain.commands.listTree(rootPath);
+      if (!Array.isArray(entries)) return null;
+      return new Set(entries.filter((entry) => entry.entryType === 'file').map((entry) => entry.path));
+    };
+
+    // Another program's renames: each missing piece whose text exactly one
+    // newly listed file has follows it there. Nothing is written.
+    const followRenames = async (previous, files) => {
+      const onCanvas = new Set(latest.current.pieces.map((piece) => piece.filename));
+      const appearedPaths = [...files].filter((path) => !previous.has(path) && !onCanvas.has(path));
+      const missing = latest.current.pieces.filter(
+        (piece) => (piece.diskMissing === true || missingNow.has(piece.id)) && typeof piece.code === 'string' && piece.code !== ''
+      );
+      // A large checkout: too many new files to read; the pieces stay missing.
+      if (!appearedPaths.length || !missing.length || appearedPaths.length > MAX_RENAME_CANDIDATES) return;
+      const appeared = [];
+      for (const path of appearedPaths) {
+        const read = await readDisk(path);
+        if (stopped) return;
+        if (read) appeared.push({ path, text: read.text, read });
+      }
+      const manager = latest.current.fsManagerRef?.current;
+      if (!manager?.followMove) return;
+      for (const pair of pairRenames(missing, appeared)) {
+        const result = await manager.followMove(pair.from, pair.to);
+        if (stopped) return;
+        if (result?.success !== true) continue;
+        const read = appeared.find((file) => file.path === pair.to)?.read;
+        missingNow.delete(pair.pieceId);
+        updatePiece(pair.pieceId, (current) => ({ ...current, diskStamp: read?.stamp ?? null, diskMissing: false }));
+        const tab = tabOf(pair.pieceId);
+        if (tab?.diskMissing) latest.current.session.markTabDiskMissing(tab.id, false);
+        dismissNotice(pair.pieceId);
+      }
+    };
+
+    // The folder tree: a moved stamp re-lists everything that shows the tree.
+    const checkTree = async () => {
+      const answer = await latest.current.projectDomain.commands.treeStamp(rootPath);
+      if (stopped || !answer) return;
+      if (treeStamp === null) {
+        treeStamp = answer.stamp;
+        listedFiles = await listFiles();
+        return;
+      }
+      if (answer.stamp === treeStamp) return;
+      treeStamp = answer.stamp;
+      latest.current.bumpScaffoldRefresh?.();
+      const files = await listFiles();
+      if (stopped || !files) return;
+      const previous = listedFiles;
+      listedFiles = files;
+      if (previous) await followRenames(previous, files);
+    };
+
     const tick = async () => {
       try {
         await check();
+        checks += 1;
+        if (!stopped && checks % TREE_EVERY === 0) await checkTree();
       } catch (error) {
         // eslint-disable-next-line no-console
         console.warn('[disk-changes] check failed:', error);
@@ -223,6 +317,7 @@ export function useDiskChanges({
       stopListening();
       for (const pieceId of [...notices.keys()]) dismissNotice(pieceId);
       forgetSavedTexts();
+      forgetExternalRenames();
     };
   }, [ready, rootPath, token, projectInstance?.instanceId, intervalMs]);
 }

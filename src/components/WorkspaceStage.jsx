@@ -578,7 +578,7 @@ function WorkspaceStage({
               isSelected={isPieceSelected(piece.id)}
               healthState={healthByPieceId?.get(piece.id) ?? 'empty'}
               edgeColor={resolveNodeEdgeColor(piece, groupColorByPieceId, ungroupedEdgeColor ?? themeTokens.nodeUngroupedEdgeColor ?? null)}
-              sublabel={groupNameByPieceId?.get(piece.id) ?? null}
+              sublabel={piece.diskMissing ? 'missing on disk' : (groupNameByPieceId?.get(piece.id) ?? null)}
               isFrosted={frostedPieceIds?.has(piece.id) ?? false}
               backgroundLayerRef={backgroundLayerRef}
               offCanvasImportCount={offCanvasCountByPieceId?.get(piece.id) ?? 0}

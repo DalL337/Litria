@@ -6,6 +6,7 @@ import {
   moveProjectPath,
   openFileDialog,
   projectFilesStamps,
+  projectTreeStamp,
   readProjectFile,
   readProjectFileWithRevision,
   saveProjectFile,
@@ -29,6 +30,7 @@ export function createProjectDomain({
     writeFile: adapters.writeFile ?? writeProjectFile,
     saveFile: adapters.saveFile ?? saveProjectFile,
     filesStamps: adapters.filesStamps ?? projectFilesStamps,
+    treeStamp: adapters.treeStamp ?? projectTreeStamp,
     movePath: adapters.movePath ?? moveProjectPath,
     deletePath: adapters.deletePath ?? deleteProjectPath,
     listTree: adapters.listTree ?? listProjectTree,
@@ -59,6 +61,10 @@ export function createProjectDomain({
       },
       filesStamps(rootPath, paths) {
         return io.filesStamps(rootPath, paths);
+      },
+      // T3b: whether the folder tree changed (created, deleted, renamed, moved).
+      treeStamp(rootPath) {
+        return io.treeStamp(rootPath);
       },
       movePath(rootPath, fromRelative, toRelative) {
         return io.movePath(rootPath, fromRelative, toRelative);

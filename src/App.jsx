@@ -766,7 +766,8 @@ function App() {
     projectDomain,
     syntaxDomain,
     pillDomain,
-    bumpScaffoldRefresh
+    bumpScaffoldRefresh,
+    fsManagerRef
   });
 
   // Off-canvas import badge (brief-cross-group-wires S3): discovery retains

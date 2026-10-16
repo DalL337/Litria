@@ -4,6 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  MAX_RENAME_CANDIDATES,
+  pairRenames,
   describeConflict,
   describeDeleted,
   hasUnsavedChanges,
@@ -68,12 +70,16 @@ test('the stamp check reads a file again only when its stamp moved', () => {
 
 test('what each judgement records on the piece', () => {
   const before = piece('old');
-  assert.deepEqual(pieceAfter(before, 'touched', read('old', 's9')), { ...before, diskStamp: 's9' });
-  assert.deepEqual(pieceAfter(before, 'reload', read('new', 's9')), { ...before, code: 'new', workingCode: 'new', diskStamp: 's9' });
+  assert.deepEqual(pieceAfter(before, 'touched', read('old', 's9')), { ...before, diskStamp: 's9', diskMissing: false });
+  assert.deepEqual(pieceAfter(before, 'reload', read('new', 's9')), { ...before, code: 'new', workingCode: 'new', diskStamp: 's9', diskMissing: false });
   // A conflict keeps the person's text and the base it was typed on: only the
   // stamp, so the same version is not offered twice.
-  assert.deepEqual(pieceAfter(before, 'conflict', read('new', 's9')), { ...before, diskStamp: 's9' });
-  assert.deepEqual(pieceAfter(before, 'deleted', null), { ...before, diskStamp: null });
+  assert.deepEqual(pieceAfter(before, 'conflict', read('new', 's9')), { ...before, diskStamp: 's9', diskMissing: false });
+  // T3b: a deleted file's piece stays, marked missing; any version on disk
+  // clears the mark.
+  assert.deepEqual(pieceAfter(before, 'deleted', null), { ...before, diskStamp: null, diskMissing: true });
+  assert.deepEqual(pieceAfter(before, 'gone', null), { ...before, diskStamp: null, diskMissing: true });
+  assert.equal(pieceAfter({ ...before, diskMissing: true }, 'touched', read('old')).diskMissing, false);
 });
 
 test('the notices name the file and never its contents', () => {
@@ -112,4 +118,37 @@ test('a conflict reaches every listener, and a failing listener stops nothing', 
   stopFailing();
   reportDiskConflict({ pieceId: 2, filename: 'src/b.ts', disk: null });
   assert.equal(seen.length, 1, 'unsubscribed');
+});
+
+// --- T3b: another program's renames -------------------------------------------
+
+const gone = (id, filename, code) => ({ id, filename, code, diskMissing: true });
+
+test('a missing file follows the one new file with exactly its text', () => {
+  assert.deepEqual(
+    pairRenames([gone(1, 'src/a.ts', 'A'), gone(2, 'src/b.ts', 'B')], [{ path: 'lib/a.ts', text: 'A' }, { path: 'lib/c.ts', text: 'C' }]),
+    [{ pieceId: 1, from: 'src/a.ts', to: 'lib/a.ts' }]
+  );
+});
+
+test('an ambiguous or empty text pairs nothing', () => {
+  // Two new files with the same text.
+  assert.deepEqual(pairRenames([gone(1, 'a.ts', 'X')], [{ path: 'b.ts', text: 'X' }, { path: 'c.ts', text: 'X' }]), []);
+  // Two missing files with the same text.
+  assert.deepEqual(pairRenames([gone(1, 'a.ts', 'X'), gone(2, 'b.ts', 'X')], [{ path: 'c.ts', text: 'X' }]), []);
+  // Empty files are too common to say which is which.
+  assert.deepEqual(pairRenames([gone(1, 'a.ts', '')], [{ path: 'b.ts', text: '' }]), []);
+  // A text that changed in the move is not a rename this can see.
+  assert.deepEqual(pairRenames([gone(1, 'a.ts', 'old')], [{ path: 'b.ts', text: 'old, edited' }]), []);
+  // The same path is no move.
+  assert.deepEqual(pairRenames([gone(1, 'a.ts', 'X')], [{ path: 'a.ts', text: 'X' }]), []);
+});
+
+test('a folder rename pairs each file by its own text', () => {
+  const pairs = pairRenames(
+    [gone(1, 'old/a.ts', 'A'), gone(2, 'old/b.ts', 'B'), gone(3, 'old/c.ts', 'C')],
+    [{ path: 'new/a.ts', text: 'A' }, { path: 'new/b.ts', text: 'B' }, { path: 'new/c.ts', text: 'C' }]
+  );
+  assert.deepEqual(pairs.map((pair) => [pair.from, pair.to]), [['old/a.ts', 'new/a.ts'], ['old/b.ts', 'new/b.ts'], ['old/c.ts', 'new/c.ts']]);
+  assert.ok(MAX_RENAME_CANDIDATES >= 100, 'a folder of files fits one check');
 });
