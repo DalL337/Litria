@@ -1,7 +1,32 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-15 — **agents' tool calls (track T slice T1b, branch `feat/t1b-tool-calls`)**:
+> **Last reviewed**: 2026-10-15 — **saves that never overwrite a newer version on disk (track T slice T3a, branch `feat/t3a-never-lose-a-version`)**:
+> - **Why.** Security policy Rule 1: two new Tauri commands touch the filesystem (`save_project_file`, which writes; `project_files_stamps`, which reads metadata). The adversarial-check policy: the conditional save is check-then-write code.
+> - **What it fixes.** Reproduced on `main` first: a file open with unsaved changes, changed by another program, then saved in Litria. The save answered success, and the other program's version was gone. Agents' own file tools write straight to disk, so this matters before agents run real tasks.
+> - **What holds.**
+>   - A tab's save sends the text its version was based on (the canvas piece's exact disk text). Rust writes only if the disk still holds it, comparing before anything is written and again once the new content is durable beside the file, immediately before the rename. Otherwise the answer is `changed`, and nothing is written.
+>   - Paths follow `write_project_file`'s rules (`ensure_project_root`, `resolve_relative_path_for_write`); tested with `../`, absolute and drive paths.
+>   - `project_files_stamps` returns size and modification time only, for at most 2048 paths. A path outside the project, a missing file and a directory all answer `null` alike.
+>   - The editor never takes Litria's own save for another program's change (saves in flight are skipped, and the text just saved is recognised). A file that exists but cannot be read at that moment is read again later, never taken for a deletion.
+>   - A withheld file (`.env`) stays `denied` to `litria_files_read` before and after an outside write (live pass).
+>   - Adversarial check (journal `.research/2026-10-15-t3-files-changed-outside.md`): no finding left open. Considered:
+>     - a write between the checks and the rename;
+>     - a write during the save's own fsync (seen by the last check; tested);
+>     - a deleted file versus `absent`;
+>     - line endings (the base is exact bytes);
+>     - containment;
+>     - stamps as an oracle;
+>     - a transient read failure. It could have shown a false "deleted" notice; fixed before the PR, and now read again on the next check.
+>     - a reload racing the person's typing (refused, the choice offered instead);
+>     - Litria's own writes behind a piece (they reload, which is correct).
+> - **Residual.**
+>   - Another program writing between the last check and the rename is not seen: no platform offers a replace that fails when the target changed. The window is the check and the rename, not the write and its fsync.
+>   - Two writes of the same size within one tick of the filesystem clock leave the stamp unchanged; the save still refuses to overwrite.
+>   - A compromised webview could still overwrite a file through the unconditional `write_project_file`, which Litria's other writers keep using; nothing new.
+> - **Scans.** `npm audit` 0. `cargo audit`: unchanged — the four `rustls` 0.23.45 advisories (through `ureq` only) and the 9 allowed warnings. No dependency change.
+>
+> **Reviewed**: 2026-10-15 — **agents' tool calls (track T slice T1b, branch `feat/t1b-tool-calls`)**:
 > - **Why.** Security policy Rule 1, and the adversarial-check policy: the MCP connection now runs Project API operations, including `litria_changes_apply`, for an external principal.
 > - **What it is.** `tools/call` over the T1a connection, as the agent session's own principal (`Principal::Agent`, one per session). Release builds still start no session before T2b, so nothing here is reachable in a shipped build yet.
 > - **What holds.**
