@@ -1,7 +1,32 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-15 — **the agents' MCP connection (track T slice T1a, branch `feat/t1a-mcp-connection`)**:
+> **Last reviewed**: 2026-10-15 — **the terminal's environment (gap G1, branch `fix/g1-terminal-env`)**:
+> - **Why.** Security policy Rule 1 (the process-spawning terminal changes what its children receive), and the 2026-10-14 erratum below: the environment was never filtered.
+> - **The decision (owner, 2026-10-15; [ADR-034](../adrs/034-terminal-inherits-the-user-environment.md)).** A terminal inherits the user's environment, as VS Code, JetBrains and Windows Terminal do. Litria sets no variable of its own (no `set_var` anywhere in `src-tauri/src`), and the shell runs as the user who started Litria, so a filter guards no boundary: everything in Litria's environment came from that user or from the program they started Litria with. A strict allowlist would also break ordinary setups (`JAVA_HOME`, proxies, `SSH_AUTH_SOCK`, `DISPLAY`) and the agents' own sign-in and config variables.
+> - **What holds.**
+>   - What a launching program leaked into Litria is removed before the shell starts (`terminal_policy::launcher_leaks`; the owner approved the list, primary sources in `.research/2026-10-15-g1-terminal-env.md`):
+>     - VS Code's own rule for its terminals (`sanitizeProcessEnvironment`): `ELECTRON_*`, `VSCODE_*` except its five user settings, `SNAP*`, `GDK_PIXBUF_*`, plus `VSCODE_IPC_HOOK_CLI`, which VS Code keeps for its own window;
+>     - VS Code's `GIT_ASKPASS`, only when `VSCODE_GIT_ASKPASS_MAIN` comes with it;
+>     - Claude Code's session variables, by exact name. Among them is `CLAUDE_CODE_MESSAGING_TOKEN`, which authenticates posts into the launching session's inbox.
+>   - Names compare case-insensitively on Windows, exactly elsewhere.
+>   - Forced over what was inherited: `TERM`, `COLORTERM`, `TERM_PROGRAM=litria`, and now `TERM_PROGRAM_VERSION`.
+>   - Tested on the child, not on a computed map: a real shell started from a fresh process with planted variables shows the user's own, none of the leaks, and the forced values. With the removal disabled, that test fails naming each leak (checked once by hand on Windows).
+>   - The executable allowlist and `path_guard` are unchanged.
+>   - Adversarial check (same journal): no finding. Considered:
+>     - Litria's environment changing between reading the names and spawning: impossible, Litria never sets a variable.
+>     - Windows case and aliasing: names are canonicalized to ASCII upper case, and `env_remove` folds names the way portable-pty stores them (tested with a mixed-case name).
+>     - Names found only in the Windows registry, which portable-pty adds: kept by design, they are the user's own.
+>     - A leaked variable whose value is not UTF-8: names are read from the process itself, not from portable-pty's iterator, which skips such values.
+>     - Fail direction: a name that is not valid UTF-8 is kept, but none of the listed names can be spelled that way.
+> - **Residual.**
+>   - Programs in the terminal see the user's credentials in the environment, as in any terminal; same user, outside the guarantee.
+>   - Exact names drift: a new session variable from Claude Code, or a launcher not on the list, passes until it is listed.
+>   - The Linux AppImage launcher's own variables are not verified yet (board card `appimage-launcher-env`).
+>   - `LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV` and the like pass through when the user set them, as in their own terminal. The 2026-07-16 claim that they were dropped was never true (erratum below).
+> - **Scans.** `npm audit` 0. `cargo audit`: unchanged — the four `rustls` 0.23.45 advisories (through `ureq` only) and the 9 allowed warnings. No dependency change.
+>
+> **Reviewed**: 2026-10-15 — **the agents' MCP connection (track T slice T1a, branch `feat/t1a-mcp-connection`)**:
 > - **Why.** Security policy Rule 1: a new local IPC surface (a named pipe on Windows, a Unix socket elsewhere), a new way to run the app's binary (`litria --mcp-helper`), and two new debug-only commands.
 > - **What it is.** An agent Litria starts (slice T2b) runs the helper as its stdio MCP server. The helper connects to the app's endpoint and presents its session's token; the app then serves MCP on that connection. T1a serves `initialize`, `ping` and `tools/list`; tool calls arrive in T1b. Release builds start no session yet (only the two debug-only commands do), so nothing is reachable in a shipped build until T2b.
 > - **What holds.**
@@ -396,6 +421,7 @@ Language packs are `&'static str` in Rust source. Not loaded from config files, 
 ### Terminal execution boundary — GOOD *(audited 2026-07-16)*
 `terminal_policy.rs` allowlists the shell executable (`powershell.exe|pwsh.exe|cmd.exe` / `sh|bash|zsh`), validates `project_root` through `path_guard`, and filters the child environment to an allowlist that explicitly drops `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS`, `BASH_ENV`, `PROMPT_COMMAND`, `PYTHONPATH` (test-enforced). `terminal_spawn` is not an arbitrary-executable primitive.
 > **Erratum (2026-10-14):** the environment claim is wrong — the child inherits the whole environment; only the allowlisted keys are overlaid. See the 2026-10-14 review entry at the top. The executable allowlist and `path_guard` claims stand.
+> **Resolved (2026-10-15, gap G1):** the owner ruled that the terminal inherits the user's environment by design; only what a launching program leaked in is removed, and a real-shell test checks the child. See the 2026-10-15 entry at the top.
 
 ### Project-name validation — GOOD (but see ISSUE 12) *(audited 2026-07-16)*
 `blank_project::validate_project_name` rejects path separators, `.`/`..`, control chars, Win32 forbidden chars, trailing dots, and reserved device names (CON, NUL, COM1…) — test-covered. Used by the Blank and Python creation paths.

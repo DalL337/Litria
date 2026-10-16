@@ -528,7 +528,7 @@ The capability layer itself is held together by enforced architecture:
 | Architecture guards | **7** — imports, app shell, protected zones, domain contract, settings keys, editor engine, db chokepoint |
 | JS tests | **1497** across 139 suites (`test/domains/`) |
 | Rust tests | **559** (plus 11 ignored) |
-| ADRs | **33** (ADR-031 lives in `docs/plans/agent-integration/`) |
+| ADRs | **34** (ADR-031 lives in `docs/plans/agent-integration/`) |
 | Tauri commands | 84 in release builds, 89 in debug builds (registry of record: `src-tauri/src/lib.rs`) |
 | Workspace DB schema | v4 (3 migrations) |
 | Theme tokens | 47 (v3) |
