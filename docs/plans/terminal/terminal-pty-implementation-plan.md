@@ -79,6 +79,7 @@ Create `src-tauri/src/terminal_pty.rs`:
   - Builds command via `CommandBuilder::new(executable)` with:
     - `cmd.cwd(project_root)`
     - `cmd.env()` set from filtered environment (wire `terminal_policy::filter_environment`)
+      *(Superseded 2026-10-15, gap G1: `cmd.env()` only overlaid those keys on the inherited environment; the terminal now inherits by design and removes `terminal_policy::launcher_leaks`.)*
     - Force-set `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=litria`
   - Creates Windows Job Object with `KILL_ON_JOB_CLOSE`, assigns child process
   - Spawns reader thread: blocking `read()` → coalesce → `channel.send()`

@@ -38,7 +38,7 @@ The command inventory, with each command's frontend caller, is in [rust-command-
 **Terminal**
 - `terminal_session_manager.rs` *(rewritten 2026-10-14, track T slice T2a)*: the session registry. Several sessions per project, keyed by a random id; one lock over live sessions, starts in flight, sessions still ending and the quit flag; the caps (8 per project, 24 in total); one folder per project; end, end-project, end-all, page-load and quit, each teardown on its own thread within a budget. Generic over a `TerminalSession` trait so its races are tested with fakes.
 - `terminal_pty.rs`: one session's pseudoconsole and its three threads (the reader, the writer that owns the PTY input, and the exit watcher), the ConPTY startup handshake, UTF-8 decoding across reads, the busy check, and the bounded teardown (the Job Object dropped before the pseudoconsole closes).
-- `terminal_policy.rs`: the execution boundary for terminals (the allowed shells and the preferred one), and the environment allowlist and forced variables.
+- `terminal_policy.rs`: the execution boundary for terminals (the allowed shells and the preferred one), and the terminal environment: the variables a launching program leaked in, which are removed, and the forced terminal variables.
 - `terminal_types.rs`: terminal payload types.
 - *(`terminal_ipc_bridge.rs` was removed 2026-10-14: nothing listened to its global events.)*
 - `process_control.rs`: deadlines and cancellation for scaffold subprocesses (ADR-028 §8). Every scaffold subprocess runs under one.

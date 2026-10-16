@@ -54,6 +54,7 @@ No architectural conflict is expected with existing plans if these rules are kep
 - Spawn using a platform-explicit shell/program policy.
 - Working directory must resolve within active canonical project root.
 - Pass only filtered/allowlisted environment keys.
+  > **Superseded (2026-10-15, gap G1):** the overlay this produced never filtered anything, and the owner ruled the terminal inherits the user's environment, minus what a launching program leaked in (`terminal_policy::launcher_leaks`).
 
 ### Denied
 - Arbitrary cwd outside project root.
