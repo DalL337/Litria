@@ -30,7 +30,7 @@ use std::time::Duration;
 use crate::contracts::context::Grant;
 
 use endpoint::Listener;
-use server::Timing;
+use server::{Calls, Host, Timing};
 use sessions::{EpochSource, Registry};
 
 /// Connections alive at once, counting those still saying hello.
@@ -55,6 +55,7 @@ pub(crate) struct Service {
     registry: Registry,
     live: AtomicUsize,
     timing: Timing,
+    calls: Calls,
     shut: AtomicBool,
     accepting: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -62,6 +63,12 @@ pub(crate) struct Service {
 /// How long [`Service::shutdown`] waits for the accept thread to let go of
 /// the endpoint.
 const ACCEPT_STOP_BUDGET: Duration = Duration::from_secs(2);
+
+/// How long [`Service::shutdown`] lets calls already running finish and
+/// answer before it ends the sessions. Calls are bounded (the owner bridge
+/// answers within seconds), and an apply cut off by the exit would leave its
+/// changes partly made until the next open settles it.
+const DRAIN_BUDGET: Duration = Duration::from_secs(2);
 
 /// One accepted connection's place under [`MAX_CONNECTIONS`].
 struct Slot(Arc<Service>);
@@ -80,6 +87,7 @@ impl Service {
             registry: Registry::new(current_epoch),
             live: AtomicUsize::new(0),
             timing,
+            calls: Calls::default(),
             shut: AtomicBool::new(false),
             accepting: Mutex::new(None),
         });
@@ -112,7 +120,12 @@ impl Service {
             let serving = Arc::clone(&self);
             let spawned = std::thread::Builder::new().name("mcp-connection".into()).spawn(move || {
                 let _slot = slot;
-                server::serve(stream, &serving.registry, serving.timing);
+                let host = Host {
+                    registry: &serving.registry,
+                    calls: &serving.calls,
+                    dispatcher: crate::project_api::dispatcher(),
+                };
+                server::serve(stream, &host, serving.timing);
             });
             if let Err(error) = spawned {
                 eprintln!("[mcp] starting a connection thread failed: {error}");
@@ -149,11 +162,16 @@ impl Service {
         self.registry.end_all();
     }
 
-    /// End every session and stop accepting. Returns once the accept thread
-    /// has let go of the endpoint (within [`ACCEPT_STOP_BUDGET`]): until then
-    /// the instance it waits on would still take a new client.
+    /// End every session and stop accepting. New calls are answered
+    /// `shuttingDown` at once; calls already running get [`DRAIN_BUDGET`] to
+    /// finish and answer first. Returns once the accept thread has let go of
+    /// the endpoint (within [`ACCEPT_STOP_BUDGET`]): until then the instance
+    /// it waits on would still take a new client.
     pub(crate) fn shutdown(&self) {
         self.shut.store(true, Ordering::SeqCst);
+        if !self.calls.close(DRAIN_BUDGET) {
+            eprintln!("[mcp] calls were still running after {DRAIN_BUDGET:?}; closing anyway");
+        }
         self.registry.end_all();
         self.listener.shutdown();
         let thread = self.accepting.lock().unwrap_or_else(|p| p.into_inner()).take();
@@ -282,3 +300,5 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod calls_tests;

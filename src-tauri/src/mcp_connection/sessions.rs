@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
-use crate::contracts::context::Grant;
+use crate::contracts::context::{AgentId, CallContext, Grant, Principal};
 
 use super::endpoint::Stream;
 
@@ -49,9 +49,22 @@ pub(crate) struct Started {
 /// The parts of a session a connection works with.
 #[derive(Debug)]
 pub(crate) struct Session {
+    /// The agent's key, `agent-<32 hex>`: also how its receipts name it.
     pub id: String,
     pub epoch: String,
     pub grant: Grant,
+    /// Who its calls are made as (track T, T1b): the session's own agent
+    /// principal, so its plans and receipts are its own.
+    pub principal: Principal,
+}
+
+impl Session {
+    /// The context every call over this session's connections runs in: its
+    /// principal, its grant, and the project open it was started for. Never
+    /// anything a message says.
+    pub(crate) fn call_context(&self) -> CallContext {
+        CallContext { principal: self.principal, grant: self.grant.clone(), epoch: self.epoch.clone() }
+    }
 }
 
 type TokenHash = [u8; 32];
@@ -132,14 +145,20 @@ impl Registry {
             return Err("that project is no longer open".into());
         }
         let token = hex(&random_bytes::<TOKEN_BYTES>()?);
-        let session_id = format!("agent-{}", hex(&random_bytes::<16>()?));
+        let agent = AgentId::new(random_bytes::<16>()?);
+        let session_id = agent.key();
         let hash = hash_of(&token);
         let mut inner = self.lock();
         Self::sweep(&mut inner, current.as_deref());
         if inner.sessions.len() >= MAX_SESSIONS {
             return Err(format!("{MAX_SESSIONS} agent sessions are already running"));
         }
-        let session = Arc::new(Session { id: session_id.clone(), epoch: epoch.to_owned(), grant });
+        let session = Arc::new(Session {
+            id: session_id.clone(),
+            epoch: epoch.to_owned(),
+            grant,
+            principal: Principal::Agent(agent),
+        });
         inner.by_hash.insert(hash, session_id.clone());
         inner
             .sessions
@@ -272,6 +291,11 @@ mod tests {
         assert_eq!(session.id, started.session_id);
         assert_eq!(session.epoch, "ws-1");
         assert!(session.grant.allows("project.files.read"));
+        // Its calls run as its own agent, against its own project open.
+        let context = session.call_context();
+        assert_eq!(context.principal.key(), started.session_id);
+        assert_eq!(context.epoch, "ws-1");
+        assert!(context.grant.allows("project.files.read"));
     }
 
     #[test]

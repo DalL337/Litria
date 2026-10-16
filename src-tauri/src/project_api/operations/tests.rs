@@ -268,3 +268,28 @@ fn a_record_without_a_run_is_from_another_run() {
     assert_eq!(split_open_key("ws-3"), (String::new(), "ws-3".to_string()));
     assert_eq!(split_open_key("run-ab/ws-3"), ("run-ab".to_string(), "ws-3".to_string()));
 }
+
+// --- T1b: receipts owned by an agent session ----------------------------------
+
+/// An agent session's receipt is its own: the session that made it finds it,
+/// another session (or a later run's, D6) does not, and an interrupted one
+/// still reaches the reopen report (a key this build could not read back
+/// would drop the row from the report silently).
+#[test]
+fn an_agent_sessions_receipt_is_its_own_and_still_reported_on_reopen() {
+    use crate::contracts::context::AgentId;
+    let open = Open::new("agent");
+    let mine = Principal::Agent(AgentId::new([1; 16]));
+    let other = Principal::Agent(AgentId::new([2; 16]));
+    let receipt = Record { principal: mine, ..stranded("plan-agent", "ws-earlier", vec![
+        change("src/made.ts", ChangeKind::Create, Phase::Confirmed, Some(created("src/made.ts"))),
+    ]) };
+    save(&open.epoch, &receipt, now()).unwrap();
+    assert_eq!(load(&open.epoch, "plan-agent", other).unwrap(), None, "another session's is none");
+    assert_eq!(load(&open.epoch, "plan-agent", Principal::Test).unwrap(), None);
+
+    let reports = take_interrupted(&open.epoch, now()).unwrap();
+    assert_eq!(reports, [InterruptedReport { files: vec!["src/made.ts".into()], unsaved_edits: 0 }]);
+    let settled = load(&open.epoch, "plan-agent", mine).unwrap().expect("its own session finds it");
+    assert_eq!(settled.principal, mine);
+}

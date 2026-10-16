@@ -170,6 +170,11 @@ impl Drop for InFlightSlot<'_> {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(count) = counts.get_mut(&self.principal) {
             *count = count.saturating_sub(1);
+            // Every agent session is a principal of its own: an entry left at
+            // zero would outlive its session.
+            if *count == 0 {
+                counts.remove(&self.principal);
+            }
         }
     }
 }
@@ -372,6 +377,11 @@ mod tests {
         drop(dispatcher.acquire(Principal::Dev).unwrap());
         drop(held);
         drop(dispatcher.acquire(Principal::Test).expect("slots are released when calls end"));
+        // Nothing is left behind for a principal with no call in flight: an
+        // agent session that ended leaves no entry.
+        let agent = Principal::Agent(crate::contracts::context::AgentId::new([7; 16]));
+        drop(dispatcher.acquire(agent).unwrap());
+        assert!(dispatcher.in_flight.lock().unwrap().is_empty());
     }
 
     #[test]
