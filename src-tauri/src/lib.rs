@@ -13,6 +13,11 @@ mod db;
 mod errors;
 mod execution_policy;
 mod lsp;
+// Track T slice T1a: the agents' MCP connection. Release builds start no agent
+// session before slice T2b, so only the helper half runs there; the rest is
+// allowed as dead code until then.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+mod mcp_connection;
 mod path_guard;
 mod platform;
 mod preferences;
@@ -35,6 +40,19 @@ mod terminal_pty;
 mod terminal_session_manager;
 mod terminal_types;
 mod write_ops;
+
+/// The flag that runs this binary as the MCP helper an agent starts (track T,
+/// T1a). `main` checks it before anything else runs.
+pub const MCP_HELPER_FLAG: &str = mcp_connection::helper::FLAG;
+
+/// Run as the MCP helper; returns the process exit code.
+pub fn run_mcp_helper() -> i32 {
+    mcp_connection::helper::run()
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use mcp_connection::test_support as mcp_test_support;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,6 +78,7 @@ pub fn run() {
         .on_page_load(|_webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 terminal_session_manager::end_all_for_page_load();
+                mcp_connection::end_all_for_page_load();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -155,11 +174,16 @@ pub fn run() {
             commands::crash_test_panic,
             // Project API: interrupted agent changes, reported on reopen (W4b)
             commands::project_api_interrupted_operations,
-            // Project API — dev builds only, until a transport exists (track T)
+            // Project API — dev builds only, for live passes (agents reach the
+            // API through mcp_connection, track T)
             #[cfg(debug_assertions)]
             commands::project_api_dev_call,
             #[cfg(debug_assertions)]
             commands::project_api_dev_review,
+            #[cfg(debug_assertions)]
+            commands::project_api_dev_agent_session_start,
+            #[cfg(debug_assertions)]
+            commands::project_api_dev_agent_session_end,
             #[cfg(debug_assertions)]
             commands::project_api_bridge_attach,
             #[cfg(debug_assertions)]
@@ -236,6 +260,9 @@ pub fn run() {
     app.run(|_app_handle, event| {
         match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                // Agent connections first: fence new project calls before
+                // anything they could reach goes away (brief §6). Runs once.
+                mcp_connection::quit();
                 // Bounded, runs once (the second event returns at once), and
                 // waits for teardowns already running.
                 terminal_session_manager::quit();

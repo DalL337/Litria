@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::tests::{error_of, tool};
+use super::tests::{error_of, tool, tools_call, tools_list};
 use super::*;
 use crate::contracts::artifacts::{bridge_dir, committed_json_in, validator, FIXTURES_DIR};
 use crate::contracts::context::{Grant, Principal};

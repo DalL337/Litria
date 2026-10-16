@@ -33,8 +33,9 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 use crate::contracts::catalog::{Dispatcher, Limits};
+use crate::contracts::context::Grant;
 #[cfg(debug_assertions)]
-use crate::contracts::context::{CallContext, Grant, Principal};
+use crate::contracts::context::{CallContext, Principal};
 #[cfg(debug_assertions)]
 use crate::contracts::error::{ContractError, ErrorCode};
 use crate::contracts::project_api::changes_apply::ChangesApplyOp;
@@ -75,7 +76,8 @@ pub(crate) fn dispatcher() -> &'static Dispatcher {
 
 /// Debug builds only (implementation-policy Rule 3): call an operation as the
 /// `dev` principal with every capability, bound to whatever workspace is open
-/// now. For driving the live app over CDP before a transport exists. `payload`
+/// now. For driving the live app over CDP; agents' own calls arrive over the
+/// MCP connection from track T slice T1b. `payload`
 /// is the raw request JSON, so byte budgets and parsing run exactly as they
 /// will for an external caller.
 #[cfg(debug_assertions)]
@@ -89,6 +91,28 @@ pub(crate) fn dev_call(operation: &str, payload: &[u8]) -> Result<Value, Contrac
         epoch,
     };
     dispatcher.dispatch(&context, operation, payload)
+}
+
+/// What an agent Litria starts may do (track T plan D4, owner ruling
+/// 2026-10-14): the whole catalog, for the project it was started in only.
+pub(crate) fn agent_grant() -> Grant {
+    Grant::of(dispatcher().capabilities())
+}
+
+/// Debug builds only: start an agent session for the project open now, as
+/// slice T2b will when it starts the agent, so a live pass can connect a
+/// scripted MCP client through the real helper and endpoint (track T, T1a).
+/// The token is in the answer, once; it is never logged.
+#[cfg(debug_assertions)]
+pub(crate) fn dev_start_agent_session() -> Result<crate::mcp_connection::AgentConnection, String> {
+    let epoch = workspace::current_epoch().ok_or("no project workspace is open")?;
+    crate::mcp_connection::start_session(&epoch, agent_grant())
+}
+
+/// Debug builds only: end a session [`dev_start_agent_session`] started.
+#[cfg(debug_assertions)]
+pub(crate) fn dev_end_agent_session(session_id: &str) -> bool {
+    crate::mcp_connection::end_session(session_id)
 }
 
 /// Interrupted agent changes, for the reopen pill (build plan W4b): settles

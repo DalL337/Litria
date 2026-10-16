@@ -15,7 +15,7 @@ The 2026-02-21 inventory listed commands removed since: `create_project_instance
   - `greet`, the Tauri template's sample command, was removed.
 - Keep it that way: a new command lands with its caller.
 
-The debug-only `crash_test_panic`, `project_api_dev_call` and `project_api_dev_review` are driven by hand, from devtools or CDP.
+The debug-only `crash_test_panic`, `project_api_dev_call`, `project_api_dev_review`, `project_api_dev_agent_session_start` and `project_api_dev_agent_session_end` are driven by hand, from devtools or CDP.
 
 ### Project files and dialogs
 
@@ -158,6 +158,8 @@ The debug-only `crash_test_panic`, `project_api_dev_call` and `project_api_dev_r
 | `project_api_interrupted_operations` | `src-tauri/src/commands.rs` | `src/app/useInterruptedOperationsNotice.js` | **Release builds too.** For the epoch the caller opened, it does three things. It settles every agent operation an earlier run left applying, recording the state that run's record proves; a change started but never confirmed becomes `needsReview`, never replayed. It prunes receipts past 30 days. It returns each interrupted operation once (new files that may be on disk, and the count of unsaved edits lost) for the reopen pill. A read-only project is left as it is. Project API build plan W4b. |
 | `project_api_dev_call` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller** |
 | `project_api_dev_review` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. A person's decision on an agent's plan through the review seam (Project API build plan W2b), until track T gives the review a surface; approving applies the plan to the editor (unsaved), never to disk. |
+| `project_api_dev_agent_session_start` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. Starts an agent session for the project open now, with an agent's grant (track T plan D4), and answers the MCP endpoint and the session's token, once. The first session binds the local endpoint (current user only). Touches no file and starts no process; slice T2b starts sessions when it starts an agent. Track T, T1a. |
+| `project_api_dev_agent_session_end` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. Ends a session: its token stops working and its connections close at once. Track T, T1a. |
 | `project_api_bridge_attach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
 | `project_api_bridge_detach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
 | `project_api_bridge_reply` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |

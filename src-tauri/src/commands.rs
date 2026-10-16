@@ -452,6 +452,27 @@ pub(crate) async fn project_api_dev_review(
         .map_err(|_| ContractError::new(ErrorCode::Internal, "the review did not complete"))?
 }
 
+/// Start an agent session for the project open now — dev builds only, like
+/// the dev call above. Slice T2b starts sessions when it starts an agent; until
+/// then a live pass uses this to connect a scripted MCP client through the
+/// real helper and endpoint (track T, T1a). It answers the endpoint and the
+/// session's token, once. Starting a session touches no file and no process;
+/// the first one binds the local endpoint, which only the current user can
+/// reach.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub(crate) fn project_api_dev_agent_session_start() -> Result<crate::mcp_connection::AgentConnection, String> {
+    crate::project_api::dev_start_agent_session()
+}
+
+/// End a session `project_api_dev_agent_session_start` started — dev builds
+/// only. Its token stops working and its connections close at once.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub(crate) fn project_api_dev_agent_session_end(session_id: String) -> bool {
+    crate::project_api::dev_end_agent_session(&session_id)
+}
+
 // The Project API owner bridge (contract brief §8) — dev builds only, like
 // the dev call above, which is its only consumer until the external transport
 // (build plan track T). The frontend hook attaches once its project has

@@ -1,7 +1,24 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-14 — **terminal sessions that outlive their tab (track T slice T2a, branch `feat/t2a-terminal-sessions`)**:
+> **Last reviewed**: 2026-10-15 — **the agents' MCP connection (track T slice T1a, branch `feat/t1a-mcp-connection`)**:
+> - **Why.** Security policy Rule 1: a new local IPC surface (a named pipe on Windows, a Unix socket elsewhere), a new way to run the app's binary (`litria --mcp-helper`), and two new debug-only commands.
+> - **What it is.** An agent Litria starts (slice T2b) runs the helper as its stdio MCP server. The helper connects to the app's endpoint and presents its session's token; the app then serves MCP on that connection. T1a serves `initialize`, `ping` and `tools/list`; tool calls arrive in T1b. Release builds start no session yet (only the two debug-only commands do), so nothing is reachable in a shipped build until T2b.
+> - **What holds.**
+>   - No network listener. Windows: the pipe's DACL allows the current user only (read back from the live pipe in a test: one ACE, the user's SID, protected), `PIPE_REJECT_REMOTE_CLIENTS`, and `FILE_FLAG_FIRST_PIPE_INSTANCE` so a taken name is refused (tested). The helper opens the pipe with `SECURITY_IDENTIFICATION`, so a hostile server could not act as it. Unix: the socket lives in a fresh directory created `0700`; `mkdir` fails if anything has the name (tested on Linux in a container). The name carries 128 random bits per run.
+>   - Tokens: 32 bytes from the OS random source (`OsRng`, not `rand::rng()`), 64 lowercase hex; only their SHA-256 is stored; never persisted, never logged, never in a command line (the helper reads it from its environment). A session is bound to one project open, its workspace epoch; it ends for good when the session ends, the project closes or another opens, the page reloads, or Litria exits. A token from an earlier run is unknown by construction.
+>   - Nothing MCP is handled before the token is accepted; every refusal is the same line, whatever the reason (tested for missing, malformed, wrong, ended, stale and earlier-run tokens). The session is re-checked before every message and every second while idle; a connection whose session stops holding closes unanswered.
+>   - Bounds: the hello is at most 1 KiB within 5 s (an absolute deadline); an MCP message at most 1 MiB, enforced while reading, before any parse; 16 connections in total, counting those still saying hello; 4 per session; 24 sessions; writes give up after 30 s. Protocol errors are fixed text and never echo input.
+>   - The helper is the app's own binary, branched in `main` before anything starts (no window, crash marker or database; GUI subsystem on Windows release builds, so no console). It writes nothing to stdout but what the app sends, and exits when either side closes (tested with the real binary, including the app process being killed).
+>   - Adversarial check (journal `.research/2026-10-15-track-t-next-slice.md`): one finding, from the full test suite under load: a client connecting during shutdown could still be accepted (sessions had already ended, so its token would have been refused). Reproduced once on Windows, not deterministically; fixed (the accept thread re-checks after waking and shutdown waits for it); verified by repeated runs on Windows.
+> - **Residual.**
+>   - Same-user processes can read the token from the agent's environment, hold connection slots, or stand up a fake endpoint for a helper they start; outside the guarantee (agent integration brief §9).
+>   - A 1 MiB message of tiny JSON values parses into a much larger value, per connection (suspected, by inspection; same user only). T1b bounds the raw message with the call budget.
+>   - `PIPE_REJECT_REMOTE_CLIENTS` is relied on from its documentation; no remote client was available to test it. macOS is covered by CI only.
+>   - Tokens live as long as their session, not on a timer; T2b ends a session with its terminal session.
+> - **Scans.** `npm audit` 0. `cargo audit`: unchanged from 2026-10-14 — the four `rustls` 0.23.45 advisories (reached only through `ureq`, the language-server downloader; the lockfile bump is tracked separately) and the 9 allowed warnings. No new crate. The `windows` crate gains the `Win32_System_Pipes`, `Win32_System_IO`, `Win32_Security` and `Win32_Security_Authorization` features (same crate and version).
+>
+> **Reviewed**: 2026-10-14 — **terminal sessions that outlive their tab (track T slice T2a, branch `feat/t2a-terminal-sessions`)**:
 > - **Why.** Security policy Rule 1: the process-spawning terminal commands changed (`terminal_spawn` now adds a session instead of replacing one; end, pause and resume take a session id; `terminal_end_project`, `terminal_busy_sessions` and `terminal_take_reload_report` are new; `terminal_session_start` is gone).
 > - **What holds.**
 >   - The shell is still chosen only from the allowlist; nothing in T2a widens what can run.
