@@ -338,6 +338,13 @@ fn de_verbatim(path: &std::path::Path) -> std::path::PathBuf {
 /// Windows: the console host keeps running while it holds its reference
 /// handle (the vendored crate never releases it), so the output pipe breaks
 /// only when the pseudoconsole is closed.
+///
+/// On macOS a self-exit is noticed only once the shell's output has been
+/// read. The shell is its terminal's controlling process, and XNU drains that
+/// terminal's output before such a process can finish exiting (`proc_exit` →
+/// `ttywait`, no timeout by default); `ps` shows it as `E`, trying to exit.
+/// So while the view has paused the output, the exit waits; when the view
+/// resumes, the output is read and the exit follows. Nothing is lost.
 pub(crate) fn spawn_pty(
     session_id: &str,
     validated: &crate::execution_policy::ValidatedExecutionBoundary,
@@ -1479,6 +1486,36 @@ mod tests {
             seen.lock().unwrap().output.clone()
         }
 
+        fn chunks_of(seen: &Arc<Mutex<Seen>>) -> usize {
+            seen.lock().unwrap().order.iter().filter(|kind| **kind == "O").count()
+        }
+
+        /// Wait until the shell has printed nothing for `quiet`.
+        fn wait_quiet(seen: &Arc<Mutex<Seen>>, quiet: Duration) {
+            let deadline = Instant::now() + WAIT;
+            let mut last = chunks_of(seen);
+            let mut since = Instant::now();
+            while since.elapsed() < quiet {
+                assert!(Instant::now() < deadline, "the shell never went quiet");
+                thread::sleep(Duration::from_millis(25));
+                let now = chunks_of(seen);
+                if now != last {
+                    last = now;
+                    since = Instant::now();
+                }
+            }
+        }
+
+        /// After `pause_output`, the read already in progress still takes one
+        /// more chunk. Spend it: make the shell print a line and wait for that
+        /// chunk. From then on the reader waits, and everything the shell
+        /// prints stays in the terminal until the view resumes.
+        fn park_reader(session: &PtySession, seen: &Arc<Mutex<Seen>>) {
+            let before = chunks_of(seen);
+            type_line(session, "echo PARKED");
+            wait_for("the read in progress at the pause", || chunks_of(seen) > before);
+        }
+
         fn type_line(session: &PtySession, line: &str) {
             session.write_input(format!("{line}\r").as_bytes()).unwrap();
         }
@@ -1580,20 +1617,51 @@ mod tests {
             });
         }
 
+        /// A shell that exits by itself while its view is paused: its last
+        /// output still arrives, before the exit, with the exit code.
+        ///
+        /// The reader is parked first (`park_reader`), so the last output is
+        /// surely still in the terminal when the shell exits. Before
+        /// 2026-10-15 the test paused and typed straight away, and the read in
+        /// progress could take the last output itself, so whether anything was
+        /// left waiting depended on how the shell's writes fell into chunks.
+        ///
+        /// macOS differs. The shell is its terminal's controlling process, and
+        /// XNU drains a controlling terminal's output before that process can
+        /// finish exiting (`proc_exit` → `ttywait`, with no timeout unless the
+        /// superuser sets one with `TIOCSDRAINWAIT`). So while the view is
+        /// paused the exit is held, and it completes once the output is read:
+        /// nothing is lost, the notice is only later. Linux and Windows let the
+        /// shell exit at once. Found by intermittent macos-14 CI failures
+        /// (main b70db3f, 2026-10-15).
         #[test]
         fn a_shell_exiting_by_itself_is_reported_with_its_code_after_its_output() {
             with_watchdog(|| {
                 let exited = Arc::new(AtomicBool::new(false));
                 let (session, seen) = spawn(Arc::clone(&exited));
-                thread::sleep(Duration::from_millis(1500));
-                // Paused: the last output waits in the pipe while the shell
-                // exits. It must still arrive, and before the exit marker.
+                wait_quiet(&seen, Duration::from_millis(500));
                 session.pause_output();
+                park_reader(&session, &seen);
                 #[cfg(windows)]
                 type_line(&session, "Write-Output ('END' + '-MARKER'); exit 3");
                 #[cfg(unix)]
                 type_line(&session, "echo END''-MARKER; exit 3");
+                #[cfg(target_os = "macos")]
+                {
+                    thread::sleep(Duration::from_secs(2));
+                    assert!(
+                        !exited.load(Ordering::SeqCst),
+                        "macOS holds the exit while the terminal's output is unread"
+                    );
+                    assert!(!output_of(&seen).contains("END-MARKER"), "the last output is still queued");
+                    session.resume_output();
+                }
                 wait_for("the exit watcher", || exited.load(Ordering::SeqCst));
+                #[cfg(not(target_os = "macos"))]
+                assert!(
+                    !output_of(&seen).contains("END-MARKER"),
+                    "the shell exited with its last output still queued"
+                );
                 // What the registry does on a self-exit.
                 assert_eq!(session.end(), Some(3));
                 let seen = seen.lock().unwrap();
