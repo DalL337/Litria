@@ -567,6 +567,17 @@ export function editorSessionReducer(state, action) {
         }
       };
     }
+    // Track T slice T3b: another program deleted the tab's file (owner ruling
+    // 2026-10-15: the tab stays open, marked), or it came back.
+    case 'SET_TAB_DISK_MISSING': {
+      const current = state.tabsById[action.tabId];
+      const missing = action.missing === true;
+      if (!current || (current.diskMissing === true) === missing) return state;
+      return {
+        ...state,
+        tabsById: { ...state.tabsById, [action.tabId]: { ...current, diskMissing: missing } }
+      };
+    }
     case 'SAVE_TAB': {
       const current = state.tabsById[action.tabId];
       if (!current) return state;

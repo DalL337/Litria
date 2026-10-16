@@ -31,6 +31,7 @@
 import { dbUpdatePiece, dbDeletePiece, dbUpdateGroup, dbCreateGroup, dbAddPieceToGroup, dbDeleteGroup } from '../project/dbStorage.js';
 import { findReservedDeviceSegment, toProjectAbsPath } from '../utils/path.js';
 import { emitPersistenceWriteFailure } from '../project/persistenceFailures.js';
+import { markExternalRename } from '../lsp/externalRenames.js';
 
 /**
  * Reject creation targets that collide with reserved Windows device names
@@ -436,7 +437,6 @@ export function createFilesystemWriteManager(deps) {
    * @returns {Promise<{success: boolean, error?: string, code?: string, updates?: Array}>}
    */
   async function movePipeline(sourcePath, destPath, isDir, opts = {}) {
-    let dispatchedPersistence = false;
     const rootPath = getRootPath();
     if (!rootPath) return fail('No project root path available', 'fs.no_root');
 
@@ -446,6 +446,19 @@ export function createFilesystemWriteManager(deps) {
     // Step 1: Filesystem move
     const moved = await moveProjectPath(rootPath, sourcePath, destPath);
     if (!moved) return fail(`Cannot move "${sourcePath}" to "${destPath}"`, 'fs.move_failed');
+
+    return followMovedPaths(rootPath, sourcePath, destPath, isDir, opts);
+  }
+
+  /**
+   * Steps 2-9 of a move: everything Litria holds follows a path that has
+   * already moved on disk (pieces, tabs, groups, the syntax index, SQLite).
+   * Writes no file. `opts.external` (track T slice T3b): another program
+   * made the move, so the editor's later rename of the tab's model must not
+   * rewrite importers (`externalRenames`).
+   */
+  async function followMovedPaths(rootPath, sourcePath, destPath, isDir, opts = {}) {
+    let dispatchedPersistence = false;
 
     // Indexed files the move carried, on the canvas or not (the index still
     // holds their old paths). Files with a piece are re-keyed by Steps 6 and
@@ -488,9 +501,11 @@ export function createFilesystemWriteManager(deps) {
     const updates = buildFilenameUpdates(affected, normalizePath, sourcePath, destPath);
     updatePieceFilenames(updates);
 
-    // Step 4: Update tab filenames
+    // Step 4: Update tab filenames. Another program's move is marked first,
+    // so the tab's model follows it without rewriting importers.
     if (updateTabFilename) {
       for (const entry of updates) {
+        if (opts.external) markExternalRename(toProjectAbsPath(rootPath, entry.path));
         updateTabFilename(entry.pieceId, entry.path);
       }
     }
@@ -613,6 +628,23 @@ export function createFilesystemWriteManager(deps) {
     if (!opts.skipScaffold) bumpScaffoldRefresh();
 
     return { success: true, persistence: dispatchedPersistence ? 'dispatched' : 'none', updates };
+  }
+
+  /**
+   * Follow a file another program moved or renamed (track T slice T3b; owner
+   * ruling 2026-10-15: follow it when unambiguous). Its piece, tab, groups and
+   * index follow the new path exactly as for Litria's own move, but nothing is
+   * written: not the file, and not its importers' import lines.
+   *
+   * @param {string} sourcePath - relative path it had (forward slashes)
+   * @param {string} destPath   - relative path it has now
+   */
+  async function followMove(sourcePath, destPath) {
+    const rootPath = getRootPath();
+    if (!rootPath) return fail('No project root path available', 'fs.no_root');
+    const reserved = reservedNameFailure(destPath);
+    if (reserved) return reserved;
+    return followMovedPaths(rootPath, sourcePath, destPath, false, { external: true });
   }
 
   /**
@@ -1180,6 +1212,7 @@ export function createFilesystemWriteManager(deps) {
     moveFile,
     moveFolder,
     moveOrWriteFile,
+    followMove,
     deleteFile,
     deleteFolder,
     deleteEmptyFolder,

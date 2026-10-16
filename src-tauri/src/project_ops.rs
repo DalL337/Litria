@@ -291,6 +291,13 @@ mod create_tests;
 #[cfg(test)]
 mod save_tests;
 
+/// The project's folder-tree stamp (track T slice T3b; see
+/// `project_tree::tree_stamp`).
+pub(crate) fn project_tree_stamp(root_path: &str) -> CommandResult<project_tree::TreeStamp> {
+    let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
+    Ok(project_tree::tree_stamp(&root))
+}
+
 pub(crate) fn list_project_tree(root_path: &str) -> CommandResult<Vec<ProjectTreeEntry>> {
     let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
     project_tree::collect_project_tree(&root).map_err(CommandError::from_text)

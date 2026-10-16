@@ -48,7 +48,10 @@ const LED_COLORS = {
   blue: 'rgba(60, 140, 255, 0.95)',
   green: 'rgba(50, 205, 100, 0.9)',
   amber: 'rgba(240, 180, 40, 0.9)',
-  red: 'rgba(240, 60, 60, 0.95)'
+  red: 'rgba(240, 60, 60, 0.95)',
+  // T3b: deleted on disk by another program. Not a theme token (themes do
+  // not define it yet), so every theme shows the same violet.
+  missing: 'rgba(176, 102, 230, 0.95)'
 };
 
 function PuzzlePiece({

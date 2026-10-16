@@ -108,18 +108,36 @@ pub(crate) fn save_project_file(
 }
 
 /// The stamps (size and modification time) of open files, for noticing
-/// changes made outside Litria (track T slice T3a). Metadata only.
+/// changes made outside Litria (track T slice T3a). Metadata only. Async and
+/// off the main thread (T3b): it runs once a second.
 #[tauri::command]
-pub(crate) fn project_files_stamps(
-    root_path: &str,
+pub(crate) async fn project_files_stamps(
+    root_path: String,
     paths: Vec<String>,
 ) -> CommandResult<Vec<project_ops::PathStamp>> {
-    project_ops::project_files_stamps(root_path, &paths)
+    tauri::async_runtime::spawn_blocking(move || project_ops::project_files_stamps(&root_path, &paths))
+        .await
+        .map_err(|e| CommandError::internal("project_file.stat_thread", e.to_string()))?
 }
 
+/// One fingerprint of the project's folder tree (track T slice T3b): when it
+/// changes, a file was created, deleted, renamed or moved. Metadata only;
+/// async and off the main thread, as it runs every few seconds.
 #[tauri::command]
-pub(crate) fn list_project_tree(root_path: &str) -> CommandResult<Vec<ProjectTreeEntry>> {
-    project_ops::list_project_tree(root_path)
+pub(crate) async fn project_tree_stamp(root_path: String) -> CommandResult<crate::project_tree::TreeStamp> {
+    tauri::async_runtime::spawn_blocking(move || project_ops::project_tree_stamp(&root_path))
+        .await
+        .map_err(|e| CommandError::internal("project_tree.stamp_thread", e.to_string()))?
+}
+
+/// The whole project tree. Async and off the main thread (T3b): another
+/// program's changes make the tree, discovery, the folder groups and the
+/// change check list it, and a large project's walk should not hold the UI.
+#[tauri::command]
+pub(crate) async fn list_project_tree(root_path: String) -> CommandResult<Vec<ProjectTreeEntry>> {
+    tauri::async_runtime::spawn_blocking(move || project_ops::list_project_tree(&root_path))
+        .await
+        .map_err(|e| CommandError::internal("project_tree.list_thread", e.to_string()))?
 }
 
 #[tauri::command]

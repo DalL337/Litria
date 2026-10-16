@@ -475,3 +475,15 @@ test('take-disk-version: keeping mine sets their version as the base under it', 
   assert.equal(reduce(state, { type: 'TAKE_DISK_VERSION', tabId: 99, code: 'x' }), state);
   assert.equal(reduce(state, { type: 'TAKE_DISK_VERSION', tabId: 1 }), state);
 });
+
+/* ── T3b: a tab whose file was deleted on disk stays open, marked ── */
+
+test('set-tab-disk-missing marks and clears, and changes nothing else', () => {
+  let state = openPieces(initial, piece(1, 'a.ts', 'x\n'));
+  const marked = reduce(state, { type: 'SET_TAB_DISK_MISSING', tabId: 1, missing: true });
+  assert.equal(marked.tabsById[1].diskMissing, true);
+  assert.deepEqual(marked.openTabIds, state.openTabIds, 'the tab stays open');
+  assert.equal(reduce(marked, { type: 'SET_TAB_DISK_MISSING', tabId: 1, missing: true }), marked, 'no change, same state');
+  assert.equal(reduce(marked, { type: 'SET_TAB_DISK_MISSING', tabId: 1, missing: false }).tabsById[1].diskMissing, false);
+  assert.equal(reduce(state, { type: 'SET_TAB_DISK_MISSING', tabId: 99, missing: true }), state);
+});

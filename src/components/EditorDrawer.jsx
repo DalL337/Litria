@@ -206,9 +206,13 @@ function EditorDrawer({ selectedCount = 0, projectRootPath = null, projectId = n
                       }
                     }}
                   >
-                    <span className={`editor-tab-name ${dirty ? 'is-dirty' : ''}`}>
+                    <span
+                      className={`editor-tab-name ${dirty ? 'is-dirty' : ''} ${tab.diskMissing ? 'is-missing' : ''}`}
+                      title={tab.diskMissing ? `${tab.filename} was deleted on disk` : undefined}
+                    >
                       {dirty && <span className="editor-tab-dot" />}
                       {tab.filename}
+                      {tab.diskMissing && <span className="editor-tab-missing"> (deleted)</span>}
                     </span>
                     <button
                       className="editor-tab-close"

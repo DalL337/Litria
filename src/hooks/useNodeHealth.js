@@ -2,13 +2,14 @@ import { useCallback, useSyncExternalStore } from 'react';
 import {
   getDiagnosticsForFile,
   subscribeToDiagnostics
-} from '../lsp/diagnosticStore';
+} from '../lsp/diagnosticStore.js';
 
 /**
  * Compute the LED health state for a single node.
  *
  * Priority waterfall:
  *   1. dirty (unsaved changes)    → 'blue'
+ *   1b. deleted on disk (T3b)      → 'missing'
  *   2. diagnostic errors          → 'red'
  *   3. diagnostic warnings        → 'amber'
  *   4. file is empty (no content) → 'empty'
@@ -17,13 +18,16 @@ import {
  * @param {object} piece - Piece data from pieceDomain
  * @param {boolean} isDirty - Whether the piece has unsaved changes
  * @param {string|null} projectRoot - Absolute project root path
- * @returns {'blue'|'red'|'amber'|'green'|'empty'}
+ * @returns {'blue'|'missing'|'red'|'amber'|'green'|'empty'}
  *
  * Corrected 2026-09-15 (ADR-027): diagnostics include LSP results and
  * Monaco's built-in marker feed.
  */
 export function computeNodeHealth(piece, isDirty, projectRoot) {
   if (isDirty) return 'blue';
+  // T3b: another program deleted the file; the piece stays (owner ruling
+  // 2026-10-15) and returns to life when the file does.
+  if (piece?.diskMissing === true) return 'missing';
 
   const diags = getDiagnosticsForFile(piece?.filename, projectRoot);
   if (diags) {

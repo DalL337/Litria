@@ -189,6 +189,20 @@ export async function projectFilesStamps(rootPath, paths) {
 }
 
 /**
+ * The project's folder-tree stamp (track T slice T3b): `{ stamp, folders,
+ * truncated }`. A different stamp means a file was created, deleted, renamed
+ * or moved since the last one. Metadata only. Null on failure.
+ */
+export async function projectTreeStamp(rootPath) {
+  if (!rootPath) return null;
+  const response = await invokeWithTypedError('project_tree_stamp', { rootPath }, {
+    fallbackCode: 'project_tree.stamp.failed',
+    fallbackMessage: 'Unable to check the project tree.'
+  });
+  return response.ok ? response.data : null;
+}
+
+/**
  * Create a file only if nothing has its name: never an overwrite (Project
  * API build plan W3a). The path is taken exactly. Resolves 'created' or
  * 'exists', or null on failure (with the typed error recorded).

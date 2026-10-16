@@ -1,7 +1,17 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-15 — **saves that never overwrite a newer version on disk (track T slice T3a, branch `feat/t3a-never-lose-a-version`)**:
+> **Last reviewed**: 2026-10-16 — **the tree follows files changed by other programs (track T slice T3b, branch `feat/t3b-tree-follows-disk`)**:
+> - **Why.** Security policy Rule 1: a new Tauri command reads the filesystem (`project_tree_stamp`), and two existing ones move off the main thread (`list_project_tree`, `project_files_stamps`).
+> - **What holds.**
+>   - `project_tree_stamp` returns one opaque fingerprint, the number of folders and a truncation flag. It reads folder metadata only, under the resolved project root; it follows no link, skips the tree's ignored folders, counts an unreadable folder instead of failing, and stops at 20 000 folders.
+>   - Following another program's rename writes nothing: `followMove` runs the bookkeeping half of Litria's own move (pieces, tabs, groups, the syntax index, SQLite), with the write manager's path rules, and the editor's later model rename skips rewriting importers for it (tested: no write; live: the importer unchanged on disk). A pairing needs an exact, non-empty, unique text on both sides.
+>   - A deleted canvas file's piece and tab stay, marked; nothing is removed or written.
+>   - The adversarial-check policy does not apply: no check guards an action here (the new code reads metadata and updates Litria's own state). Considered anyway: a program that plants a file with a missing file's exact text can steer which path a piece follows — it runs as the same user, outside the guarantee, and the piece only names a file the person's project already holds.
+> - **Residual.** Two tree changes within one tick of the filesystem clock between checks can go unseen until the next change (the T3a save check still guards contents). An external-rename mark left unused (its tab never shown) could keep a later Litria rename to the same path from rewriting importers; their wires show broken.
+> - **Scans.** `npm audit` 0. `cargo audit`: unchanged. No dependency change.
+>
+> **Reviewed**: 2026-10-15 — **saves that never overwrite a newer version on disk (track T slice T3a, branch `feat/t3a-never-lose-a-version`)**:
 > - **Why.** Security policy Rule 1: two new Tauri commands touch the filesystem (`save_project_file`, which writes; `project_files_stamps`, which reads metadata). The adversarial-check policy: the conditional save is check-then-write code.
 > - **What it fixes.** Reproduced on `main` first: a file open with unsaved changes, changed by another program, then saved in Litria. The save answered success, and the other program's version was gone. Agents' own file tools write straight to disk, so this matters before agents run real tasks.
 > - **What holds.**

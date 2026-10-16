@@ -54,21 +54,61 @@ export function describeDeleted(filename) {
   return `“${filename}” was deleted on disk while it had unsaved changes. Click to save yours again, or dismiss to keep it unsaved.`;
 }
 
-/** Piece updates after a decision: the new baseline and stamp, by kind. */
+/**
+ * Piece updates after a decision: the new baseline and stamp, by kind. A
+ * deleted file's piece stays, marked missing (T3b, owner ruling 2026-10-15),
+ * and any version on disk clears the mark.
+ */
 export function pieceAfter(piece, kind, read) {
   switch (kind) {
     case 'touched':
-      return { ...piece, diskStamp: read.stamp ?? null };
+      return { ...piece, diskStamp: read.stamp ?? null, diskMissing: false };
     case 'reload':
-      return { ...piece, code: read.text, workingCode: read.text, diskStamp: read.stamp ?? null };
+      return { ...piece, code: read.text, workingCode: read.text, diskStamp: read.stamp ?? null, diskMissing: false };
     // The choice is the person's; the stamp is recorded so the same version
     // is not read (or offered) again.
     case 'conflict':
-      return { ...piece, diskStamp: read.stamp ?? null };
+      return { ...piece, diskStamp: read.stamp ?? null, diskMissing: false };
     case 'deleted':
     case 'gone':
-      return { ...piece, diskStamp: null };
+      return { ...piece, diskStamp: null, diskMissing: true };
     default:
       return piece;
   }
+}
+
+/** The most newly listed files one check reads to look for renames. */
+export const MAX_RENAME_CANDIDATES = 256;
+
+/**
+ * Pair files that went missing with files that appeared (track T slice T3b;
+ * owner ruling 2026-10-15: follow another program's rename when it is
+ * unambiguous). A missing piece follows a newly listed file whose text is
+ * exactly the text the piece was read as. A text that more than one missing
+ * piece holds, or that more than one new file holds, pairs nothing; nor does
+ * an empty text, which too many files share.
+ *
+ * @param {Array<{ id: unknown, filename: string, code: string }>} missing
+ * @param {Array<{ path: string, text: string }>} appeared
+ * @returns {Array<{ pieceId: unknown, from: string, to: string }>}
+ */
+export function pairRenames(missing, appeared) {
+  const byText = (items, textOf) => {
+    const grouped = new Map();
+    for (const item of items) {
+      const text = textOf(item);
+      if (typeof text !== 'string' || text === '') continue;
+      grouped.set(text, [...(grouped.get(text) ?? []), item]);
+    }
+    return grouped;
+  };
+  const appearedByText = byText(appeared, (file) => file.text);
+  const pairs = [];
+  for (const [text, pieces] of byText(missing, (piece) => piece.code)) {
+    const files = appearedByText.get(text);
+    if (pieces.length === 1 && files?.length === 1 && pieces[0].filename !== files[0].path) {
+      pairs.push({ pieceId: pieces[0].id, from: pieces[0].filename, to: files[0].path });
+    }
+  }
+  return pairs;
 }

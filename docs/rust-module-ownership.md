@@ -34,7 +34,7 @@ The command inventory, with each command's frontend caller, is in [rust-command-
   - `resolve_entry_for_mutation` makes delete and move act on a link, never on its target (PR #88).
   - The typed resolvers are used by the Project API.
 - `write_ops.rs`: atomic writes (temp file, then rename) under the single-writer lock. *(T3a)* `replace_string_if` runs the caller's check after the content is durable and immediately before the rename.
-- `project_tree.rs`: the project tree listing (`list_project_tree`), relative-path normalization, and the `IGNORED_DIRS` list that the Project API reuses as its unindexed class.
+- `project_tree.rs`: the project tree listing (`list_project_tree`), relative-path normalization, and the `IGNORED_DIRS` list that the Project API reuses as its unindexed class. *(T3b)* `tree_stamp`: one fingerprint of the tree's folders, from their modification times.
 
 **Terminal**
 - `terminal_session_manager.rs` *(rewritten 2026-10-14, track T slice T2a)*: the session registry. Several sessions per project, keyed by a random id; one lock over live sessions, starts in flight, sessions still ending and the quit flag; the caps (8 per project, 24 in total); one folder per project; end, end-project, end-all, page-load and quit, each teardown on its own thread within a budget. Generic over a `TerminalSession` trait so its races are tested with fakes.

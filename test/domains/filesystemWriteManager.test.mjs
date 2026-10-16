@@ -1015,8 +1015,35 @@ test('saveFile — a failed save, a reserved name, and no conditional save', asy
   deps.saveProjectFile = async () => null;
   const mgr = createFilesystemWriteManager(deps);
   assert.equal((await mgr.saveFile('src/a.ts', 'x', { kind: 'absent' })).code, 'fs.write_failed');
-  assert.equal((await mgr.saveFile('litria.toml', 'x', { kind: 'absent' })).success, false, 'reserved');
+  assert.equal((await mgr.saveFile('src/CON.ts', 'x', { kind: 'absent' })).code, 'fs.reserved_name', 'a Windows device name');
   const without = createMockDeps({}).deps;
   assert.equal((await createFilesystemWriteManager(without).saveFile('src/a.ts', 'x', { kind: 'absent' })).code, 'fs.write_failed');
   assert.equal(calls.writeProjectFile.length, 0, 'never falls back to the unconditional write');
+});
+
+// followMove (T3b): another program moved the file; everything Litria holds
+// follows, and nothing is written or moved on disk.
+
+test('followMove — pieces and tabs follow, the disk is not touched', async () => {
+  const pieces = [createMockPiece(1, 'src/foo.py')];
+  const { deps, calls } = createMockDeps({ pieces });
+  const mgr = createFilesystemWriteManager(deps);
+
+  const result = await mgr.followMove('src/foo.py', 'lib/foo.py');
+
+  assert.equal(result.success, true);
+  assert.equal(calls.moveProjectPath.length, 0, 'the other program already moved it');
+  assert.equal(calls.writeProjectFile.length, 0);
+  assert.deepEqual(calls.updatePieceFilenames[0], [{ pieceId: 1, path: 'lib/foo.py' }]);
+  assert.deepEqual(calls.updateTabFilename[0], { pieceId: 1, path: 'lib/foo.py' });
+  assert.equal(calls.unregisterFile[0], '/test/project/src/foo.py');
+  assert.equal(calls.bumpScaffoldRefresh.length, 1);
+});
+
+test('followMove — a reserved name is refused', async () => {
+  const pieces = [createMockPiece(1, 'src/foo.py')];
+  const { deps, calls } = createMockDeps({ pieces });
+  const result = await createFilesystemWriteManager(deps).followMove('src/foo.py', 'src/CON.py');
+  assert.equal(result.success, false);
+  assert.equal(calls.updatePieceFilenames.length, 0);
 });

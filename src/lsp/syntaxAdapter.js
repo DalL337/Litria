@@ -41,6 +41,7 @@
  */
 
 import { bufferRevision } from '../app/projectApiBridge.js';
+import { takeExternalRename } from './externalRenames.js';
 
 // ---------------------------------------------------------------------------
 // Factory
@@ -519,6 +520,10 @@ export function createSyntaxAdapter({ syntaxDomain, projectRoot, readProjectFile
       const value = model.getValue();
       syntaxDomain.commands.notifyFileChanged(newPath, value, editorRevision(value));
     }
+
+    // Another program's rename (T3b): followed, but its importers are that
+    // program's to rewrite, so nothing is written here.
+    if (takeExternalRename(newPath)) return { patchesApplied: 0 };
 
     // Group rename patch plans by file and apply them to authoritative text.
     const byFile = new Map();

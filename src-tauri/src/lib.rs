@@ -90,6 +90,7 @@ pub fn run() {
             commands::create_project_file,
             commands::save_project_file,
             commands::project_files_stamps,
+            commands::project_tree_stamp,
             commands::list_project_tree,
             commands::move_project_path,
             commands::create_project_directory,
