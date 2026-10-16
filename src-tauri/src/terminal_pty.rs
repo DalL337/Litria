@@ -395,9 +395,19 @@ pub(crate) fn spawn_pty(
     // plain path; the security validation already happened on the verbatim.
     cmd.cwd(de_verbatim(&validated.project_root));
 
-    let filtered_env = terminal_policy::build_pty_environment();
-    for (key, value) in &filtered_env {
-        cmd.env(key, value);
+    // The user's own environment, as inherited (on Windows portable-pty also
+    // reloads the registry's, which is the user's own too), minus what a
+    // launching program leaked into Litria's process. Names are read from the
+    // process itself: portable-pty's iterator skips values that are not UTF-8.
+    let inherited: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .collect();
+    let names: Vec<&str> = inherited.iter().map(String::as_str).collect();
+    for name in terminal_policy::launcher_leaks(&names) {
+        cmd.env_remove(name);
+    }
+    for (name, value) in terminal_policy::FORCED_ENV {
+        cmd.env(name, value);
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| {
@@ -1614,6 +1624,156 @@ mod tests {
                 assert!(!output_of(&seen_b).contains("alpha-"));
                 a.end();
                 b.end();
+            });
+        }
+
+        const ENVIRONMENT_PROBE: &str = "LITRIA_TERMINAL_ENVIRONMENT_PROBE";
+
+        /// Planted in the probe's process: the name, its value there, and
+        /// what the shell must see ("" for not set).
+        fn planted() -> Vec<(&'static str, &'static str, &'static str)> {
+            vec![
+                // The user's own, including settings that look like a leak.
+                ("LITRIA_TEST_OWN", "own-value", "own-value"),
+                ("CLAUDE_CODE_ENABLE_TASKS", "own-setting", "own-setting"),
+                ("VSCODE_PORTABLE", "own-setting", "own-setting"),
+                // Leaked by a program that started Litria.
+                ("VSCODE_TEST_LEAK", "leak", ""),
+                ("ELECTRON_RUN_AS_NODE", "1", ""),
+                ("CLAUDECODE", "1", ""),
+                ("CLAUDE_CODE_CHILD_SESSION", "1", ""),
+                ("CLAUDE_CODE_MESSAGING_TOKEN", "leak", ""),
+                ("GIT_ASKPASS", "vscode-askpass", ""),
+                ("VSCODE_GIT_ASKPASS_MAIN", "askpass-main", ""),
+                // Windows compares names without case; Unix does not.
+                ("Vscode_Test_Mixed", "mixed", if cfg!(windows) { "" } else { "mixed" }),
+                // What the terminal is, over what was inherited.
+                ("TERM", "dumb", "xterm-256color"),
+                ("COLORTERM", "no", "truecolor"),
+                ("TERM_PROGRAM", "vscode", "litria"),
+                ("TERM_PROGRAM_VERSION", "0.0.0-vscode", env!("CARGO_PKG_VERSION")),
+            ]
+        }
+
+        /// A typed line that prints `G1-42:<name>=[<value>]`. The shell echoes
+        /// what is typed, and only the printed line has the computed 42.
+        fn print_variable(name: &str) -> String {
+            if cfg!(windows) {
+                format!("\"G1-$(6*7):{name}=[$env:{name}]\"")
+            } else {
+                format!("echo \"G1-$((6*7)):{name}=[${name}]\"")
+            }
+        }
+
+        fn shown_value(output: &str, name: &str) -> Option<String> {
+            let text = without_escapes(output);
+            let pattern = format!("G1-42:{name}=[");
+            let start = text.rfind(&pattern)? + pattern.len();
+            let length = text[start..].find(']')?;
+            Some(text[start..start + length].to_string())
+        }
+
+        /// The output with the terminal's escape sequences taken out.
+        fn without_escapes(output: &str) -> String {
+            let mut text = String::new();
+            let mut chars = output.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c != '\x1b' {
+                    text.push(c);
+                    continue;
+                }
+                match chars.next() {
+                    // CSI: parameters and intermediates, then one final byte.
+                    Some('[') => {
+                        for c in chars.by_ref() {
+                            if ('\x40'..='\x7e').contains(&c) {
+                                break;
+                            }
+                        }
+                    }
+                    // OSC: up to BEL or ESC \.
+                    Some(']') => {
+                        while let Some(c) = chars.next() {
+                            if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            text
+        }
+
+        /// What a real shell sees: the user's environment, minus what a
+        /// program that started Litria leaked in, plus Litria's terminal
+        /// variables. The variables are planted in a fresh process (this test
+        /// binary, run again), because setting them in this one would race the
+        /// other tests.
+        #[test]
+        fn a_shell_sees_the_users_environment_without_what_a_launcher_leaked() {
+            let probe = format!("{}::shell_environment_probe", module_path!().split_once("::").unwrap().1);
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([probe.as_str(), "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+                .env(ENVIRONMENT_PROBE, "1")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            for (name, value, _) in planted() {
+                command.env(name, value);
+            }
+            let mut child = command.spawn().unwrap();
+            let mut stdout = child.stdout.take().unwrap();
+            let mut stderr = child.stderr.take().unwrap();
+            let out = thread::spawn(move || {
+                let mut text = String::new();
+                let _ = stdout.read_to_string(&mut text);
+                text
+            });
+            let errors = thread::spawn(move || {
+                let mut text = String::new();
+                let _ = stderr.read_to_string(&mut text);
+                text
+            });
+            let deadline = Instant::now() + WATCHDOG;
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("the probe was still running after {WATCHDOG:?}");
+                }
+                thread::sleep(Duration::from_millis(50));
+            };
+            let (out, errors) = (out.join().unwrap(), errors.join().unwrap());
+            // "1 passed": a probe name that matched nothing would pass too.
+            assert!(
+                status.success() && out.contains("1 passed"),
+                "the probe failed ({status}):\n{out}\n{errors}"
+            );
+        }
+
+        #[test]
+        #[ignore = "run only by a_shell_sees_the_users_environment_without_what_a_launcher_leaked"]
+        fn shell_environment_probe() {
+            if std::env::var_os(ENVIRONMENT_PROBE).is_none() {
+                return;
+            }
+            with_watchdog(|| {
+                let (session, seen) = spawn(Arc::new(AtomicBool::new(false)));
+                let mut wrong = Vec::new();
+                for (name, _, expected) in planted() {
+                    type_line(&session, &print_variable(name));
+                    wait_for(name, || shown_value(&output_of(&seen), name).is_some());
+                    let shown = shown_value(&output_of(&seen), name).unwrap();
+                    if shown != expected {
+                        wrong.push(format!("{name}: saw {shown:?}, expected {expected:?}"));
+                    }
+                }
+                session.end();
+                assert!(wrong.is_empty(), "{}", wrong.join("\n"));
             });
         }
 

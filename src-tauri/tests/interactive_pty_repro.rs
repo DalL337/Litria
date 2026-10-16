@@ -35,9 +35,10 @@
 // Strategy: drive the same portable-pty spawn shape the app uses
 // (terminal_pty::spawn_pty), but with the reader as a plain thread capturing
 // into a buffer, and the environment built three ways to isolate the trigger:
-//   app      — allowlist-filtered + forced TERM/COLORTERM (exact app behavior;
-//              mirror of terminal_policy::build_pty_environment, which is
-//              pub(crate) and out of reach for an integration test)
+//   app      — allowlist-filtered + forced TERM/COLORTERM (what the app was
+//              believed to do in 2026-07; it only overlaid those keys on the
+//              inherited environment, and since 2026-10-15 (gap G1) it
+//              inherits by design, minus terminal_policy::launcher_leaks)
 //   app_no_term — allowlist-filtered, WITHOUT the forced TERM trio
 //   full     — full inherited environment (what VS Code's terminal does)
 
