@@ -45,7 +45,13 @@ class TextModel {
     const before = this.value.slice(0, offset).split('\\n');
     return { lineNumber: before.length, column: before[before.length - 1].length + 1 };
   }
+  // Undo boundaries, as Monaco's pushStackElement: the journal records each
+  // boundary and each edit in order, so a test can see undo steps.
+  pushStackElement() {
+    this.journal = (this.journal ?? []).concat(['stop']);
+  }
   pushEditOperations(_selections, edits) {
+    this.journal = (this.journal ?? []).concat(['edit']);
     this.pushed = (this.pushed ?? []).concat([edits]);
     const ordered = edits
       .map((edit) => ({

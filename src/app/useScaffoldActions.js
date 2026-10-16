@@ -17,6 +17,9 @@ export function useScaffoldActions({
   normalizePath,
   piecesByFilename,
   readProjectFile,
+  // T3a: the read that also answers the file's stamp. Optional; without it
+  // pieces carry no stamp and the check of open files reads them once.
+  readProjectFileWithRevision = null,
   getBasename,
   addPiece,
   openForPiece,
@@ -40,13 +43,22 @@ export function useScaffoldActions({
   groups = [],
   pieceWidth = 160
 }) {
+  // A file's text and its stamp (T3a), or empty text and no stamp.
+  const readWithStamp = useCallback(async (normalized) => {
+    if (readProjectFileWithRevision) {
+      const read = await readProjectFileWithRevision(projectRootPath, normalized);
+      return typeof read?.text === 'string' ? { code: read.text, diskStamp: read.stamp ?? null } : { code: '', diskStamp: null };
+    }
+    const diskCode = await readProjectFile(projectRootPath, normalized);
+    return { code: typeof diskCode === 'string' ? diskCode : '', diskStamp: null };
+  }, [projectRootPath, readProjectFile, readProjectFileWithRevision]);
+
   const createPieceFromFile = useCallback(async (relativePath) => {
     if (!projectRootPath) return null;
     const normalized = normalizePath(relativePath);
     const existing = piecesByFilename.get(normalized);
     if (existing) return existing;
-    const diskCode = await readProjectFile(projectRootPath, normalized);
-    const code = typeof diskCode === 'string' ? diskCode : '';
+    const { code, diskStamp } = await readWithStamp(normalized);
     const label = getBasename(normalized);
     // Create the SQLite row first to get the authoritative piece id, mirroring
     // usePieceUiActions.handleCreatePiece. A client-only id (the old behavior)
@@ -65,9 +77,10 @@ export function useScaffoldActions({
       filename: normalized,
       label,
       code,
-      workingCode: code
+      workingCode: code,
+      diskStamp
     });
-  }, [addPiece, getBasename, normalizePath, piecesByFilename, projectRootPath, readProjectFile]);
+  }, [addPiece, getBasename, normalizePath, piecesByFilename, projectRootPath, readWithStamp]);
 
   const handleScaffoldOpenFolder = useCallback(async (folderPath) => {
     if (!projectRootPath || !folderPath || !listTree) return;
@@ -157,10 +170,9 @@ export function useScaffoldActions({
         // Already on canvas — include in group but don't re-create.
         filesToCreate.push({ existing, normalized });
       } else {
-        const diskCode = await readProjectFile(projectRootPath, normalized);
-        const code = typeof diskCode === 'string' ? diskCode : '';
+        const { code, diskStamp } = await readWithStamp(normalized);
         const label = getBasename(normalized);
-        filesToCreate.push({ normalized, label, code, existing: null });
+        filesToCreate.push({ normalized, label, code, diskStamp, existing: null });
       }
     }
 
@@ -207,6 +219,7 @@ export function useScaffoldActions({
         label: item.label,
         code: item.code,
         workingCode: item.code,
+        diskStamp: item.diskStamp ?? null,
         x: gridPositions[i].x,
         y: gridPositions[i].y
       })));
@@ -258,7 +271,7 @@ export function useScaffoldActions({
     } catch (e) {
       console.warn('[scaffold] folder group persistence failed:', e);
     }
-  }, [defaultFolderGroupColor, getBasename, getSpawnPosition, groupDomain, groups, listTree, normalizePath, pieceDomain, pieceWidth, piecesByFilename, projectRootPath, readProjectFile]);
+  }, [defaultFolderGroupColor, getBasename, getSpawnPosition, groupDomain, groups, listTree, normalizePath, pieceDomain, pieceWidth, piecesByFilename, projectRootPath, readWithStamp]);
 
   const handleScaffoldSelectEntry = useCallback((entry) => {
     if (!entry) return;

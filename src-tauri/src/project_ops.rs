@@ -21,6 +21,27 @@ pub(crate) fn read_project_file(root_path: &str, relative_path: &str) -> Command
 pub(crate) struct FileWithRevision {
     pub text: String,
     pub revision: String,
+    /// The file's stamp, taken before the bytes were read (see [`stamp_of`]):
+    /// a change during the read leaves a newer stamp, so the next check of
+    /// the stamps reads the file again. `None` if it could not be taken.
+    pub stamp: Option<String>,
+}
+
+/// A cheap fingerprint of a file on disk, its size and modification time, as
+/// an opaque token: equal tokens mean "probably unchanged", and anything else
+/// means "read it again" (track T slice T3a). Nanoseconds do not fit a
+/// JavaScript number, so the frontend only ever compares tokens.
+///
+/// Two writes of the same size within one tick of the filesystem's clock
+/// produce the same token; a save still compares the revision itself, so a
+/// change the stamps miss is never overwritten.
+pub(crate) fn stamp_of(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let modified = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}:{}.{:09}", metadata.len(), modified.as_secs(), modified.subsec_nanos()))
 }
 
 /// Read a project file together with its disk revision (Project API brief
@@ -37,12 +58,146 @@ pub(crate) fn read_project_file_with_revision(
     let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
     let target =
         path_guard::resolve_existing_relative_path(&root, relative_path).map_err(CommandError::from_text)?;
+    let stamp = stamp_of(&target);
     let bytes = fs::read(&target)
         .map_err(|error| CommandError::from_io("project_file.read", &error, "Unable to read project file"))?;
     let revision = crate::project_api::reader::disk_revision(&bytes);
     let text = String::from_utf8(bytes)
         .map_err(|_| CommandError::from_text("Unable to read project file: not valid UTF-8"))?;
-    Ok(FileWithRevision { text, revision })
+    Ok(FileWithRevision { text, revision, stamp })
+}
+
+/// What a save expects on disk before it replaces the file (track T slice
+/// T3a): the disk version the saved text was based on. The editor sends that
+/// version's text (a canvas piece holds the exact text read from disk), not a
+/// revision: the frontend has no synchronous hash, and a text that no longer
+/// matches the disk only ever fails toward `Changed`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum SaveBase {
+    /// The disk still holds exactly this text.
+    Text { text: String },
+    /// Nothing has the name: the file was deleted, and the person chose to
+    /// keep their version.
+    Absent,
+}
+
+/// What `save_project_file` did.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub(crate) enum SaveOutcome {
+    /// Written. `revision` is the saved text's; `stamp` the file's afterwards,
+    /// or `None` if another write landed before it could be taken.
+    Saved { revision: String, stamp: Option<String> },
+    /// The disk no longer holds the base, so nothing was written. `disk` is
+    /// the revision there now, or `None` if nothing has the name.
+    Changed { disk: Option<String> },
+}
+
+/// The revision on disk at `target`, or `None` if nothing has the name.
+fn current_revision(target: &Path) -> Result<Option<String>, String> {
+    match fs::read(target) {
+        Ok(bytes) => Ok(Some(crate::project_api::reader::disk_revision(&bytes))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Unable to read the file on disk: {error}")),
+    }
+}
+
+fn holds(base: &SaveBase, current: Option<&str>) -> bool {
+    match base {
+        SaveBase::Text { text } => current == Some(crate::project_api::reader::disk_revision(text.as_bytes()).as_str()),
+        SaveBase::Absent => current.is_none(),
+    }
+}
+
+/// Save a tab's text only if the disk still holds the version that text was
+/// based on (track T slice T3a). Another program's newer version is never
+/// overwritten: the answer is `Changed`, and the editor offers the choice.
+///
+/// The disk is compared twice: before anything is written (most changes end
+/// there), and again once the new content is durable beside the file,
+/// immediately before it replaces it (`write_ops::replace_string_if`). The
+/// app's write lock covers this process only; another program writing between
+/// that last check and the rename is the residual window.
+pub(crate) fn save_project_file(
+    root_path: &str,
+    relative_path: &str,
+    contents: &str,
+    base: &SaveBase,
+) -> CommandResult<SaveOutcome> {
+    write_ops::with_write_lock(|| save_project_file_with(root_path, relative_path, contents, base, &mut || {}))
+}
+
+/// `before_replace` runs just before the last check: the tests' window for
+/// another program's write.
+fn save_project_file_with(
+    root_path: &str,
+    relative_path: &str,
+    contents: &str,
+    base: &SaveBase,
+    before_replace: &mut dyn FnMut(),
+) -> CommandResult<SaveOutcome> {
+    let root = path_guard::ensure_project_root(root_path).map_err(CommandError::from_text)?;
+    let target =
+        path_guard::resolve_relative_path_for_write(&root, relative_path).map_err(CommandError::from_text)?;
+    let current = current_revision(&target).map_err(CommandError::from_text)?;
+    if !holds(base, current.as_deref()) {
+        return Ok(SaveOutcome::Changed { disk: current });
+    }
+    let mut seen = None;
+    let replaced = write_ops::replace_string_if(&target, contents, &mut || {
+        before_replace();
+        let now = current_revision(&target)?;
+        let still = holds(base, now.as_deref());
+        seen = Some(now);
+        Ok(still)
+    });
+    match replaced {
+        Ok(()) => {}
+        Err(write_ops::ReplaceError::Refused) => {
+            return Ok(SaveOutcome::Changed { disk: seen.flatten() });
+        }
+        Err(write_ops::ReplaceError::Failed(error)) => {
+            return Err(CommandError::from_text(format!("Unable to write project file: {error}")));
+        }
+    }
+    let revision = crate::project_api::reader::disk_revision(contents.as_bytes());
+    // The stamp must describe these bytes: if another write already landed,
+    // record none, so the next check of the stamps reads the file again.
+    let stamp = stamp_of(&target).filter(|_| current_revision(&target).ok().flatten().as_deref() == Some(&revision));
+    Ok(SaveOutcome::Saved { revision, stamp })
+}
+
+/// The most paths one `project_files_stamps` call takes.
+pub(crate) const MAX_STAMPED_PATHS: usize = 2048;
+
+/// One path's stamp, for the editor's check of open files (track T T3a).
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PathStamp {
+    pub path: String,
+    /// `None`: nothing readable has the name (deleted, or not a file).
+    pub stamp: Option<String>,
+}
+
+/// The stamps of `paths` in the project, in order. A path outside the project,
+/// or one that no longer resolves, reads as missing. Reads metadata only.
+pub(crate) fn project_files_stamps(root_path: &str, paths: &[String]) -> CommandResult<Vec<PathStamp>> {
+    if paths.len() > MAX_STAMPED_PATHS {
+        return Err(CommandError::from_text(format!(
+            "Too many paths to check at once (the limit is {MAX_STAMPED_PATHS})."
+        )));
+    }
+    let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;
+    Ok(paths
+        .iter()
+        .map(|path| PathStamp {
+            path: path.clone(),
+            stamp: path_guard::resolve_existing_relative_path(&root, path)
+                .ok()
+                .and_then(|target| stamp_of(&target)),
+        })
+        .collect())
 }
 
 pub(crate) fn write_project_file(root_path: &str, relative_path: &str, contents: &str) -> CommandResult<()> {
@@ -133,6 +288,8 @@ fn create_project_file_with(
 
 #[cfg(test)]
 mod create_tests;
+#[cfg(test)]
+mod save_tests;
 
 pub(crate) fn list_project_tree(root_path: &str) -> CommandResult<Vec<ProjectTreeEntry>> {
     let root = path_guard::resolve_project_root(root_path).map_err(CommandError::from_text)?;

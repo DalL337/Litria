@@ -82,6 +82,10 @@ const SHELL_COMPOSITION_MANIFEST = new Set([
   // Interrupted agent changes (Project API build plan W4b) — same first-open
   // pill shape; the wording is pure (src/app/interruptedOperations.js).
   './app/useInterruptedOperationsNotice',
+  // Files changed outside Litria (track T slice T3a) — a per-load check of
+  // the canvas files' stamps, with a choice pill; the judgement is pure
+  // (src/app/diskChanges.js).
+  './app/useDiskChanges',
   // Managed-server install offers (ADR-005 A3) — file-open reconciler pill.
   './app/useManagedServerOffers',
   // Go class-3 toolchain offer (ADR-005 Slice 6.5) — same file-open pill shape.

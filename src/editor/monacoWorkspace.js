@@ -298,6 +298,10 @@ export function applySessionText(tabId, text, context) {
   const to = model.getPositionAt(span.endBefore);
   applyingSessionText = true;
   try {
+    // Its own undo step (T3a): never merged into the person's last typing,
+    // so one undo takes back exactly this text (an agent's edit, or a version
+    // from disk) and leaves what was there before.
+    model.pushStackElement();
     model.pushEditOperations(
       [],
       [{
@@ -311,6 +315,7 @@ export function applySessionText(tabId, text, context) {
       }],
       () => null
     );
+    model.pushStackElement();
   } finally {
     applyingSessionText = false;
   }

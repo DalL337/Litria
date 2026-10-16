@@ -547,6 +547,26 @@ export function editorSessionReducer(state, action) {
         }
       };
     }
+    // Track T slice T3a: another program changed the file. `code` is the
+    // version now on disk, the tab's new saved text; `workingCode` is what the
+    // tab shows (the same text, or the person's own kept on top of it).
+    // `onlyIfClean`: a reload of a tab with no unsaved changes, refused if the
+    // tab has changes by the time it lands (the notice offers the choice
+    // instead).
+    case 'TAKE_DISK_VERSION': {
+      const current = state.tabsById[action.tabId];
+      if (!current || typeof action.code !== 'string') return state;
+      if (action.onlyIfClean && !areEditorTextsEqual(current.workingCode, current.code)) return state;
+      const code = normalizeEditorText(action.code);
+      const workingCode = typeof action.workingCode === 'string' ? normalizeEditorText(action.workingCode) : code;
+      return {
+        ...state,
+        tabsById: {
+          ...state.tabsById,
+          [action.tabId]: { ...current, code, workingCode }
+        }
+      };
+    }
     case 'SAVE_TAB': {
       const current = state.tabsById[action.tabId];
       if (!current) return state;

@@ -165,6 +165,20 @@ test('session text reaches a live model as one edit over the changed span, with 
   notified.length = 0;
 });
 
+/** T3a: a version from disk (or an agent's edit) is one undo step of its own,
+ *  never merged into the person's last typing. */
+test('session text reaches the model as its own undo step', () => {
+  const ctx = context();
+  const model = ws.acquireModel({ id: 108, filename: 'src/undo.ts', workingCode: 'mine\n' }, ctx);
+  model.journal = [];
+  ws.applySessionText(108, 'theirs\n', ctx);
+  ws.applySessionText(108, 'mine\n', ctx);
+  assert.deepEqual(model.journal, ['stop', 'edit', 'stop', 'stop', 'edit', 'stop']);
+  assert.equal(model.getValue(), 'mine\n');
+  ws.releaseClosedTabs([], ctx);
+  notified.length = 0;
+});
+
 test('the changed span never splits a surrogate pair', () => {
   const ctx = context();
   const model = ws.acquireModel({ id: 107, filename: 'notes.txt', workingCode: 'x\u{1F600}y' }, ctx);

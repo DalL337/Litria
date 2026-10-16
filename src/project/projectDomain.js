@@ -5,8 +5,10 @@ import {
   listProjectTree,
   moveProjectPath,
   openFileDialog,
+  projectFilesStamps,
   readProjectFile,
   readProjectFileWithRevision,
+  saveProjectFile,
   writeProjectFile
 } from './storage.js';
 
@@ -25,6 +27,8 @@ export function createProjectDomain({
     readFileWithRevision: adapters.readFileWithRevision ?? readProjectFileWithRevision,
     openFileDialog: adapters.openFileDialog ?? openFileDialog,
     writeFile: adapters.writeFile ?? writeProjectFile,
+    saveFile: adapters.saveFile ?? saveProjectFile,
+    filesStamps: adapters.filesStamps ?? projectFilesStamps,
     movePath: adapters.movePath ?? moveProjectPath,
     deletePath: adapters.deletePath ?? deleteProjectPath,
     listTree: adapters.listTree ?? listProjectTree,
@@ -48,6 +52,13 @@ export function createProjectDomain({
       },
       writeFile(rootPath, relativePath, contents) {
         return io.writeFile(rootPath, relativePath, contents);
+      },
+      // T3a: a save that never overwrites a newer version on disk.
+      saveFile(rootPath, relativePath, contents, base) {
+        return io.saveFile(rootPath, relativePath, contents, base);
+      },
+      filesStamps(rootPath, paths) {
+        return io.filesStamps(rootPath, paths);
       },
       movePath(rootPath, fromRelative, toRelative) {
         return io.movePath(rootPath, fromRelative, toRelative);

@@ -22,9 +22,11 @@ import { emitPersistenceWriteFailure } from './persistenceFailures.js';
 import { getWorkspaceEpoch } from './dbStorage.js';
 import {
   applySavedPieceBaseline,
+  diskBaseOf,
   noSaveTargetOutcome,
   resolveSaveOutcome
 } from './saveOutcome.js';
+import { beginSave, noteSavedText, reportDiskConflict } from './diskConflicts.js';
 
 /**
  * useProjectPersistence — hydrates canvas state from the SQLite workspace DB
@@ -73,6 +75,9 @@ export function useProjectPersistence({
   // Manager-backed content writer (useManagerFileWriter): tab saves route
   // through the filesystem write manager like every other project write.
   writeProjectFile,
+  // T3a: the conditional save (useManagerFileWriter's saveContentFile). Tab
+  // saves use it whenever the tab's piece is known.
+  saveProjectFile = null,
   // Launcher "New File" flow: non-null only while the session is untitled
   // (useUntitledSaveAs pre-gates it) — editor saves then route through this
   // Save As resolver instead of onSaveTab.
@@ -117,14 +122,17 @@ export function useProjectPersistence({
   // State follows disk: capture one snapshot, attempt the write, and advance
   // the piece baseline only after explicit success. The live workingCode is
   // preserved so keystrokes made while the write is in flight remain dirty.
+  //
+  // T3a: the save writes only if the disk still holds the version the tab's
+  // text was based on (the piece's own text, read from disk). A newer version
+  // on disk is reported, never overwritten, and the tab stays dirty.
   const persistSavedTab = useCallback(async (tab) => {
     if (!tab) return false;
     const savedCode = typeof tab.workingCode === 'string' ? tab.workingCode : '';
     const rootPath = projectInstance?.rootPath;
     const normalizedPieceId = normalizeId(tab.pieceId);
-    const relativePath = piecesById.get(tab.pieceId)?.filename
-      ?? piecesById.get(normalizedPieceId)?.filename
-      ?? tab.filename;
+    const piece = piecesById.get(tab.pieceId) ?? piecesById.get(normalizedPieceId) ?? null;
+    const relativePath = piece?.filename ?? tab.filename;
 
     if (!rootPath || !relativePath) {
       const outcome = noSaveTargetOutcome(relativePath);
@@ -133,10 +141,26 @@ export function useProjectPersistence({
       return false;
     }
 
+    // A save may carry its own base (T3a: recreating a file another program
+    // deleted, or keeping one's own version over theirs).
+    const base = saveProjectFile ? (tab.diskBase ?? diskBaseOf(piece)) : null;
+    const saveKey = piece?.id ?? tab.pieceId;
+    const released = beginSave(saveKey);
     let outcome;
+    let disk = null;
     try {
       projectDomain.commands.clearLastStorageError?.();
-      const managerResult = await writeProjectFile(rootPath, relativePath, savedCode);
+      const managerResult = base
+        ? await saveProjectFile(rootPath, relativePath, savedCode, base)
+        : await writeProjectFile(rootPath, relativePath, savedCode);
+      if (managerResult?.success === true && managerResult.outcome?.outcome === 'changed') {
+        reportDiskConflict({ pieceId: saveKey, filename: relativePath, disk: managerResult.outcome.disk ?? null });
+        return false;
+      }
+      if (managerResult?.success === true && managerResult.outcome?.outcome === 'saved') {
+        disk = { stamp: managerResult.outcome.stamp ?? null };
+        noteSavedText(saveKey, savedCode);
+      }
       outcome = resolveSaveOutcome({
         managerResult,
         relativePath,
@@ -144,6 +168,8 @@ export function useProjectPersistence({
       });
     } catch (error) {
       outcome = resolveSaveOutcome({ thrownError: error, relativePath });
+    } finally {
+      released();
     }
 
     if (!outcome.saved) {
@@ -152,9 +178,9 @@ export function useProjectPersistence({
       return false;
     }
 
-    setPieces((prev) => applySavedPieceBaseline(prev, tab.pieceId, savedCode, sameId));
+    setPieces((prev) => applySavedPieceBaseline(prev, tab.pieceId, savedCode, sameId, disk));
     return true;
-  }, [normalizeId, piecesById, projectDomain.commands, projectInstance?.rootPath, sameId, setPieces, writeProjectFile]);
+  }, [normalizeId, piecesById, projectDomain.commands, projectInstance?.rootPath, sameId, saveProjectFile, setPieces, writeProjectFile]);
 
   const persistSavedTabs = useCallback(async (tabs) => {
     if (!tabs?.length) return [];
@@ -316,7 +342,10 @@ export function useProjectPersistence({
     }
 
     // Load file contents from disk asynchronously (file contents are not in DB)
+    // T3a: with each file's stamp, so the check of open files can tell when
+    // another program changes it.
     (async () => {
+      const readWithStamp = projectDomain.commands.readFileWithRevision;
       const readFile = projectDomain.commands.readFile;
       const updated = [];
       for (const piece of withAdjacency) {
@@ -324,9 +353,11 @@ export function useProjectPersistence({
           updated.push(piece);
           continue;
         }
-        const diskCode = await readFile(projectInstance.rootPath, piece.filename);
-        if (typeof diskCode === 'string') {
-          updated.push({ ...piece, code: diskCode, workingCode: diskCode });
+        const read = readWithStamp
+          ? await readWithStamp(projectInstance.rootPath, piece.filename)
+          : { text: await readFile(projectInstance.rootPath, piece.filename), stamp: null };
+        if (typeof read?.text === 'string') {
+          updated.push({ ...piece, code: read.text, workingCode: read.text, diskStamp: read.stamp ?? null });
         } else {
           updated.push(piece);
         }

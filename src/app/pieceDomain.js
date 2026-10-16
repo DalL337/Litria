@@ -20,7 +20,9 @@ export function createPieceDomain({
 
   return {
     commands: {
-      createPiece({ filename, label, code = '', workingCode = null, id: preassignedId = null, x: explicitX, y: explicitY }) {
+      // `diskStamp` (T3a): the file's stamp when `code` was read from disk, so
+      // the check of open files can tell when another program changes it.
+      createPiece({ filename, label, code = '', workingCode = null, id: preassignedId = null, x: explicitX, y: explicitY, diskStamp = null }) {
         // Explicit coordinates win (caller already computed the spawn point —
         // e.g. usePieceUiActions, which persists the same coords to SQLite so
         // the DB row and the in-memory piece can't diverge). Otherwise anchor
@@ -38,6 +40,7 @@ export function createPieceDomain({
           color: null,
           code,
           workingCode: typeof workingCode === 'string' ? workingCode : code,
+          diskStamp,
           scale: 1,
           isSpawning: true,
           adjacentTo: { top: null, right: null, bottom: null, left: null },
@@ -80,6 +83,7 @@ export function createPieceDomain({
             color: null,
             code: item.code ?? '',
             workingCode: typeof item.workingCode === 'string' ? item.workingCode : (item.code ?? ''),
+            diskStamp: item.diskStamp ?? null,
             scale: 1,
             isSpawning: false,
             adjacentTo: { top: null, right: null, bottom: null, left: null },

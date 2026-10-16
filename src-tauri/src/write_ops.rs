@@ -143,8 +143,56 @@ fn atomic_write_string_with_options(
         content,
         backup_path,
         simulate_interrupt_after_temp_fsync,
+        &mut || Ok(()),
         &mut |from, to| fs::rename(from, to),
     )
+}
+
+/// Why `replace_string_if` did not replace the file.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReplaceError {
+    /// The caller's check said the file is no longer what it expected.
+    /// Nothing was replaced and the temp file is removed.
+    Refused,
+    /// Anything else, as `atomic_write_string` reports it.
+    Failed(String),
+}
+
+/// Replace `path` with `content` only if `still_current` says the file on
+/// disk is still the one the caller expects (track T slice T3a: a save never
+/// overwrites a newer version on disk).
+///
+/// The content is written and fsynced beside the target first; `still_current`
+/// runs after that and immediately before the rename, so the window in which
+/// another process could change the file unseen is the check and the rename
+/// alone, not the write and its fsync. No platform offers a replace that fails
+/// when the target changed, so that window is narrowed, not closed.
+pub(crate) fn replace_string_if(
+    path: &Path,
+    content: &str,
+    still_current: &mut dyn FnMut() -> Result<bool, String>,
+) -> Result<(), ReplaceError> {
+    let refused = std::cell::Cell::new(false);
+    let written = atomic_write_string_inner(
+        path,
+        content,
+        None,
+        false,
+        &mut || match still_current() {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                refused.set(true);
+                Err("the file changed on disk".into())
+            }
+            Err(error) => Err(error),
+        },
+        &mut |from, to| fs::rename(from, to),
+    );
+    match written {
+        Ok(()) => Ok(()),
+        Err(_) if refused.get() => Err(ReplaceError::Refused),
+        Err(error) => Err(ReplaceError::Failed(error)),
+    }
 }
 
 fn atomic_write_string_inner(
@@ -152,6 +200,7 @@ fn atomic_write_string_inner(
     content: &str,
     backup_path: Option<&Path>,
     simulate_interrupt_after_temp_fsync: bool,
+    before_replace: &mut dyn FnMut() -> Result<(), String>,
     rename: &mut dyn FnMut(&Path, &Path) -> io::Result<()>,
 ) -> Result<(), String> {
     let parent = parent_dir(path)?;
@@ -185,6 +234,10 @@ fn atomic_write_string_inner(
 
         Ok(())
     })();
+
+    // The caller's last check, now that only the rename remains. A refusal
+    // leaves the target as it is.
+    let prepared = prepared.and_then(|()| before_replace());
 
     if let Err(error) = prepared {
         if temp_path.exists() {
@@ -487,6 +540,7 @@ mod tests {
             "REPLACEMENT",
             None,
             false,
+            &mut || Ok(()),
             &mut always_failing_rename(),
         )
         .expect_err("a failing rename must surface as an error");
@@ -580,5 +634,60 @@ mod tests {
         remove_temp_artifacts(&target);
         let parent = target.parent().expect("must have parent");
         fs::remove_dir_all(parent).expect("must remove temp directory");
+    }
+
+    // --- T3a: replace only if the file is still the one expected ---------------
+
+    fn leftover_temps(target: &Path) -> usize {
+        let prefix = format!(".{}.cmtmp-", target.file_name().unwrap().to_string_lossy());
+        fs::read_dir(target.parent().unwrap())
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().starts_with(&prefix))
+            .count()
+    }
+
+    #[test]
+    fn a_conditional_replace_writes_when_the_file_is_still_current() {
+        let target = temp_file_path("t3a-current", "a.ts");
+        fs::write(&target, "ORIGINAL").unwrap();
+        let mut asked = 0;
+        replace_string_if(&target, "MINE", &mut || {
+            asked += 1;
+            // The check runs once the replacement is ready beside the target.
+            assert_eq!(leftover_temps(&target), 1);
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(asked, 1);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "MINE");
+        assert_eq!(leftover_temps(&target), 0);
+        fs::remove_dir_all(target.parent().unwrap()).unwrap();
+    }
+
+    /// Another program wrote the file while the replacement was being made:
+    /// the check sees it and nothing is replaced.
+    #[test]
+    fn a_conditional_replace_leaves_a_changed_file_alone() {
+        let target = temp_file_path("t3a-changed", "a.ts");
+        fs::write(&target, "ORIGINAL").unwrap();
+        let outcome = replace_string_if(&target, "MINE", &mut || {
+            fs::write(&target, "THEIRS").unwrap();
+            Ok(fs::read_to_string(&target).unwrap() == "ORIGINAL")
+        });
+        assert_eq!(outcome, Err(ReplaceError::Refused));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "THEIRS");
+        assert_eq!(leftover_temps(&target), 0, "the replacement is removed");
+        fs::remove_dir_all(target.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_failing_check_is_a_failure_not_a_refusal() {
+        let target = temp_file_path("t3a-failing", "a.ts");
+        fs::write(&target, "ORIGINAL").unwrap();
+        let outcome = replace_string_if(&target, "MINE", &mut || Err("could not read".into()));
+        assert_eq!(outcome, Err(ReplaceError::Failed("could not read".into())));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "ORIGINAL");
+        assert_eq!(leftover_temps(&target), 0);
+        fs::remove_dir_all(target.parent().unwrap()).unwrap();
     }
 }

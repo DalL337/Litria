@@ -92,9 +92,27 @@ export function noSaveTargetOutcome(relativePath = null) {
   };
 }
 
-/** Advance only the saved baseline; never overwrite a newer live buffer. */
-export function applySavedPieceBaseline(pieces, pieceId, savedCode, sameId = Object.is) {
-  return (pieces ?? []).map((piece) => (
-    sameId(piece.id, pieceId) ? { ...piece, code: savedCode } : piece
-  ));
+/**
+ * Advance only the saved baseline; never overwrite a newer live buffer.
+ * `disk` (T3a) is what the save left on disk: its stamp, so the check of open
+ * files does not take this write for another program's.
+ */
+export function applySavedPieceBaseline(pieces, pieceId, savedCode, sameId = Object.is, disk = null) {
+  return (pieces ?? []).map((piece) => {
+    if (!sameId(piece.id, pieceId)) return piece;
+    if (!disk) return { ...piece, code: savedCode };
+    return { ...piece, code: savedCode, diskStamp: disk.stamp ?? null };
+  });
+}
+
+/**
+ * What a save of `piece` expects on disk (track T slice T3a): the exact text
+ * its saved state was read from disk as (a piece keeps it, line endings
+ * included). Null without a piece: the save then writes as before. A save
+ * that recreates a file another program deleted passes `{ kind: 'absent' }`
+ * itself, for that one save (the person's choice).
+ */
+export function diskBaseOf(piece) {
+  if (!piece) return null;
+  return { kind: 'text', text: typeof piece.code === 'string' ? piece.code : '' };
 }

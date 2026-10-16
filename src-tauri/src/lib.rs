@@ -88,6 +88,8 @@ pub fn run() {
             commands::open_file_dialog,
             commands::write_project_file,
             commands::create_project_file,
+            commands::save_project_file,
+            commands::project_files_stamps,
             commands::list_project_tree,
             commands::move_project_path,
             commands::create_project_directory,

@@ -17,6 +17,7 @@ import {
   SIDE_PANE,
   planBufferEdit,
   getSessionDocumentsByPath,
+  normalizeEditorText,
   sessionPathOf
 } from './editorSessionDomain.js';
 import { saveOneTab, saveTabsFromBatch, saveTabsSequentially } from './saveCoordinator.js';
@@ -157,6 +158,29 @@ export function EditorSessionProvider({ children }) {
     return held && held.state !== 'closedClean' ? bufferRevision(held.text) : null;
   }, []);
 
+  /**
+   * Another program changed the file (track T slice T3a): take the version
+   * now on disk, `code`, as the tab's saved text. Each text reaches the live
+   * editor document as its own undo step, so nothing is lost:
+   * - plain (Load theirs, or a reload): the tab shows their version, and one
+   *   undo brings back what it showed;
+   * - `keepMine`: their version goes in, then the tab's own text on top, so
+   *   the tab stays dirty against their version and one undo shows theirs.
+   * `onlyIfClean`: a reload, refused if the tab has unsaved changes now.
+   * Returns whether it was taken.
+   */
+  const takeDiskVersion = useCallback((tabId, { code, keepMine = false, onlyIfClean = false }) => {
+    const tab = latestRef.current.tabsById[tabId];
+    if (!tab || typeof code !== 'string') return false;
+    if (onlyIfClean && !areEditorTextsEqual(tab.workingCode, tab.code)) return false;
+    const mine = tab.workingCode;
+    const theirs = normalizeEditorText(code);
+    dispatch({ type: 'TAKE_DISK_VERSION', tabId, code, workingCode: keepMine ? mine : theirs, onlyIfClean });
+    applyBufferText(tabId, theirs);
+    if (keepMine) applyBufferText(tabId, mine);
+    return true;
+  }, [dispatch]);
+
   const openInBackground = useCallback((piece, { code, text }) => {
     const held = getSessionDocumentsByPath(latestRef.current).get(sessionPathOf(piece));
     if (held && held.state !== 'closedClean') {
@@ -172,9 +196,12 @@ export function EditorSessionProvider({ children }) {
     dispatch({ type: 'CLOSE_TAB', tabId });
   }, []);
 
-  const saveTab = useCallback((tabId) => {
-    const tab = state.tabsById[tabId];
-    if (!tab) return null;
+  // `diskBase` (T3a): what this one save expects on disk, when the person
+  // chose it (keep my version over theirs, or save a deleted file again).
+  const saveTab = useCallback((tabId, { diskBase = null } = {}) => {
+    const current = state.tabsById[tabId];
+    if (!current) return null;
+    const tab = diskBase ? { ...current, diskBase } : current;
     // Untitled session (launcher New File): the resolver owns the disk write —
     // Save As dialog until a root exists. The tab is only marked clean on
     // confirmed success: a canceled
@@ -325,6 +352,7 @@ export function EditorSessionProvider({ children }) {
     checkBufferEdit,
     heldRevision,
     openInBackground,
+    takeDiskVersion,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,
@@ -361,6 +389,7 @@ export function EditorSessionProvider({ children }) {
     checkBufferEdit,
     heldRevision,
     openInBackground,
+    takeDiskVersion,
     isTabDirty,
     hasDirtyTabs,
     dirtyPieceIds,
