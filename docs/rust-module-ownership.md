@@ -115,11 +115,11 @@ The command inventory, with each command's frontend caller, is in [rust-command-
 - `mcp_connection/` *(added 2026-10-15, track T slice T1a)*
   - How an agent Litria started reaches the Project API: the agent runs `litria --mcp-helper` as a stdio MCP server; the helper connects to the app's local endpoint and presents its session's token; the app serves MCP on that connection. Plan: `docs/plans/agent-integration/track-t-build-plan.md` (T1a).
   - `endpoint/`: the local channel, a named pipe on Windows (DACL for the current user only, remote clients rejected, first instance exclusive, overlapped I/O) and a Unix socket in a fresh `0700` directory. Reads take a deadline and can be cancelled from another thread.
-  - `sessions.rs`: agent sessions and their tokens. Only a token's SHA-256 is kept. A session is bound to one project open (its workspace epoch) and ends for good when that project closes, when it is ended, or when Litria exits. Every refusal reads the same.
-  - `server.rs`: one connection, from the token hello to its close; newline framing capped while reading; the session re-checked before every message and on an idle tick.
-  - `protocol.rs`: the MCP conversation (the `initialize` handshake revisions, `ping`, `tools/list`; `tools/call` from T1b).
+  - `sessions.rs`: agent sessions and their tokens. Only a token's SHA-256 is kept. A session is bound to one project open (its workspace epoch) and ends for good when that project closes, when it is ended, or when Litria exits. Every refusal reads the same. *(T1b)* Each session is its own agent principal, and builds the context its calls run in.
+  - `server.rs`: one connection, from the token hello to its close; newline framing capped while reading (since T1b, at a call's budget plus its envelope); the session re-checked before every message and on an idle tick. *(T1b)* Tool calls run on worker threads beside the reading, a few per connection; the service's running calls drain before quitting ends the sessions.
+  - `protocol.rs`: the MCP conversation (the `initialize` handshake revisions, `ping`, `tools/list`, and since T1b `tools/call` and cancellation); a message naming a key twice is refused before it is parsed.
   - `helper.rs`: the helper's relay between stdio and the endpoint.
-  - `mod.rs`: the one service (bound when the first session starts, one accept thread, the connection cap), the page-load and exit hooks, and the hidden debug-only `test_support` for `src-tauri/tests/mcp_helper.rs`.
+  - `mod.rs`: the one service (bound when the first session starts, one accept thread, the connection cap), the page-load and exit hooks, and the hidden debug-only `test_support` for `src-tauri/tests/mcp_helper.rs`. `calls_tests.rs` runs tool calls through the real endpoint against a real workspace.
   - It spawns nothing. Its only command adapters are the debug-only `project_api_dev_agent_session_start` and `project_api_dev_agent_session_end`; slice T2b starts sessions when it starts an agent.
 
 **Other**
