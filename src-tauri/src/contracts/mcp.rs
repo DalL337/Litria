@@ -153,7 +153,6 @@ pub(crate) fn tools_list(revision: Revision, grant: &Grant) -> Value {
 
 /// A `tools/call` request's `params`. `Ok` is a `CallToolResult`; `Err` is a
 /// JSON-RPC error object.
-#[cfg_attr(not(test), allow(dead_code))] // the connection answers tools/call from T1b
 pub(crate) fn tools_call(
     dispatcher: &Dispatcher,
     context: &CallContext,
@@ -176,8 +175,8 @@ pub(crate) fn tools_call(
 }
 
 /// One call with its arguments already encoded: the byte budget measures
-/// exactly these bytes.
-#[cfg_attr(not(test), allow(dead_code))] // the connection answers tools/call from T1b
+/// exactly these bytes. The connection has already bounded the raw message
+/// and refused any key named twice before this was parsed (track T, T1b).
 pub(crate) fn call_tool(
     dispatcher: &Dispatcher,
     context: &CallContext,
@@ -195,14 +194,20 @@ pub(crate) fn call_tool(
             ],
         )),
         Err(error) if error.code == ErrorCode::UnknownOperation => Err(protocol_error(&error.message)),
-        Err(error) => Ok(shaped(
-            revision,
-            [
-                ("content", json!([{ "type": "text", "text": error_text(&error) }])),
-                ("isError", Value::Bool(true)),
-            ],
-        )),
+        Err(error) => Ok(tool_error(revision, &error)),
     }
+}
+
+/// A contract failure as a tool execution error: `isError`, the error JSON as
+/// text content, and no `structuredContent`.
+pub(crate) fn tool_error(revision: Revision, error: &ContractError) -> Value {
+    shaped(
+        revision,
+        [
+            ("content", json!([{ "type": "text", "text": error_text(error) }])),
+            ("isError", Value::Bool(true)),
+        ],
+    )
 }
 
 /// A result object for `revision`: `resultType` first where the revision has
@@ -233,4 +238,4 @@ fn error_text(error: &ContractError) -> String {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod real_catalog;
+pub(crate) mod real_catalog;

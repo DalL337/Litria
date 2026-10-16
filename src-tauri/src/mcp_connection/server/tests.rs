@@ -17,6 +17,7 @@ const WAIT: Duration = Duration::from_secs(5);
 struct Rig {
     listener: Arc<Listener>,
     registry: Arc<Registry>,
+    calls: Arc<Calls>,
     open: Arc<AtomicUsize>,
 }
 
@@ -28,7 +29,12 @@ impl Rig {
             0 => None,
             n => Some(format!("ws-{n}")),
         }));
-        Self { listener: Arc::new(Listener::bind_new().unwrap()), registry: Arc::new(registry), open }
+        Self {
+            listener: Arc::new(Listener::bind_new().unwrap()),
+            registry: Arc::new(registry),
+            calls: Arc::new(Calls::default()),
+            open,
+        }
     }
 
     fn start(&self) -> (String, String) {
@@ -40,9 +46,11 @@ impl Rig {
     fn connect(&self) -> (Stream, JoinHandle<()>) {
         let listener = Arc::clone(&self.listener);
         let registry = Arc::clone(&self.registry);
+        let calls = Arc::clone(&self.calls);
         let serving = thread::spawn(move || {
             let stream = Arc::new(listener.accept().unwrap());
-            serve(stream, &registry, FAST);
+            let host = Host { registry: &registry, calls: &calls, dispatcher: crate::project_api::dispatcher() };
+            serve(stream, &host, FAST);
         });
         (Stream::connect(self.listener.address()).unwrap(), serving)
     }

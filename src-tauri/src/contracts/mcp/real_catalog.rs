@@ -24,16 +24,25 @@ use crate::project_api::bridge::{self, testing::answering};
 /// A workspace bound for one test, with the global bridge attached to the
 /// scripted frontend. Dropping it detaches, closes and deletes, even when an
 /// assertion fails.
-struct Bound {
-    root: PathBuf,
-    epoch: String,
+pub(crate) struct Bound {
+    pub(crate) root: PathBuf,
+    pub(crate) epoch: String,
     generation: Option<String>,
     // Last: released only after the workspace is closed.
     _serial: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Bound {
-    fn new(tag: &str) -> Self {
+    pub(crate) fn new(tag: &str) -> Self {
+        Self::with_owner(tag, owner)
+    }
+
+    /// The same workspace with another scripted frontend (track T, T1b: one
+    /// that blocks, or switches the project, mid-call).
+    pub(crate) fn with_owner(
+        tag: &str,
+        owner: impl Fn(&BridgeRequestEvent) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
         let serial = db::serial_guard();
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("litria-mcp-{tag}-{}-{stamp}", std::process::id()));
@@ -83,7 +92,7 @@ impl Drop for Bound {
     }
 }
 
-fn put(root: &Path, path: &str, text: &str) {
+pub(crate) fn put(root: &Path, path: &str, text: &str) {
     let full = root.join(path);
     fs::create_dir_all(full.parent().unwrap()).unwrap();
     fs::write(full, text).unwrap();
@@ -92,7 +101,7 @@ fn put(root: &Path, path: &str, text: &str) {
 /// A frontend with nothing open but src/auth.ts (for proposals): no other
 /// buffers, no selection, no wires; the language table is the committed
 /// bridge fixture.
-fn owner(event: &BridgeRequestEvent) -> Option<String> {
+pub(crate) fn owner(event: &BridgeRequestEvent) -> Option<String> {
     let paths = |key: &str| -> Vec<Value> { event.request[key].as_array().cloned().unwrap_or_default() };
     let result = match event.op.as_str() {
         "editor.documents" => json!({

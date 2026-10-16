@@ -15,17 +15,29 @@
 //!   2.1.292). Serving 2026-07-28 itself is a follow-up.
 //! - **Before `initialize`** only `ping` is answered (clients SHOULD NOT send
 //!   anything else).
-//! - **`tools/call`** is not served until slice T1b gives calls their own
-//!   principal; until then it is "method not found".
+//! - **`tools/call`** (T1b) is handed back to the connection as a [`Call`],
+//!   to run off the reading thread as the session's own principal. A
+//!   `notifications/cancelled` for a call still running means its answer is
+//!   not sent (receivers SHOULD NOT answer a cancelled request); the call
+//!   itself runs to its end, so an apply is never cut off halfway.
+//! - **No key twice.** A message that names a key twice in any object is
+//!   refused before it is parsed: parsing keeps one of the two silently, and
+//!   which one a reader keeps is not something to rely on.
 //! - **Never echoed:** error messages are fixed text, whatever was sent.
 //!
 //! JSON-RPC: one object per message (batches were removed in 2025-06-18), ids
 //! are strings or numbers, notifications get no answer, and responses to
 //! requests Litria never sent are ignored.
 
+use std::cell::Cell;
+use std::collections::HashSet;
+
+use serde::de::{DeserializeSeed, Deserializer, Error as _, MapAccess, SeqAccess, Visitor};
 use serde_json::{json, Value};
 
-use crate::contracts::context::Grant;
+use crate::contracts::catalog::Dispatcher;
+use crate::contracts::context::{CallContext, Grant};
+use crate::contracts::error::ContractError;
 use crate::contracts::mcp::{self, Revision};
 
 pub(crate) const PARSE_ERROR: i64 = -32700;
@@ -34,6 +46,58 @@ pub(crate) const METHOD_NOT_FOUND: i64 = -32601;
 
 /// The server's name in `initialize`.
 pub(crate) const SERVER_NAME: &str = "litria";
+
+/// What one message asks of the connection.
+#[derive(Debug)]
+pub(crate) enum Reply {
+    /// Nothing to send: a notification, or a stray response.
+    Nothing,
+    /// Send this.
+    Now(Value),
+    /// A tool call, to run off the reading thread.
+    Call(Call),
+    /// The client cancelled the request whose id has this key ([`id_key`]).
+    Cancel(String),
+}
+
+/// One `tools/call`, ready to run.
+#[derive(Debug)]
+pub(crate) struct Call {
+    id: Value,
+    params: Value,
+    revision: Revision,
+}
+
+impl Call {
+    /// The key cancellation names this call by.
+    pub(crate) fn key(&self) -> String {
+        id_key(&self.id)
+    }
+
+    /// Run the call in `context` and build its response.
+    pub(crate) fn run(&self, dispatcher: &Dispatcher, context: &CallContext) -> Value {
+        match mcp::tools_call(dispatcher, context, &self.params, self.revision) {
+            Ok(result) => success(self.id.clone(), result),
+            Err(error) => json!({ "jsonrpc": "2.0", "id": self.id, "error": error }),
+        }
+    }
+
+    /// The response for a call the connection will not run (`busy`, or
+    /// Litria is closing): a tool execution error, like the dispatcher's own.
+    pub(crate) fn refused(&self, error: &ContractError) -> Value {
+        success(self.id.clone(), mcp::tool_error(self.revision, error))
+    }
+
+    /// The response for a call whose id is already in flight.
+    pub(crate) fn duplicate_id(&self) -> Value {
+        error(self.id.clone(), INVALID_REQUEST, "a request with that id is still running")
+    }
+}
+
+/// How a request id is compared: its JSON text, so `1` and `"1"` differ.
+pub(crate) fn id_key(id: &Value) -> String {
+    id.to_string()
+}
 
 pub(crate) struct Conversation {
     grant: Grant,
@@ -52,47 +116,64 @@ impl Conversation {
         self.revision
     }
 
-    /// Handle one message; `Some` is the response to send.
-    pub(crate) fn handle(&mut self, message: &[u8]) -> Option<Value> {
+    /// Handle one message.
+    pub(crate) fn handle(&mut self, message: &[u8]) -> Reply {
+        match repeats_a_key(message) {
+            None => return Reply::Now(error(Value::Null, PARSE_ERROR, "the message is not JSON")),
+            Some(true) => {
+                return Reply::Now(error(Value::Null, INVALID_REQUEST, "a message must not name a key twice"))
+            }
+            Some(false) => {}
+        }
         let Ok(message) = serde_json::from_slice::<Value>(message) else {
-            return Some(error(Value::Null, PARSE_ERROR, "the message is not JSON"));
+            return Reply::Now(error(Value::Null, PARSE_ERROR, "the message is not JSON"));
         };
         let Some(object) = message.as_object() else {
             // An array is a batch, which these revisions do not have.
-            return Some(error(Value::Null, INVALID_REQUEST, "a message must be one JSON-RPC object"));
+            return Reply::Now(error(Value::Null, INVALID_REQUEST, "a message must be one JSON-RPC object"));
         };
         let method = object.get("method");
         let id = object.get("id");
         match (method, id) {
-            (Some(Value::String(method)), None) => {
-                self.notification(method);
-                None
-            }
+            (Some(Value::String(method)), None) => self.notification(method, object.get("params")),
             (Some(Value::String(method)), Some(id @ (Value::String(_) | Value::Number(_)))) => {
-                Some(self.request(id.clone(), method, object.get("params")))
+                self.request(id.clone(), method, object.get("params"))
             }
             // A response to a request Litria never sends.
-            (None, Some(_)) if object.contains_key("result") || object.contains_key("error") => None,
-            _ => Some(error(Value::Null, INVALID_REQUEST, "not a JSON-RPC request or notification")),
+            (None, Some(_)) if object.contains_key("result") || object.contains_key("error") => Reply::Nothing,
+            _ => Reply::Now(error(Value::Null, INVALID_REQUEST, "not a JSON-RPC request or notification")),
         }
     }
 
-    fn notification(&mut self, _method: &str) {
+    fn notification(&mut self, method: &str, params: Option<&Value>) -> Reply {
         // `notifications/initialized` needs nothing: `initialize` already
-        // settled the revision. `notifications/cancelled` names requests that
-        // are answered synchronously, so there is nothing left to cancel.
+        // settled the revision.
+        match (method, params.and_then(|params| params.get("requestId"))) {
+            ("notifications/cancelled", Some(id @ (Value::String(_) | Value::Number(_)))) => {
+                Reply::Cancel(id_key(id))
+            }
+            _ => Reply::Nothing,
+        }
     }
 
-    fn request(&mut self, id: Value, method: &str, params: Option<&Value>) -> Value {
-        match method {
+    fn request(&mut self, id: Value, method: &str, params: Option<&Value>) -> Reply {
+        let answer = match method {
             "ping" => success(id, json!({})),
             "initialize" => self.initialize(id, params),
             // The stateless revisions' probe, at any point: this server is legacy.
             "server/discover" => error(id, METHOD_NOT_FOUND, "method not found"),
             _ if self.revision.is_none() => error(id, INVALID_REQUEST, "send initialize first"),
             "tools/list" => success(id, mcp::tools_list(self.revision.expect("initialized"), &self.grant)),
+            "tools/call" => {
+                return Reply::Call(Call {
+                    id,
+                    params: params.cloned().unwrap_or(Value::Null),
+                    revision: self.revision.expect("initialized"),
+                })
+            }
             _ => error(id, METHOD_NOT_FOUND, "method not found"),
-        }
+        };
+        Reply::Now(answer)
     }
 
     fn initialize(&mut self, id: Value, params: Option<&Value>) -> Value {
@@ -116,6 +197,75 @@ impl Conversation {
     }
 }
 
+/// Whether any object in `raw` names a key twice; `None` if `raw` is not
+/// JSON. One pass, before anything is parsed, within serde_json's own
+/// nesting limit.
+pub(crate) fn repeats_a_key(raw: &[u8]) -> Option<bool> {
+    let repeated = Cell::new(false);
+    let mut reader = serde_json::Deserializer::from_slice(raw);
+    let walked = Walk(&repeated).deserialize(&mut reader).and_then(|()| reader.end());
+    match walked {
+        Ok(()) => Some(false),
+        Err(_) if repeated.get() => Some(true),
+        Err(_) => None,
+    }
+}
+
+/// Walks a JSON value and stops at the first key an object names twice.
+struct Walk<'a>(&'a Cell<bool>);
+
+impl<'de> DeserializeSeed<'de> for Walk<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Walk<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("any JSON value")
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut items: A) -> Result<(), A::Error> {
+        while items.next_element_seed(Walk(self.0))?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<(), A::Error> {
+        let mut seen = HashSet::new();
+        while let Some(key) = entries.next_key::<String>()? {
+            if !seen.insert(key) {
+                self.0.set(true);
+                return Err(A::Error::custom("a key repeats"));
+            }
+            entries.next_value_seed(Walk(self.0))?;
+        }
+        Ok(())
+    }
+}
+
 fn success(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
@@ -133,7 +283,15 @@ mod tests {
     }
 
     fn send(conversation: &mut Conversation, message: Value) -> Option<Value> {
-        conversation.handle(message.to_string().as_bytes())
+        answer_of(conversation.handle(message.to_string().as_bytes()))
+    }
+
+    fn answer_of(reply: Reply) -> Option<Value> {
+        match reply {
+            Reply::Now(answer) => Some(answer),
+            Reply::Nothing => None,
+            other => panic!("expected an answer or nothing, got {other:?}"),
+        }
     }
 
     /// Exactly what Claude Code 2.1.185 sent on 2026-10-15.
@@ -238,12 +396,44 @@ mod tests {
         assert_eq!(conversation.revision(), Some(Revision::V2025_06_18));
     }
 
-    /// T1a lists the tools; calling one arrives with T1b.
+    /// A tool call is handed to the connection to run; the conversation itself
+    /// never runs one.
     #[test]
-    fn tool_calls_and_unknown_methods_are_not_found() {
+    fn a_tool_call_is_handed_back_to_run() {
         let mut conversation = Conversation::new(everything());
         send(&mut conversation, claude_initialize());
-        for method in ["tools/call", "resources/list", "prompts/list", "logging/setLevel"] {
+        let reply = conversation.handle(
+            json!({"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"litria_files_read","arguments":{}}})
+                .to_string()
+                .as_bytes(),
+        );
+        let Reply::Call(call) = reply else { panic!("expected a call, got {reply:?}") };
+        assert_eq!(call.key(), "\"c1\"");
+        assert_eq!(call.revision, Revision::V2025_11_25);
+        // What it answers is a CallToolResult for its own id. No project is
+        // bound to this context, so that result is a tool error.
+        let context = CallContext {
+            principal: crate::contracts::context::Principal::Test,
+            grant: everything(),
+            epoch: "ws-not-open".into(),
+        };
+        let answer = call.run(crate::project_api::dispatcher(), &context);
+        assert_eq!(answer["id"], "c1");
+        assert_eq!(answer["result"]["isError"], true, "{answer}");
+        assert!(answer["result"].get("resultType").is_none());
+        // Refusals have the same shape.
+        let busy = ContractError::new(crate::contracts::error::ErrorCode::Busy, "busy");
+        let refused = call.refused(&busy);
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(refused["id"], "c1");
+        assert_eq!(call.duplicate_id()["error"]["code"], INVALID_REQUEST);
+    }
+
+    #[test]
+    fn unknown_methods_are_not_found() {
+        let mut conversation = Conversation::new(everything());
+        send(&mut conversation, claude_initialize());
+        for method in ["resources/list", "prompts/list", "logging/setLevel", "tools/run"] {
             let answer = send(
                 &mut conversation,
                 json!({"jsonrpc":"2.0","id":5,"method":method,"params":{"name":"litria_files_read"}}),
@@ -276,9 +466,16 @@ mod tests {
             (format!("{{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"{secret}\"}}").into_bytes(), INVALID_REQUEST),
             (format!("{{\"jsonrpc\":\"2.0\",\"id\":{{}},\"method\":\"{secret}\"}}").into_bytes(), INVALID_REQUEST),
             (format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":7,\"x\":\"{secret}\"}}").into_bytes(), INVALID_REQUEST),
+            // A key named twice, at the top or anywhere inside.
+            (format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"id\":2,\"method\":\"{secret}\"}}").into_bytes(), INVALID_REQUEST),
+            (
+                format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"litria_files_read\",\"arguments\":{{\"documents\":[{{\"path\":\"a\",\"path\":\"{secret}\"}}]}}}}}}")
+                    .into_bytes(),
+                INVALID_REQUEST,
+            ),
         ];
         for (message, code) in cases {
-            let answer = conversation.handle(&message).unwrap();
+            let answer = answer_of(conversation.handle(&message)).unwrap();
             assert_eq!(answer["error"]["code"], code, "{}", String::from_utf8_lossy(&message));
             assert!(!answer.to_string().contains(secret), "echoed: {answer}");
         }
@@ -290,8 +487,46 @@ mod tests {
     #[test]
     fn notifications_and_stray_responses_get_no_answer() {
         let mut conversation = Conversation::new(everything());
-        assert!(send(&mut conversation, json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}})).is_none());
+        assert!(send(&mut conversation, json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
+        assert!(send(&mut conversation, json!({"jsonrpc":"2.0","method":"notifications/cancelled"})).is_none());
         assert!(send(&mut conversation, json!({"jsonrpc":"2.0","id":3,"result":{}})).is_none());
         assert!(send(&mut conversation, json!({"jsonrpc":"2.0","id":3,"error":{"code":1,"message":"x"}})).is_none());
+    }
+
+    /// A cancellation names its request by id, and `1` is not `"1"`.
+    #[test]
+    fn a_cancellation_names_the_request_it_cancels() {
+        let mut conversation = Conversation::new(everything());
+        for (id, key) in [(json!(1), "1"), (json!("1"), "\"1\"")] {
+            let reply = conversation.handle(
+                json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":id,"reason":"x"}})
+                    .to_string()
+                    .as_bytes(),
+            );
+            let Reply::Cancel(cancelled) = reply else { panic!("expected a cancellation, got {reply:?}") };
+            assert_eq!(cancelled, key);
+        }
+    }
+
+    #[test]
+    fn a_repeated_key_is_found_anywhere_and_only_then() {
+        let cases: [(&str, Option<bool>); 9] = [
+            (r#"{"a":1,"b":2}"#, Some(false)),
+            (r#"{"a":1,"a":1}"#, Some(true)),
+            (r#"{"a":{"b":1,"b":2}}"#, Some(true)),
+            (r#"[{"x":1},{"x":2}]"#, Some(false)),
+            (r#"[{"x":1,"y":[{"z":0,"z":0}]}]"#, Some(true)),
+            // The same key written two ways is one key.
+            (r#"{"a":1,"a":2}"#, Some(true)),
+            (r#"{"a":1} trailing"#, None),
+            (r#"{"a":"#, None),
+            ("", None),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(repeats_a_key(raw.as_bytes()), expected, "{raw}");
+        }
+        // Deeper than serde_json's nesting limit is not accepted as JSON.
+        let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
+        assert_eq!(repeats_a_key(deep.as_bytes()), None);
     }
 }

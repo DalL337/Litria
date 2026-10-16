@@ -1,7 +1,26 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-15 — **the terminal's environment (gap G1, branch `fix/g1-terminal-env`)**:
+> **Last reviewed**: 2026-10-15 — **agents' tool calls (track T slice T1b, branch `feat/t1b-tool-calls`)**:
+> - **Why.** Security policy Rule 1, and the adversarial-check policy: the MCP connection now runs Project API operations, including `litria_changes_apply`, for an external principal.
+> - **What it is.** `tools/call` over the T1a connection, as the agent session's own principal (`Principal::Agent`, one per session). Release builds still start no session before T2b, so nothing here is reachable in a shipped build yet.
+> - **What holds.**
+>   - The call context comes from the session that authenticated the connection: its principal, its grant (D4: the whole catalog, for the project it was started in) and that project's epoch. A message can name none of them. Request arguments refuse unknown fields.
+>   - Plans, claims and receipts are keyed by the principal. Another session's plan applies nothing and its operation reads `unknown` (tested through the pipe, and caught when every session was given one principal). A session of a later run is a new principal (D6).
+>   - Every call is fenced against its session's epoch at its start and before it answers. A project switch mid-call lands nothing in either project (tested through the pipe).
+>   - The raw message is bounded before any parse: a line is at most the call budget plus 8 KiB (72 KiB), enforced while it is read, so padding cannot carry it past the cap. The arguments keep their own 64 KiB budget.
+>   - A message that names a key twice anywhere is refused before it is parsed. Keys are compared after unescaping. Before T1b, the MCP path parsed `arguments` into a generic value and encoded it again, so a duplicate collapsed (the last one won) before the typed parse could refuse it.
+>   - At most 4 calls run per connection, and the dispatcher's ceiling of 4 per principal holds across a session's connections. A call that cannot start is answered `internal` and never runs. While Litria quits, new calls get `shuttingDown`, and running calls get up to 2 s to finish before the sessions end.
+>   - Cancellation suppresses the answer; it never interrupts an apply, whose receipt stays readable.
+>   - Error messages are fixed text; a message refused unread is answered with a null id.
+>   - Adversarial check (journal `.research/2026-10-15-t1b-tool-calls.md`): no finding. Considered: a message choosing its principal, grant or project; another session's plan or operation; check versus use of the epoch; keys named twice in different spellings; the size of what is parsed, and how many calls run; what each refusal reveals; the direction a failure fails; cancelling an apply. Five mutations of the guarantees were each caught by a test.
+> - **Residual.**
+>   - Same-user processes can still read a token from the agent's environment and call as that agent (T1a residual; outside the guarantee).
+>   - A client that stops reading holds its connection's writer for up to 30 s (`WRITE_DEADLINE`), stalling only its own connection (T1a behaviour).
+>   - The parsed value of a 72 KiB message is at most about 1 MB, per connection.
+> - **Scans.** `npm audit` 0. `cargo audit`: unchanged — the four `rustls` 0.23.45 advisories (through `ureq` only) and the 9 allowed warnings. No dependency change.
+>
+> **Reviewed**: 2026-10-15 — **the terminal's environment (gap G1, branch `fix/g1-terminal-env`)**:
 > - **Why.** Security policy Rule 1 (the process-spawning terminal changes what its children receive), and the 2026-10-14 erratum below: the environment was never filtered.
 > - **The decision (owner, 2026-10-15; [ADR-034](../adrs/034-terminal-inherits-the-user-environment.md)).** A terminal inherits the user's environment, as VS Code, JetBrains and Windows Terminal do. Litria sets no variable of its own (no `set_var` anywhere in `src-tauri/src`), and the shell runs as the user who started Litria, so a filter guards no boundary: everything in Litria's environment came from that user or from the program they started Litria with. A strict allowlist would also break ordinary setups (`JAVA_HOME`, proxies, `SSH_AUTH_SOCK`, `DISPLAY`) and the agents' own sign-in and config variables.
 > - **What holds.**

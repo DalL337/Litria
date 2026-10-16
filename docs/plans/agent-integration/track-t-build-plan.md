@@ -1,6 +1,6 @@
 # Track T build plan: connecting the user's own agents
 
-Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a merged 2026-10-15 (#138); gap G1 ruled the same day (D3 erratum). See the [slice map](#5-slice-map).
+Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a merged 2026-10-15 (#138); gap G1 ruled the same day (D3 erratum) and fixed (#140, ADR-034); T1b built 2026-10-15 on `feat/t1b-tool-calls`. See the [slice map](#5-slice-map).
 
 Parents: [ADR-031](031-agent-integration-and-lifecycle.md) (decisions), [agent integration brief](brief-agent-integration.md) (design and the §10 gates), [Project API build plan](project-api-build-plan.md) (the P and W tracks this plan builds on; its "Track T" section is the stub this plan replaces).
 This document owns track T's sequencing and evidence. It owns no decisions: §2 lists what the owner rules on, and the brief stays the design authority.
@@ -114,7 +114,7 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
 | T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Merged 2026-10-15 (#138 → c786413; see [T1a record](#t1a-record)) |
-| T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Not started |
+| T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Built 2026-10-15 on `feat/t1b-tool-calls` (see [T1b record](#t1b-record)) |
 | T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
 | T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
 | T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows | T1b, T2a, D1–D3 | Not started |
@@ -226,6 +226,43 @@ The scripted client calls every tool through the helper. Each call runs as the a
 ### Acceptance
 
 Standard checks pass. The adversarial check is recorded. A live pass: the scripted client reads a file, prepares an edit and applies it in a debug build, and the receipt belongs to its session.
+
+### T1b record
+
+> **Built 2026-10-15 on branch `feat/t1b-tool-calls`** (owner: "go"). Journal `.research/2026-10-15-t1b-tool-calls.md`.
+>
+> **What changed:**
+> - **A real principal.** `Principal::Agent(AgentId)`: 16 random bytes minted with each agent session, never reused. Its key, `agent-<32 hex>`, is the session's id and how receipts record it. A session builds the context every call over its connections runs in: its principal, its grant and the project open it was started for, never anything a message says. Plans, claims, receipts and the in-flight ceiling are keyed by it. A reconnecting helper with the same token is the same principal and finds its receipts. A session of a later run is a different one (D6). The reopen notice (W4b) reads agent receipts too: a key the build could not read back would have dropped the row from it silently.
+> - **`tools/call`** runs on worker threads beside the reading, at most four per connection (the dispatcher's ceiling per principal, which every connection of a session shares); a fifth is `busy`. Pings, cancellations and the session's checks go on while calls run. A connection lets go of its place only once its calls have finished.
+> - **The raw message is bounded before anything parses it**, as P6 asked: the connection's line cap is now a call's own budget (64 KiB) plus 8 KiB for the envelope, enforced while the line is read, so padding cannot carry a message past it. The budget on the arguments themselves is unchanged.
+> - **Duplicate keys.** A message that names a key twice in any object is refused before it is parsed, by one pass over the raw message (keys compared after unescaping, so `"a"` and `"a"` are one key). Before T1b, the MCP path parsed the arguments into a generic value and encoded them again, so a duplicate collapsed silently (the last one won) before the typed parse, which refuses duplicate fields, ever saw it.
+> - **Quitting** answers new calls `shuttingDown` and gives calls already running up to 2 s to finish and answer before the sessions end, so the exit never cuts an apply off halfway.
+> - The dispatcher's in-flight entry for a principal goes when its count reaches zero: with a principal per session, an entry left at zero would outlive its session.
+>
+> **Three departures from the tasks above, each for a reason:**
+> - **Grants are not persisted.** D4 grants every agent the whole catalog for the project it was started in. The session holds that grant, bound to its project open, and the brief's "revalidated when a session attaches" is the per-message session check T1a built. With nothing that can narrow the grant yet, a stored record would hold a value that can never differ. It comes with the first setting that can (D4's alternative: reads only, with edits switched on per project).
+> - **`Cancelled` is never sent over MCP.** MCP's cancellation rules say the receiver of `notifications/cancelled` SHOULD NOT answer the cancelled request, and the client ignores a late answer anyway. So a cancelled call's answer is simply not sent. The call itself runs to its end: an apply is never interrupted, and its receipt stays readable through `litria_operations_get`. `Cancelled` stays in the error vocabulary for transports that answer cancellations. `ShuttingDown` is answered as planned.
+> - **The release-build task moves to T2b.** In a release build nothing can start an agent session before T2b (only the debug-only command does), so everything a tool call reaches is still dead code there, and removing the allowances would only trade them for warnings. The owner bridge's commands and the frontend hook would gain a release surface with no caller. T2b, which starts sessions in release builds, removes the allowances and registers the bridge.
+>
+> **A project switch mid-call.** The session ends with its project (T1a), so a call still running answers `workspaceChanged` if it finishes before its connection closes, and is cut off with the connection otherwise. Either way nothing lands in either project: the call is fenced against its session's epoch, at its start and before it answers.
+>
+> **Tests:** six through the real endpoint, against a real workspace with the real catalog and a scripted frontend (`mcp_connection/calls_tests.rs`):
+> - every committed request fixture, as the session's agent; the over-budget fixture (about 80 KiB) is refused by the line cap;
+> - plans and receipts per session, and reconnecting;
+> - a project switch mid-call lands nothing;
+> - padding over and under the cap, arguments between the budget and the cap (`limitExceeded`), and a key named twice;
+> - a ping answered during a call, a cancelled call left unanswered, a fifth call `busy`;
+> - quitting during a call (it answers; a new call gets `shuttingDown`; then the connection closes).
+>
+> Plus unit tests for the principal's key, agent receipts and the reopen report, cancellation keys, and repeated keys anywhere (escaped, nested, past the nesting limit). Five mutations were each caught by their own test: one principal for every session, no repeated-key check, the old 1 MiB cap, no drain, cancellations ignored.
+>
+> **Evidence** (Windows 10 19045): `cargo test` 816 lib + 7 process tests pass; `cargo check` and `cargo check --release` have no warnings; `npm audit` 0; `cargo audit` unchanged; no dependency change.
+>
+> **Live pass** (Windows, a `tauri dev` build of the branch, scratch app data, a throwaway project, two agent sessions, the real helper binary):
+> - Session A reads `src/hello.ts` (7 ms), prepares an edit to it and a new file (4 ms, `prepared`), and applies the plan (258 ms, `applied`). The edit is in the editor, unsaved, and the file on disk is unchanged; the new file is on disk.
+> - Session B applying A's plan gets `unknown` and changes nothing; asking for A's operation, `unknown`.
+> - A, reconnecting with the same token, reads its receipt: `applied`, with the same changes.
+> - Quitting Litria with a helper connected: the helper exits 5 after 39 ms. Nothing was left running, and no crash record was written.
 
 ## T2a. Conversations that outlive their tab
 
@@ -346,6 +383,7 @@ The tasks follow D1. For route A:
   - Checked 2026-10-14 against the installed versions (Claude Code 2.1.185, Codex 0.162): both have the flags above, and Codex filters its resume list to the current folder.
   - Text typed but not sent when the project closed is not recoverable. The notice does not claim otherwise.
 - **Version record.** The `claude` and `codex` versions qualified, written down (dependency change policy). Litria does not pin the person's install, but it states what was tested.
+- **Release builds** *(moved from T1b, 2026-10-15; see the T1b record)*. The Project API stops being debug-only: remove the dead-code allowances that name track T (`lib.rs`, `bridge.rs`, `commands.rs`, `useProjectApiBridge.js`) and register the owner bridge in release builds. The development call stays debug-only.
 
 ### Tests
 
@@ -450,7 +488,7 @@ Everything earlier work handed to track T, and where it lands:
 | W2 | Review surface; `PersonReview` off until one exists | Deferred (§1). The agent's own prompt is the review |
 | contracts/error.rs | `Cancelled`, `ShuttingDown` | T1b |
 | P3 | Small-context budget measurement | Deferred with the local-model route |
-| Release builds | Project API code allowed as dead code until a transport exists | T1b |
+| Release builds | Project API code allowed as dead code until a transport exists | T2b (moved from T1b, 2026-10-15: no release caller before T2b) |
 | Brief §10 | Runtime and platform qualification | T2b, T5 |
 | Brief §10 | Cloud and local routes | T4 (cloud); local deferred |
 | Brief §10 | Authentication and persistence | T2b (the agent owns it, D2) |

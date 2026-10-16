@@ -80,6 +80,8 @@ Request payloads carry none of these. v1 has two principals:
 
 Real agent principals arrive with the transport, behind the runtime gate.
 
+> **Note (2026-10-15, track T slice T1b):** a third principal, `agent`, one per agent session Litria starts, carried by its MCP connection's token. Its key (`agent-<32 hex>`) is the session's id and how receipts record it. See the [track T plan's T1b record](track-t-build-plan.md#t1b-record).
+
 ### 4.3 Fencing
 
 Each operation checks `context.epoch` against the current binding twice: when it starts and before it returns.

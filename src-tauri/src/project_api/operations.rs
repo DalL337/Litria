@@ -118,13 +118,6 @@ fn split_open_key(key: &str) -> (String, String) {
     }
 }
 
-fn principal_key(principal: Principal) -> &'static str {
-    match principal {
-        Principal::Test => "test",
-        Principal::Dev => "dev",
-    }
-}
-
 fn now_millis() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as i64).unwrap_or(0)
 }
@@ -151,7 +144,7 @@ pub(crate) fn save(epoch: &str, record: &Record, now: i64) -> Result<(), DbError
                      updated_at = excluded.updated_at",
                 params![
                     record.id,
-                    principal_key(record.principal),
+                    record.principal.key(),
                     open_key(&record.run, &record.epoch),
                     state_key(record.state),
                     changes,
@@ -180,7 +173,7 @@ pub(crate) fn load(epoch: &str, id: &str, principal: Principal) -> Result<Option
         let row = conn
             .query_row(
                 "SELECT epoch, state, changes, interrupted FROM api_operations WHERE id = ?1 AND principal = ?2",
-                params![id, principal_key(principal)],
+                params![id, principal.key()],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -316,7 +309,7 @@ fn select_records(conn: &Connection, sql: &str, current_key: &str) -> Result<Vec
             let (run, epoch) = split_open_key(&key);
             Some(Record {
                 id,
-                principal: principal_from_key(&principal)?,
+                principal: Principal::from_key(&principal)?,
                 run,
                 epoch,
                 state: state_from_key(&state),
@@ -325,14 +318,6 @@ fn select_records(conn: &Connection, sql: &str, current_key: &str) -> Result<Vec
             })
         })
         .collect())
-}
-
-fn principal_from_key(key: &str) -> Option<Principal> {
-    match key {
-        "test" => Some(Principal::Test),
-        "dev" => Some(Principal::Dev),
-        _ => None,
-    }
 }
 
 /// A stranded record as `standing` reads it, written down: its state, and a

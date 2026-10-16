@@ -32,6 +32,6 @@ pub(crate) mod project_api;
 pub(crate) mod project_api_bridge;
 
 #[cfg(test)]
-mod artifacts;
+pub(crate) mod artifacts;
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;
