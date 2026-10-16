@@ -94,6 +94,29 @@ pub(crate) fn create_project_file(
     project_ops::create_project_file(root_path, relative_path, contents)
 }
 
+/// Save a tab only if the disk still holds the version its text was based on
+/// (track T slice T3a). Answers `saved` with the new revision and stamp, or
+/// `changed` with the revision on disk, and then writes nothing.
+#[tauri::command]
+pub(crate) fn save_project_file(
+    root_path: &str,
+    relative_path: &str,
+    contents: &str,
+    base: project_ops::SaveBase,
+) -> CommandResult<project_ops::SaveOutcome> {
+    project_ops::save_project_file(root_path, relative_path, contents, &base)
+}
+
+/// The stamps (size and modification time) of open files, for noticing
+/// changes made outside Litria (track T slice T3a). Metadata only.
+#[tauri::command]
+pub(crate) fn project_files_stamps(
+    root_path: &str,
+    paths: Vec<String>,
+) -> CommandResult<Vec<project_ops::PathStamp>> {
+    project_ops::project_files_stamps(root_path, &paths)
+}
+
 #[tauri::command]
 pub(crate) fn list_project_tree(root_path: &str) -> CommandResult<Vec<ProjectTreeEntry>> {
     project_ops::list_project_tree(root_path)

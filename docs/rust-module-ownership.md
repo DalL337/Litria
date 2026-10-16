@@ -25,6 +25,7 @@ The command inventory, with each command's frontend caller, is in [rust-command-
 **Project files**
 - `project_ops.rs`
   - The project-file operations behind the file commands: read, write, list, move, create a directory, delete, remove an empty directory.
+  - *(T3a)* The conditional save (`save_project_file`: write only if the disk still holds the base) and file stamps (`stamp_of`, `project_files_stamps`). Tests: `project_ops/save_tests.rs`.
   - Converts failures into `CommandError`.
   - Uses `path_guard`, `write_ops` and `project_tree`.
   - Moves fall back to copy-then-delete when the destination is on another device (`io::ErrorKind::CrossesDevices`).
@@ -32,7 +33,7 @@ The command inventory, with each command's frontend caller, is in [rust-command-
   - Root and path validation, and symlink-safe boundary checks.
   - `resolve_entry_for_mutation` makes delete and move act on a link, never on its target (PR #88).
   - The typed resolvers are used by the Project API.
-- `write_ops.rs`: atomic writes (temp file, then rename) under the single-writer lock.
+- `write_ops.rs`: atomic writes (temp file, then rename) under the single-writer lock. *(T3a)* `replace_string_if` runs the caller's check after the content is durable and immediately before the rename.
 - `project_tree.rs`: the project tree listing (`list_project_tree`), relative-path normalization, and the `IGNORED_DIRS` list that the Project API reuses as its unindexed class.
 
 **Terminal**

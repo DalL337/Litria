@@ -93,6 +93,7 @@ import { usePythonLspLifecycle } from './app/usePythonLspLifecycle';
 import { usePythonFirstOpen } from './app/usePythonFirstOpen';
 import { useNpmScriptsFirstOpen } from './app/useNpmScriptsFirstOpen';
 import { useInterruptedOperationsNotice } from './app/useInterruptedOperationsNotice';
+import { useDiskChanges } from './app/useDiskChanges';
 import { useManagedServerOffers } from './app/useManagedServerOffers';
 import { useGoToolchainOffer } from './app/useGoToolchainOffer';
 import { useManagedLspLifecycle } from './app/useManagedLspLifecycle';
@@ -433,7 +434,8 @@ function App() {
     managerRef: fsManagerRef,
     writeContentFile,
     writeContentFileWithResult,
-    createContentFile
+    createContentFile,
+    saveContentFile
   } = useManagerFileWriter();
 
   // Launcher "New File": Save As resolver that materializes the project root
@@ -485,6 +487,7 @@ function App() {
     getNextConnectionIdValue: connections.getNextConnectionIdValue,
     setNextConnectionIdValue: connections.setNextConnectionIdValue,
     writeProjectFile: writeContentFileWithResult,
+    saveProjectFile: saveContentFile,
     resolveUntitledSave
   });
 
@@ -671,8 +674,8 @@ function App() {
     setNextGroupId
   }), [history]);
 
-  const addPiece = useCallback(({ filename, label, code = '', workingCode = null, id = null, x, y }) => {
-    return pieceDomain.commands.createPiece({ filename, label, code, workingCode, id, x, y });
+  const addPiece = useCallback(({ filename, label, code = '', workingCode = null, id = null, x, y, diskStamp = null }) => {
+    return pieceDomain.commands.createPiece({ filename, label, code, workingCode, id, x, y, diskStamp });
   }, [pieceDomain]);
 
   const {
@@ -727,6 +730,7 @@ function App() {
     normalizePath,
     piecesByFilename,
     readProjectFile,
+    readProjectFileWithRevision,
     getBasename,
     addPiece,
     openForPiece,
@@ -749,6 +753,20 @@ function App() {
     getSpawnPosition,
     groups,
     pieceWidth: PIECE_WIDTH
+  });
+
+  // Files changed outside Litria (track T slice T3a): open files reload, or
+  // offer a choice when they have unsaved changes; a save never overwrites a
+  // newer version on disk.
+  useDiskChanges({
+    projectInstance,
+    sessionReadyFor,
+    pieces,
+    setPieces,
+    projectDomain,
+    syntaxDomain,
+    pillDomain,
+    bumpScaffoldRefresh
   });
 
   // Off-canvas import badge (brief-cross-group-wires S3): discovery retains

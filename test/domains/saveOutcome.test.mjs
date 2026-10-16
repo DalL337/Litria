@@ -104,3 +104,22 @@ test('a confirmed snapshot advances the piece baseline without clobbering later 
   assert.equal(next[0].workingCode, 'typed later');
   assert.equal(next[1], original[1]);
 });
+
+// --- T3a: a save expects the version it was based on --------------------------
+
+import { diskBaseOf } from '../../src/project/saveOutcome.js';
+
+test('a save expects the exact text the piece was read from disk as', () => {
+  assert.deepEqual(diskBaseOf({ id: 1, code: 'a\r\nb' }), { kind: 'text', text: 'a\r\nb' });
+  assert.deepEqual(diskBaseOf({ id: 1 }), { kind: 'text', text: '' });
+  assert.equal(diskBaseOf(null), null, 'no piece: the old unconditional write');
+});
+
+test('a confirmed save records the stamp it left on disk', () => {
+  const pieces = [{ id: 1, code: 'old', diskStamp: 's1' }, { id: 2, code: 'other', diskStamp: 's2' }];
+  assert.deepEqual(applySavedPieceBaseline(pieces, 1, 'new', Object.is, { stamp: 's9' }), [
+    { id: 1, code: 'new', diskStamp: 's9' },
+    { id: 2, code: 'other', diskStamp: 's2' }
+  ]);
+  assert.deepEqual(applySavedPieceBaseline(pieces, 1, 'new')[0], { id: 1, code: 'new', diskStamp: 's1' }, 'without disk evidence, the stamp stays');
+});

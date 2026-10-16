@@ -1,6 +1,6 @@
 # Track T build plan: connecting the user's own agents
 
-Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a merged 2026-10-15 (#138); gap G1 ruled the same day (D3 erratum) and fixed (#140, ADR-034); T1b built 2026-10-15 on `feat/t1b-tool-calls`. See the [slice map](#5-slice-map).
+Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a merged 2026-10-15 (#138); gap G1 ruled the same day (D3 erratum) and fixed (#140, ADR-034); T1b merged 2026-10-15 (#141); T3 split the same day (owner), T3a built on `feat/t3a-never-lose-a-version`. See the [slice map](#5-slice-map).
 
 Parents: [ADR-031](031-agent-integration-and-lifecycle.md) (decisions), [agent integration brief](brief-agent-integration.md) (design and the §10 gates), [Project API build plan](project-api-build-plan.md) (the P and W tracks this plan builds on; its "Track T" section is the stub this plan replaces).
 This document owns track T's sequencing and evidence. It owns no decisions: §2 lists what the owner rules on, and the brief stays the design authority.
@@ -114,12 +114,13 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
 | T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Merged 2026-10-15 (#138 → c786413; see [T1a record](#t1a-record)) |
-| T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Built 2026-10-15 on `feat/t1b-tool-calls` (see [T1b record](#t1b-record)) |
+| T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Merged 2026-10-15 (#141 → 173d47a; see [T1b record](#t1b-record)) |
 | T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
 | T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
 | T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows | T1b, T2a, D1–D3 | Not started |
-| T3 | Files changed outside Litria: detect, reload, keep both on conflict, never overwrite on save | — (alongside T1 and T2a) | Not started |
-| T4 | Real tasks on the owner's API key; first release | T2b, T3 | Not started |
+| T3a | Never lose a version: a save never overwrites a newer version on disk; open files reload, or offer the choice when they have unsaved changes | — (alongside T1 and T2a) | Built 2026-10-15 on `feat/t3a-never-lose-a-version` (see [T3a record](#t3a-record)) |
+| T3b | Created, renamed and deleted files reach the file tree and the graph | T3a | Not started (split from T3, 2026-10-15) |
+| T4 | Real tasks on the owner's API key; first release | T2b, T3a, T3b | Not started |
 | T5 | macOS and Linux qualification | T4 | Not started; needs macOS and Linux testers |
 
 T2a and T3 depend on nothing in track T and can be built alongside T1. Both help people who never start an agent: T2a anyone running a shell, T3 anyone editing in another program. T3 must land before T4, because a real task will use the agent's own file tools.
@@ -436,6 +437,41 @@ So, untested so far: an agent edits a file that is open with unsaved changes, th
 ### Acceptance
 
 Standard checks pass. The adversarial check (check-then-write saving) is recorded. A live pass with a script standing in for the agent's writes.
+
+### T3a record
+
+> **Owner ruling (2026-10-15):** T3 is built as two slices, data safety first. **T3a**: a save never overwrites a newer version on disk, and the open files reload or offer the choice. **T3b**: created, renamed and deleted files reach the file tree and the graph; how folders are watched (a watcher crate, or periodic refreshes) is decided then, with evidence.
+>
+> **Built 2026-10-15 on branch `feat/t3a-never-lose-a-version`.** Journal `.research/2026-10-15-t3-files-changed-outside.md`.
+>
+> **The reproduction, on `main` (173d47a) first** (a debug build, scratch app data, a throwaway project, a script driving the UI's own handlers; `.research/2026-10-15-t3-repro/`):
+> - an outside write to a file open with no unsaved changes: 5 s later the tab still showed the old text, and nothing said so;
+> - unsaved changes in Litria, an outside write (two lines), then a save in Litria: the save answered success and **the other program's version was gone** (data loss, confirmed);
+> - an outside create and delete: the file tree kept the deleted file and missed the new one, and the deleted file's tab stayed open (T3b).
+>
+> **What changed:**
+> - **The save** (`save_project_file`, which the editor's tab saves now use) writes only if the disk still holds the version the tab's text was based on. That base is the canvas piece's own text: a piece keeps the exact text it was read from disk as, line endings included, so no revision has to travel through the editor. Rust compares the disk before anything is written, and again once the new content is durable beside the file, immediately before the rename (`write_ops::replace_string_if`). A newer version answers `changed` and nothing is written; the tab stays dirty and the choice is offered. The old unconditional `write_project_file` stays for Litria's other writers.
+> - **Noticing.** Once a second, `useDiskChanges` asks Rust for the stamps (size and modification time, `project_files_stamps`) of every file on the canvas, and reads again only the files whose stamp moved. Reads now record the stamp, taken before the bytes, so a change during a read is still seen. No new dependency, and it works while Litria has focus. The judgement is pure (`src/app/diskChanges.js`):
+>   - the same text, or the text Litria itself just saved: only the stamp moved;
+>   - nothing unsaved: the file reloads (the tab, its editor document, syntax and the graph);
+>   - unsaved changes: a pill offers the choice, and both versions are kept until it is made;
+>   - a file that exists but cannot be read at that moment (locked mid-write) is read again next time, never taken for a deletion.
+> - **The choice** (an inline pill, never a modal): *clicking the message* loads the version on disk, and the person's own text stays one undo away; **Keep mine** puts their version in, then the person's on top, and saves it over theirs, so one undo shows theirs. A file deleted under unsaved changes offers to save it again; a plain save of it asks again rather than recreating it.
+> - **Each text the editor takes from outside is its own undo step** (`applySessionText` now pushes undo stops around its edit), so it is never merged into the person's last typing. Agents' applied edits (W1b) get the same.
+>
+> **Tests:** Rust: `project_ops/save_tests.rs` (7: the reproduction; a write in flight seen by the last check; deleted versus absent; containment; stamps follow the file; the path cap) and `write_ops` (3). JavaScript: the judgement and the save channel (11, line endings included), the reducer's new action (3), the save base and stamp (2), the write manager's `saveFile` (3), and an undo-step test against the Monaco fake.
+>
+> **Evidence** (Windows 10 19045): `cargo test` 826 lib + 7 process tests pass; `cargo check` no warnings; `npm run test:domains` 1646/1646; guards 7/7; `npm run build` passes.
+>
+> **Live pass** (Windows, a `tauri dev` build of the branch, scratch app data, a throwaway project; node writes standing in for the agent; `.research/2026-10-15-t3a-live/`):
+> - an outside write to a clean open file: within 2 s the tab shows it; no pill;
+> - unsaved changes, then an outside write: within 2 s a pill names the file; the save in Litria answers `false`, the other program's two lines stay on disk, and the typed text stays in the tab; clicking the pill loads their version, and the tab is clean (one pill, not two);
+> - real keystrokes in a visible editor, an outside write, **Keep mine**: the typed line is saved over theirs, and one Ctrl+Z shows theirs again, unsaved;
+> - a file with unsaved changes deleted outside: a pill; a plain save is refused; clicking the pill saves it again;
+> - Litria's own save: no pill, no reload;
+> - `.env` (withheld from agents): `litria_files_read` answers `denied` before and after an outside write, with no content.
+>
+> **Residual:** another program writing between the last check and the rename is not seen (no platform has a replace that fails when the target changed); two writes of the same size within one tick of the filesystem clock leave the stamp unchanged until the next change, and the save still refuses to overwrite; the pill shows the terminal icon all pills share; a single-file session (Open File, no project) is not watched.
 
 ## T4. Real tasks, first release
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createFilesystemWriteManager } from './filesystemWriteManager';
-import { removeEmptyDirectory, createProjectDirectory, createProjectFile } from '../project/storage.js';
+import { removeEmptyDirectory, createProjectDirectory, createProjectFile, saveProjectFile } from '../project/storage.js';
 import { normalizePath, getBasename } from '../utils/path';
 
 /**
@@ -58,7 +58,19 @@ export function useManagerFileWriter() {
     }
     return manager.createFile(relativePath, contents, { notify: false, skipScaffold: true });
   }, []);
-  return { managerRef, writeContentFile, writeContentFileWithResult, createContentFile };
+  // T3a: an editor save that never overwrites a newer version on disk.
+  const saveContentFile = useCallback(async (_rootPath, relativePath, contents, base) => {
+    const manager = managerRef.current;
+    if (!manager) {
+      return {
+        success: false,
+        code: 'fs.no_manager',
+        error: 'The filesystem write manager is unavailable.'
+      };
+    }
+    return manager.saveFile(relativePath, contents, base);
+  }, []);
+  return { managerRef, writeContentFile, writeContentFileWithResult, createContentFile, saveContentFile };
 }
 
 /**
@@ -100,6 +112,7 @@ export function useFilesystemWriteManager({
     moveProjectPath: (rootPath, from, to) => moveProjectPath(rootPath, from, to),
     writeProjectFile: (rootPath, path, contents) => writeProjectFile(rootPath, path, contents),
     createProjectFile,
+    saveProjectFile,
     removeEmptyDirectory,
     createProjectDirectory,
     deleteProjectPath: (rootPath, path) => deleteProjectPath(rootPath, path),

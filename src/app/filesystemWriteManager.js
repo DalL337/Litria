@@ -264,6 +264,9 @@ export function createFilesystemWriteManager(deps) {
     moveProjectPath,
     writeProjectFile,
     createProjectFile,
+    // T3a: replace only if the disk still holds the version the text was
+    // based on. Optional so the manager's own tests can omit it.
+    saveProjectFile = null,
     removeEmptyDirectory,
     createProjectDirectory,
     deleteProjectPath,
@@ -1067,6 +1070,31 @@ export function createFilesystemWriteManager(deps) {
   }
 
   /**
+   * Save a file only if the disk still holds the version `contents` was based
+   * on (track T slice T3a): an editor save. `base` is `{ kind: 'text', text }`
+   * or `{ kind: 'absent' }`. A newer version on disk is never overwritten: the
+   * result is a success carrying `outcome: { outcome: 'changed', disk }`, and
+   * nothing was written. Like `writeFile` for content, it notifies nothing
+   * and leaves the tree alone; the editor owns what follows.
+   *
+   * @param {string} filePath - relative path (forward slashes)
+   * @param {string} contents
+   * @param {{kind: 'text', text: string} | {kind: 'absent'}} base
+   */
+  async function saveFile(filePath, contents, base) {
+    const rootPath = getRootPath();
+    if (!rootPath) return fail('No project root path available', 'fs.no_root');
+    if (typeof saveProjectFile !== 'function') return fail('Conditional saves are unavailable', 'fs.write_failed');
+
+    const reserved = reservedNameFailure(filePath);
+    if (reserved) return reserved;
+
+    const outcome = await saveProjectFile(rootPath, filePath, contents, base);
+    if (!outcome) return fail(`Cannot write "${filePath}"`, 'fs.write_failed');
+    return { ...ok('none'), outcome };
+  }
+
+  /**
    * Create a directory. No piece sync needed.
    *
    * @param {string} dirPath - relative path (forward slashes)
@@ -1157,6 +1185,7 @@ export function createFilesystemWriteManager(deps) {
     deleteEmptyFolder,
     removeFromCanvas,
     writeFile,
+    saveFile,
     createFile,
     createDirectory: createDir,
     batch,

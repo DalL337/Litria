@@ -448,3 +448,30 @@ test('session documents: a path held twice resolves to the open, then the dirty 
   const backslashed = { ...initial, tabsById: { 1: { id: 1, filename: 'src\\a.txt', code: '', workingCode: 'x' } } };
   assert.equal(getSessionDocumentsByPath(backslashed).has('src/a.txt'), true);
 });
+
+/* ── T3a: the version on disk becomes the tab's saved text ── */
+
+test('take-disk-version: a reload replaces both texts, normalized', () => {
+  let state = openPieces(initial, piece(1, 'a.ts', 'old\n'));
+  state = reduce(state, { type: 'TAKE_DISK_VERSION', tabId: 1, code: 'new\r\n', onlyIfClean: true });
+  assert.equal(state.tabsById[1].code, 'new\n');
+  assert.equal(state.tabsById[1].workingCode, 'new\n');
+});
+
+test('take-disk-version: a reload never lands on a tab with unsaved changes', () => {
+  let state = openPieces(initial, piece(1, 'a.ts', 'old\n'));
+  state = reduce(state, { type: 'UPDATE_WORKING_CODE', tabId: 1, workingCode: 'typed\n' });
+  const after = reduce(state, { type: 'TAKE_DISK_VERSION', tabId: 1, code: 'new\n', onlyIfClean: true });
+  assert.equal(after, state, 'unchanged');
+});
+
+test('take-disk-version: keeping mine sets their version as the base under it', () => {
+  let state = openPieces(initial, piece(1, 'a.ts', 'old\n'));
+  state = reduce(state, { type: 'UPDATE_WORKING_CODE', tabId: 1, workingCode: 'mine\n' });
+  state = reduce(state, { type: 'TAKE_DISK_VERSION', tabId: 1, code: 'theirs\n', workingCode: 'mine\n' });
+  assert.equal(state.tabsById[1].code, 'theirs\n');
+  assert.equal(state.tabsById[1].workingCode, 'mine\n', 'still unsaved, now against theirs');
+  // An unknown tab, or no text, changes nothing.
+  assert.equal(reduce(state, { type: 'TAKE_DISK_VERSION', tabId: 99, code: 'x' }), state);
+  assert.equal(reduce(state, { type: 'TAKE_DISK_VERSION', tabId: 1 }), state);
+});

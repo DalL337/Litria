@@ -149,6 +149,46 @@ export async function writeProjectFile(rootPath, relativePath, contents) {
 }
 
 /**
+ * Save a file only if the disk still holds the version the saved text was
+ * based on (track T slice T3a): `base` is `{ kind: 'text', text }`, the exact
+ * text that version had, or `{ kind: 'absent' }` when the file was deleted and
+ * the person chose to keep theirs. Resolves `{ outcome: 'saved', revision,
+ * stamp }` or `{ outcome: 'changed', disk }` (nothing written; `disk` is null
+ * when nothing has the name), or null on failure (typed error recorded).
+ */
+export async function saveProjectFile(rootPath, relativePath, contents, base) {
+  if (!rootPath || !relativePath) {
+    setLastProjectStorageError(createClientValidationError('project_file.path.required', 'Project and file paths are required.'));
+    return null;
+  }
+  const response = await invokeWithTypedError('save_project_file', {
+    rootPath,
+    relativePath,
+    contents: contents ?? '',
+    base
+  }, {
+    fallbackCode: 'project_file.write.failed',
+    fallbackMessage: 'Unable to write project file.'
+  });
+  return response.ok ? response.data : null;
+}
+
+/**
+ * The stamps (size and modification time, opaque tokens) of `paths` in the
+ * project, for noticing changes made outside Litria (track T slice T3a).
+ * Resolves `[{ path, stamp }]` (stamp null when nothing readable has the
+ * name), or null on failure.
+ */
+export async function projectFilesStamps(rootPath, paths) {
+  if (!rootPath || !Array.isArray(paths)) return null;
+  const response = await invokeWithTypedError('project_files_stamps', { rootPath, paths }, {
+    fallbackCode: 'project_file.stat.failed',
+    fallbackMessage: 'Unable to check project files.'
+  });
+  return response.ok ? response.data : null;
+}
+
+/**
  * Create a file only if nothing has its name: never an overwrite (Project
  * API build plan W3a). The path is taken exactly. Resolves 'created' or
  * 'exists', or null on failure (with the typed error recorded).

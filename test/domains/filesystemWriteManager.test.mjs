@@ -981,3 +981,42 @@ test('collectEmptiedFolderGroups returns empty for no removals or already-empty 
   assert.deepEqual(collectEmptiedFolderGroups(groups, [{ groupId: 'g1', pieceId: 9 }]), [],
     'a group with no members was never non-empty — nothing to persist');
 });
+
+// saveFile (T3a): an editor save that never overwrites a newer version on disk.
+
+test('saveFile — passes the base and answers what the save did', async () => {
+  const { deps, calls } = createMockDeps({});
+  const saved = [];
+  deps.saveProjectFile = async (rootPath, path, contents, base) => {
+    saved.push({ rootPath, path, contents, base });
+    return { outcome: 'saved', revision: 'd1-new', stamp: 's9' };
+  };
+  const mgr = createFilesystemWriteManager(deps);
+  const base = { kind: 'text', text: 'old' };
+  const result = await mgr.saveFile('src/a.ts', 'new', base);
+  assert.equal(result.success, true);
+  assert.deepEqual(result.outcome, { outcome: 'saved', revision: 'd1-new', stamp: 's9' });
+  assert.deepEqual(saved, [{ rootPath: '/test/project', path: 'src/a.ts', contents: 'new', base }]);
+  assert.equal(calls.writeProjectFile.length, 0, 'never the unconditional write');
+  assert.equal(calls.notifyFileChanged.length, 0);
+  assert.equal(calls.bumpScaffoldRefresh.length, 0);
+});
+
+test('saveFile — a newer version on disk is an answer, not a failure', async () => {
+  const { deps } = createMockDeps({});
+  deps.saveProjectFile = async () => ({ outcome: 'changed', disk: 'd1-theirs' });
+  const result = await createFilesystemWriteManager(deps).saveFile('src/a.ts', 'new', { kind: 'text', text: 'old' });
+  assert.equal(result.success, true);
+  assert.deepEqual(result.outcome, { outcome: 'changed', disk: 'd1-theirs' });
+});
+
+test('saveFile — a failed save, a reserved name, and no conditional save', async () => {
+  const { deps, calls } = createMockDeps({});
+  deps.saveProjectFile = async () => null;
+  const mgr = createFilesystemWriteManager(deps);
+  assert.equal((await mgr.saveFile('src/a.ts', 'x', { kind: 'absent' })).code, 'fs.write_failed');
+  assert.equal((await mgr.saveFile('litria.toml', 'x', { kind: 'absent' })).success, false, 'reserved');
+  const without = createMockDeps({}).deps;
+  assert.equal((await createFilesystemWriteManager(without).saveFile('src/a.ts', 'x', { kind: 'absent' })).code, 'fs.write_failed');
+  assert.equal(calls.writeProjectFile.length, 0, 'never falls back to the unconditional write');
+});
