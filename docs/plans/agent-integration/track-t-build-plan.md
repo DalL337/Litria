@@ -1,6 +1,6 @@
 # Track T build plan: connecting the user's own agents
 
-Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a built 2026-10-15 on `feat/t1a-mcp-connection`; gap G1 ruled the same day (D3 erratum). See the [slice map](#5-slice-map).
+Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a merged 2026-10-15 (#138); gap G1 ruled the same day (D3 erratum). See the [slice map](#5-slice-map).
 
 Parents: [ADR-031](031-agent-integration-and-lifecycle.md) (decisions), [agent integration brief](brief-agent-integration.md) (design and the §10 gates), [Project API build plan](project-api-build-plan.md) (the P and W tracks this plan builds on; its "Track T" section is the stub this plan replaces).
 This document owns track T's sequencing and evidence. It owns no decisions: §2 lists what the owner rules on, and the brief stays the design authority.
@@ -111,7 +111,7 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 
 | Slice | Delivers | Depends on | Status |
 |---|---|---|---|
-| T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Built 2026-10-15 on `feat/t1a-mcp-connection` (see [T1a record](#t1a-record)) |
+| T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Merged 2026-10-15 (#138 → c786413; see [T1a record](#t1a-record)) |
 | T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Not started |
 | T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
 | T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
@@ -156,7 +156,7 @@ Standard checks pass. The security review and the adversarial check are recorded
 
 ### T1a record
 
-> **Built 2026-10-15 on branch `feat/t1a-mcp-connection`.** Journal `.research/2026-10-15-track-t-next-slice.md`. Owner rulings the same day: the next slice is T1a; gap G1 is settled as "inherit the environment" (see the D3 erratum).
+> **Built 2026-10-15 on branch `feat/t1a-mcp-connection`; merged 2026-10-15** (#138 → c786413, all checks green on its head). Journal `.research/2026-10-15-track-t-next-slice.md`. Owner rulings the same day: the next slice is T1a; gap G1 is settled as "inherit the environment" (see the D3 erratum).
 >
 > **What the installed agents actually send** (captured 2026-10-15 with a logging stub server, scratch config folders, nothing signed in, no model call):
 > - **Claude Code 2.1.185** (`claude mcp list`, which connects and lists tools): `initialize` with `protocolVersion: "2025-11-25"` and capabilities `roots` and `elicitation`, then `notifications/initialized`, then `tools/list`; it ends by closing stdin. It passes its whole environment to the server.
