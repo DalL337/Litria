@@ -1,6 +1,6 @@
 # Track T build plan: connecting the user's own agents
 
-Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a merged 2026-10-15 (#138); gap G1 ruled the same day (D3 erratum) and fixed (#140, ADR-034); T1b merged 2026-10-15 (#141); T3 split the same day (owner), T3a built on `feat/t3a-never-lose-a-version`. See the [slice map](#5-slice-map).
+Status: **Ruled 2026-10-14: the owner took every recommendation in [§2](#2-owner-decisions), "for now". The terminal's mechanics may be rethought before T2 (rethought the same day: T2a).** *(Proposed the same day.)* **Progress:** T2a merged 2026-10-15 (#137); T1a merged 2026-10-15 (#138); gap G1 ruled the same day (D3 erratum) and fixed (#140, ADR-034); T1b merged 2026-10-15 (#141); T3 split the same day (owner); T3a merged 2026-10-15 (#142); T3b built 2026-10-16 on `feat/t3b-tree-follows-disk`. See the [slice map](#5-slice-map).
 
 Parents: [ADR-031](031-agent-integration-and-lifecycle.md) (decisions), [agent integration brief](brief-agent-integration.md) (design and the §10 gates), [Project API build plan](project-api-build-plan.md) (the P and W tracks this plan builds on; its "Track T" section is the stub this plan replaces).
 This document owns track T's sequencing and evidence. It owns no decisions: §2 lists what the owner rules on, and the brief stays the design authority.
@@ -118,8 +118,8 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 | T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
 | T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
 | T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows | T1b, T2a, D1–D3 | Not started |
-| T3a | Never lose a version: a save never overwrites a newer version on disk; open files reload, or offer the choice when they have unsaved changes | — (alongside T1 and T2a) | Built 2026-10-15 on `feat/t3a-never-lose-a-version` (see [T3a record](#t3a-record)) |
-| T3b | Created, renamed and deleted files reach the file tree and the graph | T3a | Not started (split from T3, 2026-10-15) |
+| T3a | Never lose a version: a save never overwrites a newer version on disk; open files reload, or offer the choice when they have unsaved changes | — (alongside T1 and T2a) | Merged 2026-10-15 (#142 → 6628317; see [T3a record](#t3a-record)) |
+| T3b | Created, renamed and deleted files reach the file tree and the graph | T3a | Built 2026-10-16 on `feat/t3b-tree-follows-disk` (see [T3b record](#t3b-record)) |
 | T4 | Real tasks on the owner's API key; first release | T2b, T3a, T3b | Not started |
 | T5 | macOS and Linux qualification | T4 | Not started; needs macOS and Linux testers |
 
@@ -472,6 +472,34 @@ Standard checks pass. The adversarial check (check-then-write saving) is recorde
 > - `.env` (withheld from agents): `litria_files_read` answers `denied` before and after an outside write, with no content.
 >
 > **Residual:** another program writing between the last check and the rename is not seen (no platform has a replace that fails when the target changed); two writes of the same size within one tick of the filesystem clock leave the stamp unchanged until the next change, and the save still refuses to overwrite; the pill shows the terminal icon all pills share; a single-file session (Open File, no project) is not watched.
+
+### T3b record
+
+> **Owner rulings (2026-10-15/16), all as recommended:** noticing folder changes by **folder stamps**; a canvas file deleted by another program with nothing unsaved **keeps its piece and tab, marked missing**, and comes back with the file; another program's rename is **followed when it is unambiguous**, with no disk writes and no import-line rewrites. Journal `.research/2026-10-15-t3b-tree-follows-disk.md`.
+>
+> **Why folder stamps, not a watcher** (the evidence put to the owner):
+> - A folder's modification time changes whenever an entry in it is created, deleted, renamed or moved in or out, and not when a file's contents change. POSIX `rename()` and `unlink()` "shall mark for update the last data modification ... timestamps of the parent directory" (The Open Group, 2024 edition). A probe on this machine's NTFS and on Linux (kernel 6.6, in a container) showed each of those cases, and the editor-style save by rename.
+> - Checking every folder's stamp took about 5 ms on Litria's own repository (133 folders, 3708 files) and on the website (110 folders), measured in Node.
+> - The `notify` crate (8.2.0) would add two to four crates. Its own documentation says it may not receive all events when watching very many files, that network filesystems and WSL paths may emit none, and that on Linux every watched folder counts toward the user's inotify limit, which a recursive watch of a project with `node_modules` exhausts. VS Code hits the same limit and excludes `node_modules` from its watcher by default. Folder stamps skip the tree's ignored folders (`IGNORED_DIRS`), need no limit, and cannot miss a change, at the cost of up to about two seconds of delay.
+>
+> **What changed:**
+> - **`project_tree_stamp`** (Rust): one fingerprint of the folders the tree shows (links not followed, ignored folders skipped, an unreadable folder counted, at most 20 000 folders). `useDiskChanges` asks for it every other second. When it moves, the tree, discovery and the folder groups list the project again (`bumpScaffoldRefresh`), and the hook lists it once itself, to see which files are new.
+> - **Missing, not removed.** The T3a check already sees a canvas file vanish. Its piece now stays, with a violet light and the sublabel "missing on disk", and its tab stays open, struck through and marked "(deleted)". Any version on disk clears both. A file missing when the project opens is marked the same way.
+> - **Renames followed.** A missing piece follows a newly listed file whose text is exactly the piece's own. An empty text, a text two missing pieces share, or a text two new files share pairs nothing, and more than 256 new files at once (a large checkout) are not read for pairing. Following runs the bookkeeping half of Litria's own move, now `followMove` in the write manager (pieces, tabs, groups, the syntax index, SQLite), and moves or writes nothing. The tab's model renames when it is next shown; that rename skips rewriting importers when another program made the move (`lsp/externalRenames`). A file renamed while it had unsaved changes keeps them.
+> - **Off the main thread.** `list_project_tree` and T3a's `project_files_stamps` are now async, so a large project's walk never holds the interface.
+>
+> **Tests:** Rust (3): the stamp moves with each kind of tree change and not with contents; ignored folders are not walked or seen; the folder cap. JavaScript: rename pairing (unambiguous, ambiguous, empty, a changed text, a folder of files); the missing marks on the judgement; `followMove` touching nothing on disk and refusing a device name; another program's rename writing no importer, and its mark taken once; the tab's missing mark; the missing light below unsaved changes. Fixed on the way: a T3a test asserted a reserved-name refusal with a name that is not reserved, and passed only because the mocked save failed.
+>
+> **Evidence** (Windows 10 19045): `cargo test` 829 lib + 7 process tests pass; `cargo check` no warnings; `npm run test:domains` 1654/1654; guards 7/7; `npm run build` passes; no dependency change.
+>
+> **Live pass** (Windows, a `tauri dev` build of the branch, scratch app data, a throwaway project, shell commands standing in for another program; `.research/2026-10-16-t3b-live/`):
+> - an outside create: in the file tree within about three seconds;
+> - an outside delete of a canvas file: the piece stays, marked missing; its tab reads "src/gone.ts (deleted)"; the tree drops it; no pill. The file restored: the marks clear;
+> - `src/a.ts` renamed to `src/core.ts` while `src/b.ts` imports it: the piece and tab follow; `b.ts` is unchanged on disk, and still after the renamed tab is shown (its model renamed), and its tab is not dirty;
+> - the folder `lib` renamed to `kit` with two canvas files: both follow; no pill;
+> - a file with unsaved changes renamed: the piece and tab follow with the typed text still unsaved; no pill left; nothing written.
+>
+> **Residual:** two tree changes within one tick of the filesystem clock (about 15 ms on Windows) between two checks can leave the stamp unchanged until the next change; a folder past 20 000 is not covered; a rename that also changes the text is seen as a delete and a new file; a renamed file's tab keeps the old import lines in its importers as the other program left them, so their wires may go broken until that program, or the person, updates them.
 
 ## T4. Real tasks, first release
 
