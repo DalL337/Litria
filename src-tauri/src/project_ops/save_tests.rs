@@ -99,10 +99,20 @@ fn a_deleted_file_is_a_change_and_absent_means_absent() {
 #[test]
 fn a_save_stays_inside_the_project() {
     let root = temp_root("contained");
-    for path in ["../outside.ts", "/etc/passwd", "C:\\Windows\\win.ini"] {
+    for path in ["../outside.ts", "/etc/passwd"] {
         assert!(save_project_file(root_str(&root), path, "x", &SaveBase::Absent).is_err(), "{path}");
     }
     assert!(!root.parent().unwrap().join("outside.ts").exists());
+    // A drive path leaves the project on Windows. Elsewhere a backslash is an
+    // ordinary character, so it names a file inside the project.
+    let drive = "C:\\Windows\\win.ini";
+    let saved = save_project_file(root_str(&root), drive, "x", &SaveBase::Absent);
+    if cfg!(windows) {
+        assert!(saved.is_err(), "{drive}");
+    } else {
+        assert!(matches!(saved, Ok(SaveOutcome::Saved { .. })), "{saved:?}");
+        assert!(root.join(drive).is_file(), "inside the project");
+    }
     fs::remove_dir_all(&root).unwrap();
 }
 
