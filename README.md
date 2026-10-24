@@ -36,6 +36,23 @@ out of an actual `import` — nothing here is drawn by hand.*
 
 ---
 
+## Official downloads
+
+Official Litria builds are published **only** on this repository's
+[Releases page](https://github.com/DalL337/Litria/releases).
+
+Copies of this repository exist on other accounts with a "Download"
+button pointing to a .zip file. **Those are not from me and are likely
+malware.** Do not download or run them.
+
+- Litria is never distributed as a .zip from another repo or website.
+- If a version number isn't listed on the Releases page here, it isn't real.
+- If you find one of these copies, please report it to GitHub and let
+  me know in Issues.
+
+Litria is open source under MIT, so forks are welcome. Just
+don't trust prebuilt downloads from anywhere but this page.
+
 ## Download
 
 ### **[⬇ Get the latest release](https://github.com/DalL337/Litria/releases/latest)**
