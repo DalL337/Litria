@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Plus, Square, X } from 'lucide-react';
+import { ChevronDown, ExternalLink, Plus, Square, X } from 'lucide-react';
 import TerminalRenderer from '../components/TerminalRenderer';
 
 const NO_TABS = { tabs: [], viewedKey: null };
@@ -34,6 +34,28 @@ function DrawerContentTerminal({ terminalDomain, projectId, hasFolder = true, is
   const { tabs, viewedKey } = useSyncExternalStore(subscribe, terminalDomain ? getSnapshot : getNoTabs);
   const currentProjectId = useSyncExternalStore(subscribe, terminalDomain ? getCurrentProjectId : getNoProject);
 
+  // The start menu beside +, placed at the drawer's level: the tab strip
+  // scrolls sideways and would clip it (track T slice T2b-1).
+  const drawerRef = useRef(null);
+  const [startMenu, setStartMenu] = useState(null);
+  const closeStartMenu = useCallback(() => setStartMenu(null), []);
+  const toggleStartMenu = (button) => {
+    if (startMenu) {
+      setStartMenu(null);
+      return;
+    }
+    const drawer = drawerRef.current?.getBoundingClientRect();
+    const anchor = button.getBoundingClientRect();
+    setStartMenu({
+      left: Math.max(0, anchor.left - (drawer?.left ?? 0)),
+      top: anchor.bottom - (drawer?.top ?? 0) + 4
+    });
+  };
+  // A hidden drawer shows no menu.
+  useEffect(() => {
+    if (!isVisible) setStartMenu(null);
+  }, [isVisible]);
+
   // Reports the tab on screen (the drawer is visible and shows it). Focus
   // only: being seen clears what a tab's program was waiting to show.
   const inViewKey = isVisible && hasFolder ? viewedKey : null;
@@ -66,7 +88,7 @@ function DrawerContentTerminal({ terminalDomain, projectId, hasFolder = true, is
   };
 
   return (
-    <div className="terminal-drawer">
+    <div className="terminal-drawer" ref={drawerRef}>
       <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
         {tabs.map((tab) => (
           <TerminalTab
@@ -78,17 +100,37 @@ function DrawerContentTerminal({ terminalDomain, projectId, hasFolder = true, is
           />
         ))}
         {canStart && (
-          <button
-            type="button"
-            className="terminal-tab-new"
-            onClick={startNew}
-            title="New terminal"
-            aria-label="New terminal"
-          >
-            <Plus size={13} />
-          </button>
+          <span className="terminal-tab-new-group">
+            <button
+              type="button"
+              className="terminal-tab-new"
+              onClick={startNew}
+              title="New terminal"
+              aria-label="New terminal"
+            >
+              <Plus size={13} />
+            </button>
+            <button
+              type="button"
+              className="terminal-tab-new terminal-tab-new-menu"
+              onClick={(event) => toggleStartMenu(event.currentTarget)}
+              title="Start a terminal or an agent"
+              aria-label="Start a terminal or an agent"
+              aria-haspopup="menu"
+              aria-expanded={startMenu !== null}
+            >
+              <ChevronDown size={12} />
+            </button>
+          </span>
         )}
       </div>
+      {startMenu && canStart && (
+        <StartMenu
+          position={startMenu}
+          terminalDomain={terminalDomain}
+          onClose={closeStartMenu}
+        />
+      )}
       <div className="terminal-stack">
         {tabs.length === 0 ? (
           <div className="top-drawer-empty terminal-empty">
@@ -139,9 +181,99 @@ function TerminalSessionView({ tab, isActive, drawerVisible, terminalDomain }) {
         />
       ) : (
         <div className="top-drawer-empty">
-          {tab.error ? `Terminal failed to start: ${tab.error.message}` : 'Starting…'}
+          {tab.error ? `${tab.kind === 'shell' ? 'Terminal failed to start' : `${tab.label} could not start`}: ${tab.error.message}` : 'Starting…'}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The agents the menu offers, by their names in Litria (track T plan §3). */
+const AGENT_ITEMS = [
+  { agent: 'claude', label: 'Claude Agent', detail: 'runs Claude Code' },
+  { agent: 'codex', label: 'Codex', detail: 'runs Codex' }
+];
+
+/**
+ * Start a shell or one of the person's own agents (track T slice T2b-1). An
+ * agent that is not installed is offered its maker's installation page:
+ * Litria never installs one. Inline, never a modal; Escape and a click
+ * elsewhere close it.
+ */
+function StartMenu({ position, terminalDomain, onClose }) {
+  const menuRef = useRef(null);
+  const agents = useSyncExternalStore(terminalDomain.subscribe, terminalDomain.selectors.getAgents);
+
+  useEffect(() => {
+    // Look each time it opens, so an install made since shows.
+    terminalDomain.commands.detectAgents();
+    menuRef.current?.querySelector('button:not([disabled])')?.focus();
+  }, [terminalDomain]);
+
+  useEffect(() => {
+    const onPointerDown = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) onClose();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [onClose]);
+
+  const start = (agent) => {
+    onClose();
+    terminalDomain.commands.startSession(agent ? { agent } : undefined);
+  };
+
+  return (
+    <div
+      ref={menuRef}
+      className="terminal-start-menu"
+      role="menu"
+      aria-label="Start"
+      style={{ left: position.left, top: position.top }}
+      onKeyDown={(event) => {
+        // Escape closes the menu only, never the drawer.
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <button type="button" role="menuitem" className="terminal-start-item" onClick={() => start(null)}>
+        <span className="terminal-start-label">Shell</span>
+      </button>
+      {AGENT_ITEMS.map(({ agent, label, detail }) => {
+        const installed = agents[agent];
+        return (
+          <div key={agent} className="terminal-start-row">
+            <button
+              type="button"
+              role="menuitem"
+              className="terminal-start-item"
+              disabled={installed !== true}
+              onClick={() => start(agent)}
+            >
+              <span className="terminal-start-label">{label}</span>
+              <span className="terminal-start-detail">
+                {installed === null ? 'Looking…' : installed ? detail : 'Not installed'}
+              </span>
+            </button>
+            {installed === false && (
+              <button
+                type="button"
+                role="menuitem"
+                className="terminal-start-guide"
+                onClick={() => {
+                  onClose();
+                  terminalDomain.commands.openInstallGuide(agent);
+                }}
+                title={`How to install ${label === 'Claude Agent' ? 'Claude Code' : label} (opens its maker's page)`}
+              >
+                Install guide <ExternalLink size={10} />
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

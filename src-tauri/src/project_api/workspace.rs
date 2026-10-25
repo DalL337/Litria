@@ -39,8 +39,8 @@ pub(crate) fn fenced<T>(
     Ok(value)
 }
 
-/// The epoch a debug-build dev call attaches to: whatever is open now.
-#[cfg(debug_assertions)]
+/// The epoch of whatever workspace is open now: what the owner bridge attaches
+/// to, and what a debug-build dev call runs against.
 pub(crate) fn current_epoch() -> Option<String> {
     db::workspace_binding().map(|(epoch, _)| epoch)
 }

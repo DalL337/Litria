@@ -1,28 +1,25 @@
+// Track T slice T2b-1: starting the person's own agent as a terminal session.
+mod agent_launch;
 mod blank_project;
 mod build_log;
 mod bundled_runtime;
 mod commands;
 // ADR-033 contract types and machinery; schema generation stays test-only.
-// Release builds have no consumer until the Project API's external transport
-// (build plan track T), so they allow the dead code; debug builds use it
-// through the dev-only `project_api_dev_call`.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
+// Agents reach them through mcp_connection (track T); since slice T2b-1
+// release builds start agents, so nothing here is dead code there.
 mod contracts;
 mod crash;
 mod db;
 mod errors;
 mod execution_policy;
 mod lsp;
-// Track T slice T1a: the agents' MCP connection. Release builds start no agent
-// session before slice T2b, so only the helper half runs there; the rest is
-// allowed as dead code until then.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
+// Track T slice T1a: the agents' MCP connection. Sessions start when
+// agent_launch starts an agent (slice T2b-1), in every build.
 mod mcp_connection;
 mod path_guard;
 mod platform;
 mod preferences;
-// ADR-031 Project API service. Same release-build note as `contracts` above.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
+// ADR-031 Project API service.
 mod project_api;
 mod project_ops;
 mod project_tree;
@@ -98,6 +95,9 @@ pub fn run() {
             commands::remove_empty_directory,
             // Terminal
             commands::terminal_spawn,
+            commands::agent_detect,
+            commands::agent_open_install_guide,
+            commands::terminal_spawn_agent,
             commands::terminal_input,
             commands::terminal_resize,
             commands::terminal_session_end,
@@ -187,11 +187,10 @@ pub fn run() {
             commands::project_api_dev_agent_session_start,
             #[cfg(debug_assertions)]
             commands::project_api_dev_agent_session_end,
-            #[cfg(debug_assertions)]
+            // The owner bridge: agents' calls read editor state through it
+            // (every build since track T slice T2b-1).
             commands::project_api_bridge_attach,
-            #[cfg(debug_assertions)]
             commands::project_api_bridge_detach,
-            #[cfg(debug_assertions)]
             commands::project_api_bridge_reply,
             // Build logs — scaffold/build diagnostics (not crashes)
             commands::build_log_write,
@@ -223,9 +222,8 @@ pub fn run() {
                 }
             }
 
-            // Project API owner bridge: requests go to the main window (dev
-            // builds only, with the dev call that consumes it — track T).
-            #[cfg(debug_assertions)]
+            // Project API owner bridge: requests go to the main window. Agents'
+            // calls consume it in every build (track T slice T2b-1).
             project_api::install_bridge(app.handle().clone());
 
             // Initialize the app-level SQLite database (recent projects, preferences).

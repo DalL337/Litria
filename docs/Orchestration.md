@@ -228,13 +228,18 @@ marked below.
   (OSC 7501), read once per chunk by the tap (`terminalSignals.js`, `programStatus.js`),
   "needs you" and the session to show for it, and the protocol's feature reply (the only
   thing the domain writes back unasked); which tab is on screen (focus, reported by the
-  drawer; seeing a tab clears its bell and finished results).
+  drawer; seeing a tab clears its bell and finished results). *(Added 2026-10-24, slice
+  T2b-1)* Agent sessions: a tab's kind (`shell`, `claude`, `codex`) and its label count;
+  starting the person's own agent by name only (Rust finds and builds the program); which
+  agents are installed, for the start menu beside +; the agents' install guides (fixed
+  addresses). Nothing is ever typed into an agent for Litria.
 - Does not own: terminal UI rendering (xterm.js lives in the presentation layer), drawer
   open/close state, pill notification state, the notice pill itself
   (`src/app/terminalEndGate.js`).
 - Depends on: infrastructure adapters only; no UI imports, no other domain imports.
 - Rust backend: `terminal_session_manager.rs` (the session registry), `terminal_pty.rs`
-  (one session's pseudoconsole and threads), `terminal_policy.rs`, `terminal_types.rs`
+  (one session's pseudoconsole and threads), `terminal_policy.rs`, `terminal_types.rs`,
+  `agent_launch.rs` (T2b-1: finding and starting the person's agents)
   (+ vendored portable-pty with sideloaded ConPTY — see PR #106).
 
 15. `PillDomain`

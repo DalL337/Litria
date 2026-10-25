@@ -41,6 +41,7 @@ The command inventory, with each command's frontend caller, is in [rust-command-
 - `terminal_pty.rs`: one session's pseudoconsole and its three threads (the reader, the writer that owns the PTY input, and the exit watcher), the ConPTY startup handshake, UTF-8 decoding across reads, the busy check, and the bounded teardown (the Job Object dropped before the pseudoconsole closes).
 - `terminal_policy.rs`: the execution boundary for terminals (the allowed shells and the preferred one), and the terminal environment: the variables a launching program leaked in, which are removed, and the forced terminal variables.
 - `terminal_types.rs`: terminal payload types.
+- `agent_launch.rs` *(added 2026-10-24, track T slice T2b-1)*: starting the person's own Claude Code or Codex as a terminal session. Finds them on the PATH a Litria terminal sees (on Windows the registry's, so an install made after Litria started is found), runs the real program behind an npm `.cmd` shim instead of going through `cmd.exe`, builds the command line in Rust (Litria's MCP server added for that session only: `claude --mcp-config`, `codex -c mcp_servers.litria.*`), starts the session's MCP connection and ends it with the terminal session. It never installs an agent, never edits the person's configuration, and never types into an agent's prompt.
 - *(`terminal_ipc_bridge.rs` was removed 2026-10-14: nothing listened to its global events.)*
 - `process_control.rs`: deadlines and cancellation for scaffold subprocesses (ADR-028 §8). Every scaffold subprocess runs under one.
 
@@ -121,7 +122,7 @@ The command inventory, with each command's frontend caller, is in [rust-command-
   - `protocol.rs`: the MCP conversation (the `initialize` handshake revisions, `ping`, `tools/list`, and since T1b `tools/call` and cancellation); a message naming a key twice is refused before it is parsed.
   - `helper.rs`: the helper's relay between stdio and the endpoint.
   - `mod.rs`: the one service (bound when the first session starts, one accept thread, the connection cap), the page-load and exit hooks, and the hidden debug-only `test_support` for `src-tauri/tests/mcp_helper.rs`. `calls_tests.rs` runs tool calls through the real endpoint against a real workspace.
-  - It spawns nothing. Its only command adapters are the debug-only `project_api_dev_agent_session_start` and `project_api_dev_agent_session_end`; slice T2b starts sessions when it starts an agent.
+  - It spawns nothing. `agent_launch.rs` starts a session for each agent it starts (since slice T2b-1) and ends it with the agent's terminal session; the debug-only `project_api_dev_agent_session_start` and `project_api_dev_agent_session_end` remain for live passes.
 
 **Other**
 - `quote_pool.rs`: picks one quote from `quotes.json` for a blank project's generated README.

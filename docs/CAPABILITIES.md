@@ -296,7 +296,16 @@ event streams — interactive CLIs work end-to-end inside the app.
   the protocol's question, so Claude Code (2.1.295 and later) turns its
   status reports on.
 
-*Built on:* terminal PTY plan + track T slices T2a and T2a-2
+- **Start your own Claude Code or Codex** (2026-10-24): the menu beside +
+  starts the agent you installed as a tab of its own, connected to Litria's
+  tools for that session only (`claude --mcp-config`, Codex's `-c`
+  overrides). Your own sign-in, settings, skills and MCP servers load as
+  usual, and Litria never edits your configuration or types into the agent.
+  An agent that is not installed offers its maker's install guide; Litria
+  never installs one. Ending the tab, closing the project or the window, or
+  Litria crashing leaves nothing of it running.
+
+*Built on:* terminal PTY plan + track T slices T2a, T2a-2 and T2b-1
 (`docs/plans/agent-integration/track-t-build-plan.md`).
 
 ---
