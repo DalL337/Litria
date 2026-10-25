@@ -116,10 +116,10 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 | T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Merged 2026-10-15 (#138 → c786413; see [T1a record](#t1a-record)) |
 | T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Merged 2026-10-15 (#141 → 173d47a; see [T1b record](#t1b-record)) |
 | T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
-| T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer | T2a | Not started (split from T2a, 2026-10-14) |
-| T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows | T1b, T2a, D1–D3 | Not started |
+| T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer; Litria answers the protocol's question (moved from T2b, 2026-10-24) | T2a | Built 2026-10-24 on `feat/t2a-2-needs-you` (see [T2a-2 record](#t2a-2-record)) |
+| T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows. Two pull requests (owner, 2026-10-24): T2b-1 start, T2b-2 continue | T1b, T2a, D1–D3 | Not started |
 | T3a | Never lose a version: a save never overwrites a newer version on disk; open files reload, or offer the choice when they have unsaved changes | — (alongside T1 and T2a) | Merged 2026-10-15 (#142 → 6628317; see [T3a record](#t3a-record)) |
-| T3b | Created, renamed and deleted files reach the file tree and the graph | T3a | Built 2026-10-16 on `feat/t3b-tree-follows-disk` (see [T3b record](#t3b-record)) |
+| T3b | Created, renamed and deleted files reach the file tree and the graph | T3a | Merged 2026-10-16 (#143 → 795d578; see [T3b record](#t3b-record)) |
 | T4 | Real tasks on the owner's API key; first release | T2b, T3a, T3b | Not started |
 | T5 | macOS and Linux qualification | T4 | Not started; needs macOS and Linux testers |
 
@@ -362,7 +362,45 @@ Standard checks pass. A live pass on Windows with shells only. T2a ships on its 
 >
 > **Erratum (2026-10-15, macOS; branch `fix/macos-self-exit-test`):** "the reader then drains the pipe, which no pause can hold any more" holds on Windows and Linux only. On macOS the shell is its terminal's controlling process, and the kernel (XNU `proc_exit` → `ttywait`, no timeout unless the superuser sets one) drains that terminal's output before the process can finish exiting. While the view has paused the output, a shell that exits by itself waits mid-exit (`ps`: `E`, trying to exit) and is noticed only after the view resumes, then 245 ms later on the runner. Nothing is lost and the last output still comes before `Exited`; the notice is only later. This made the real-shell test "a shell exiting by itself" fail intermittently on macos-14 (on `main`'s CI for the T2a merge b70db3f and on PR #138), passing only when the read in progress at the pause happened to take all of the shell's last output. The test now parks the reader first, so the last output is surely queued, and expects the macOS behaviour there: the exit is held while paused and follows the resume. On Linux and Windows it now also checks that the shell really exited with its output still queued, which the old test could not tell. Evidence: a diagnostic run on macos-14 (run 38757505622), and XNU's `bsd/kern/kern_exit.c` and `bsd/kern/tty.c`.
 
+## T2a-2. "Needs you" on a tab
+
+### Goal
+
+A terminal tab shows when its program needs the person: it rang the bell while they were not looking, or it reports through the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501) that it is blocked on them. A session out of sight that needs them shows outside the drawer. Litria answers the protocol's question, so a program that asks before reporting (Claude Code does) reports its status.
+
+### Owner rulings (2026-10-24)
+
+- T2a-2 comes before T2b, so an agent's approval prompt in a hidden tab is never left unseen.
+- Litria answers `OSC 7501 ; ?` in this slice (moved from T2b). Without the answer Claude Code sends no status at all, and "needs you" would cover only the bell.
+
+### T2a-2 record
+
+> **Built 2026-10-24 on branch `feat/t2a-2-needs-you`.** Journal `.research/2026-10-24-t2a-2-needs-you.md`.
+>
+> **The protocol is at revision 0.4** (2026-10-10), not the 0.1 the T2a research saw. Implemented from the specification, terminal side: the report grammar, the five states and `clear`, record ids and their children, every limit, the discard rules (a report over a limit, with bad base64, or with a control character in its text, is dropped whole), and the record lifetime (the program's exit or a new prompt, OSC 133;A, ends `working` and `blocked`; `done` and `error` stay until the person sees them; a full reset clears everything). Text from a report is shown only in a tooltip, stripped of invisible formatting such as right-to-left overrides. The only thing Litria writes back is the feature reply, a constant.
+>
+> **What Claude Code does** (read from the installed 2.1.303 binary, then checked live): it asks `OSC 7501 ; ?` and then sends DA1 (`CSI c`). If the DA1 answer arrives first it decides the terminal does not support the protocol and sends nothing. Its reports end with BEL, as does its question; so do the window titles PowerShell sets at every prompt. A bell counter that ignored escape sequences would mark every tab that runs Claude or shows a prompt.
+>
+> **Decisions made while building:**
+> - **Signals are read in the domain's tap, not in xterm.** The tap sees each chunk of output once, whether or not a view shows the session. A view replays recent output whenever it mounts, so signals read there would fire again, and an old question would get a fresh answer. A small scanner tracks escape sequences across reads the way xterm's parser does, so only a bell xterm would ring counts.
+> - **The answer goes out from the tap**, before the screen parses the same output, so it reaches the program ahead of xterm's DA1 answer. A question asked before the session's start resolves (an agent started as the session's own process, T2b) is answered the moment the session id arrives, before any view can mount.
+> - **"Seen" means the drawer is open on that tab.** The drawer reports which tab is on screen (focus only). A bell from that tab asks nothing; showing a tab clears its bell and its finished results; a result that finishes on screen is already seen. Being blocked shows even on screen, because seeing it does not answer it.
+> - **The tab:** an orange dot (the label tinted) for "needs you", blue for working, a green ring for done, red for an error; the tooltip says why ("Needs you: claude-code asks for permission: …"), and screen readers hear "Needs you."
+> - **Outside the drawer:** the terminal's rail button carries an orange badge and the title "Terminal: a session needs you". Opening the terminal from the rail shows the latest session that needs the person.
+>
+> **What changed:** `src/terminal/terminalSignals.js` (new, the scanner), `src/terminal/programStatus.js` (new, the parser, the records and the reply), `terminalDomain.js` (the tap, per-tab state, `setSessionInView`, `showSessionNeedingYou`, the answer), `DrawerContentTerminal.jsx` (the in-view report, the dot and tooltip), `TopDrawerShell.jsx` and `useTopDrawers.jsx` (the rail badge, opening on the session that needs the person), `drawers.css`.
+>
+> **Evidence** (Windows 10 19045):
+> - Before building, through the sideloaded ConPTY 1.24 host with the real `claude.exe` 2.1.303 (empty settings folder, signed out, no model call; a throwaway test, not committed): answered, its debug log says `programStatus=yes (probe: OSC 7501 reply)`; unanswered, `programStatus=no (probe: no reply to OSC 7501 ; ?)`. ConPTY passes the question, DA1 and our answer through.
+> - `npm run test:domains` all pass (1705), with 51 new tests: the scanner (every split point of a mixed stream reads the same as the whole), the parser and records against the specification's rules, the domain through the real event stream, and the drawer in StrictMode (the rail badge, opening from the rail, a bell on screen, the dot and tooltip, the answer going to its own session only). Each of 15 guarantees was broken once and the tests meant to catch it failed.
+> - Guards 7/7; `npm run build`.
+> - Live pass (a `tauri dev` of the branch, throwaway project and app data, driven over CDP; run before one later change that only skips re-rendering for a report that changes nothing shown): Claude Code started in a Litria tab logged `programStatus=yes`, so the answer beats xterm's DA1 answer through the real app; prompts and Claude's question marked nothing; a bell on screen asked nothing; a bell from a hidden tab with the drawer closed badged the rail, and opening from the rail showed that tab and cleared it; working then done in a hidden tab (blue, then a green ring, cleared on view); blocked with a question badged the rail with the question in the tooltip, and the program's `clear` cleared it; an error reported while hidden survived its shell's exit. Screenshots read at 1× and 3×.
+>
+> **Not covered yet:** a signed-in Claude Code's real reports (signed out, it only asks; T4), Codex's bell and reports (not on this machine's PATH; T2b), the desktop-notification sequences (OSC 9, OSC 777; not read: the T2a research found neither agent sends them to Litria by default), a window that is open but not in front (the drawer counts as seen), and macOS and Linux (T5).
+
 ## T2b. Starting the user's own agent
+
+> **Owner rulings (2026-10-24):** T2b ships as two pull requests: **T2b-1** detection, start, lifecycle and release builds (keyless checks 1–8), and **T2b-2** continuing conversations on reopen (check 9). Answering `OSC 7501 ; ?` moved to T2a-2. Found the same day: the installed Claude Code is 2.1.303, past 2.1.292, so the `server/discover` fallback check below is live; Codex is not on this machine's PATH (only the copy inside the VS Code extension, 0.164.0-alpha), so how T2b-1 finds Codex, and how its keyless check runs here, needs deciding first.
 
 ### Goal
 

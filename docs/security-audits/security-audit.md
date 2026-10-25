@@ -1,7 +1,18 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-16 — **the tree follows files changed by other programs (track T slice T3b, branch `feat/t3b-tree-follows-disk`)**:
+> **Last reviewed**: 2026-10-24 — **"needs you" on a terminal tab (track T slice T2a-2, branch `feat/t2a-2-needs-you`)**:
+> - **Why.** Not a Rule 1 trigger (no new Tauri command, execution or network surface), reviewed because the slice parses untrusted program output and writes to a session's input in response to it.
+> - **What holds.**
+>   - The only thing Litria writes back is the Program Status Protocol's feature reply, a constant (`PROGRAM_STATUS_REPLY`), to the session whose output asked, through the existing `terminal_input`. Nothing from a report (ids, titles, messages) is ever echoed, and records cannot be read back. A program that asks repeatedly gets the same constant into its own input, which it could write there itself.
+>   - Reports are parsed to the specification's rules (revision 0.4): every limit enforced; a report over a limit, with bad base64, or with a control character in its decoded text is discarded whole; an invalid id makes it ignored. The scanner keeps at most 4096 code units of an OSC it cares about and none of any other (an OSC 52 clipboard write of any size is scanned past, never stored).
+>   - Report text is shown only in a tooltip (React text, no markup), with invisible formatting removed (right-to-left overrides, zero-width and isolate characters) and a 200-character cap. The tab it appears on names the session it came from.
+>   - The bell and reports change only how a tab looks: no sound, no desktop notification, no focus change. Opening the terminal from its rail shows the session that needs the person; nothing starts or ends.
+>   - The adversarial-check policy does not apply: no check guards an action here. Considered anyway: a program can make its own tab look urgent or name any `app` in its tooltip. It already controls that session's screen, and the tab shows which session it is.
+> - **Residual.** A program in one session can mark only its own tab. A "needs you" mark can be cleared by the program itself (`clear`), so it signals and never enforces.
+> - **Scans.** No dependency change in this slice. `npm audit`: **2 high, both devDependencies, published after the 2026-10-16 review** — `happy-dom` 20.14.5 (GHSA-834v-8h66-3h79; the test DOM, which runs only our own test code; fixed in 21.0.4, a major bump) and `vite` 7.x (five advisories in the dev server and its launch-editor middleware, GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw, GHSA-587h-7wmj-h5pm, GHSA-9jrq-w75r-8gcw, GHSA-rq7h-c2jc-7f22; the built app does not include the dev server; `npm audit fix` available). Not fixed here: a separate dependency change under the dependency-change policy (board card `npm-audit-2026-10-24`). `cargo audit`: not re-run (no Cargo change).
+>
+> **Reviewed**: 2026-10-16 — **the tree follows files changed by other programs (track T slice T3b, branch `feat/t3b-tree-follows-disk`)**:
 > - **Why.** Security policy Rule 1: a new Tauri command reads the filesystem (`project_tree_stamp`), and two existing ones move off the main thread (`list_project_tree`, `project_files_stamps`).
 > - **What holds.**
 >   - `project_tree_stamp` returns one opaque fingerprint, the number of folders and a truncation flag. It reads folder metadata only, under the resolved project root; it follows no link, skips the tree's ignored folders, counts an unreadable folder instead of failing, and stops at 20 000 folders.

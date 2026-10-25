@@ -287,8 +287,16 @@ event streams — interactive CLIs work end-to-end inside the app.
 - Switching projects (or Exit to Launcher) while a terminal is running a
   program shows an inline notice first; idle shells end without asking
 - Suggested commands (install offers) run in a terminal tab of their own
+- **"Needs you" on a tab** (2026-10-24): a tab marks a program that is
+  waiting for you (it reports being blocked through the Program Status
+  Protocol, OSC 7501, or rang the bell while you were not looking), and
+  shows when it is working, done or stopped with an error; its tooltip says
+  why. A session that needs you while out of sight badges the terminal's
+  rail button, and opening the terminal shows that session. Litria answers
+  the protocol's question, so Claude Code (2.1.295 and later) turns its
+  status reports on.
 
-*Built on:* terminal PTY plan + track T slice T2a
+*Built on:* terminal PTY plan + track T slices T2a and T2a-2
 (`docs/plans/agent-integration/track-t-build-plan.md`).
 
 ---
