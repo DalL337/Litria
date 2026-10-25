@@ -26,6 +26,9 @@ const EXIT_CODE_WAIT: Duration = Duration::from_secs(2);
 /// After End's Ctrl+C, how long a running program gets to stop before its
 /// tree is stopped instead.
 const BUSY_GRACE: Duration = Duration::from_millis(1000);
+/// An agent session: how long after End's first Ctrl+C (which stops a turn in
+/// progress) before the second, which quits it.
+const AGENT_SECOND_CTRL_C: Duration = Duration::from_millis(500);
 /// Input messages waiting for the writer thread. Keystrokes are tiny; a full
 /// queue means the program stopped reading its input.
 const INPUT_QUEUE: usize = 1024;
@@ -233,6 +236,24 @@ impl FlowControl {
     }
 }
 
+/// What a session runs (track T slice T2b-1).
+pub(crate) enum SessionProgram {
+    /// The person's shell: the boundary's validated executable.
+    Shell,
+    /// One of the person's agents, as the session's own process.
+    Agent(AgentProgram),
+}
+
+/// An agent session's program, built by `agent_launch` (never by the webview).
+pub(crate) struct AgentProgram {
+    pub(crate) executable: std::path::PathBuf,
+    pub(crate) args: Vec<std::ffi::OsString>,
+    /// Added to the inherited environment.
+    pub(crate) env: Vec<(&'static str, String)>,
+    /// Runs once the session has ended, whichever way it ended.
+    pub(crate) on_end: Box<dyn FnOnce() + Send>,
+}
+
 /// One PTY-backed terminal session.
 ///
 /// Every method takes `&self`. The session manager hands out `Arc` clones, so
@@ -267,6 +288,9 @@ struct PtyInner {
     exit_code: Mutex<Option<i32>>,
     #[cfg(target_os = "windows")]
     job: Mutex<Option<win32job::Job>>,
+    /// The session runs an agent, not a shell: End never types into it.
+    agent: bool,
+    on_end: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[derive(Default)]
@@ -348,11 +372,44 @@ fn de_verbatim(path: &std::path::Path) -> std::path::PathBuf {
 pub(crate) fn spawn_pty(
     session_id: &str,
     validated: &crate::execution_policy::ValidatedExecutionBoundary,
+    program: SessionProgram,
     cols: u16,
     rows: u16,
     channel: Channel<TerminalEvent>,
     on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) -> CommandResult<PtySession> {
+    // From here until the session exists, a failure must still run the
+    // agent's end hook (it ends the session's MCP connection).
+    let (agent_launch, on_end) = match program {
+        SessionProgram::Shell => (None, None),
+        SessionProgram::Agent(AgentProgram { executable, args, env, on_end }) => {
+            (Some((executable, args, env)), Some(on_end))
+        }
+    };
+    let mut on_end = on_end;
+    let result = spawn_pty_inner(session_id, validated, agent_launch, &mut on_end, cols, rows, channel, on_exit);
+    if result.is_err() {
+        if let Some(on_end) = on_end.take() {
+            on_end();
+        }
+    }
+    result
+}
+
+type AgentLaunch = (std::path::PathBuf, Vec<std::ffi::OsString>, Vec<(&'static str, String)>);
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_pty_inner(
+    session_id: &str,
+    validated: &crate::execution_policy::ValidatedExecutionBoundary,
+    agent_launch: Option<AgentLaunch>,
+    on_end: &mut Option<Box<dyn FnOnce() + Send>>,
+    cols: u16,
+    rows: u16,
+    channel: Channel<TerminalEvent>,
+    on_exit: Box<dyn FnOnce() + Send + 'static>,
+) -> CommandResult<PtySession> {
+    let is_agent = agent_launch.is_some();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -383,12 +440,24 @@ pub(crate) fn spawn_pty(
         )
     })?;
 
-    let mut cmd = CommandBuilder::new(&validated.executable);
-    // Suppress the startup banner for PowerShell
-    let exe_lower = validated.executable.to_lowercase();
-    if exe_lower.contains("powershell") || exe_lower.contains("pwsh") {
-        cmd.arg("-NoLogo");
-    }
+    let (mut cmd, agent_env) = match agent_launch {
+        // The agent is the session's own process, with the arguments
+        // `agent_launch` built; nothing is typed into a shell for it.
+        Some((executable, args, env)) => {
+            let mut cmd = CommandBuilder::new(executable);
+            cmd.args(args);
+            (cmd, env)
+        }
+        None => {
+            let mut cmd = CommandBuilder::new(&validated.executable);
+            // Suppress the startup banner for PowerShell
+            let exe_lower = validated.executable.to_lowercase();
+            if exe_lower.contains("powershell") || exe_lower.contains("pwsh") {
+                cmd.arg("-NoLogo");
+            }
+            (cmd, Vec::new())
+        }
+    };
     // path_guard canonicalizes the root, which on Windows yields a verbatim
     // \\?\C:\... path — PowerShell started there renders its prompt as
     // "Microsoft.PowerShell.Core\FileSystem::\\?\C:\...". Hand the shell a
@@ -407,6 +476,10 @@ pub(crate) fn spawn_pty(
         cmd.env_remove(name);
     }
     for (name, value) in terminal_policy::FORCED_ENV {
+        cmd.env(name, value);
+    }
+    // An agent's connection to Litria (its MCP server reads these).
+    for (name, value) in agent_env {
         cmd.env(name, value);
     }
 
@@ -451,6 +524,10 @@ pub(crate) fn spawn_pty(
             exit_code: Mutex::new(None),
             #[cfg(target_os = "windows")]
             job: Mutex::new(job),
+            agent: is_agent,
+            // The session owns the end hook from here: any later failure
+            // drops the session, and ending it runs the hook.
+            on_end: Mutex::new(on_end.take()),
         }),
     };
 
@@ -762,7 +839,9 @@ impl TerminalSession for PtySession {
         if self.inner.ended.load(Ordering::SeqCst) {
             return false;
         }
-        self.inner.has_child_processes()
+        // An agent's conversation counts as busy even at its prompt: ending
+        // it asks first (T2b-1).
+        self.inner.agent || self.inner.has_child_processes()
     }
 
     /// Ends the session and everything it started; see `PtyInner::end`.
@@ -785,6 +864,12 @@ impl PtyInner {
             self.end_by_request()
         };
         *self.exit_code.lock().unwrap_or_else(PoisonError::into_inner) = code;
+        // An agent session's MCP connection ends with it, whichever way it
+        // ended (track T slice T2b-1). Taken first, run after the lock.
+        let on_end = self.on_end.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(on_end) = on_end {
+            on_end();
+        }
         code
     }
 
@@ -794,7 +879,8 @@ impl PtyInner {
     /// 2. Ctrl+C. Only when nothing but the shell is left running is `exit`
     ///    typed: text typed into a running program (an editor, an agent)
     ///    would reach it as input. A clean exit is what lets the console host
-    ///    shut down promptly.
+    ///    shut down promptly. An agent session (T2b-1) is never typed into:
+    ///    it gets a second Ctrl+C instead, which quits Claude Code and Codex.
     /// 3. Whatever is still running is stopped with everything it started:
     ///    the job on Windows, the session's process groups on Unix.
     /// 4. The input pipe is released, then the pseudoconsole closed (the job
@@ -816,12 +902,27 @@ impl PtyInner {
         };
 
         send(CTRL_C);
-        let at_prompt = !self.has_child_processes() || self.wait_until_idle(BUSY_GRACE);
-        let mut state = if at_prompt {
-            send(SHELL_EXIT);
-            self.wait_for_exit(GRACEFUL_EXIT)
+        let mut state = if self.agent {
+            // An agent is the session's own process: nothing is ever typed
+            // into it, since text would reach its prompt (and could reach
+            // the model). Ctrl+C stops a turn in progress; a second, at its
+            // prompt, quits it (Claude Code and Codex both), so it can save
+            // its conversation. Then its tree is stopped like any other.
+            match self.wait_for_exit(AGENT_SECOND_CTRL_C) {
+                ProcessState::Running => {
+                    send(CTRL_C);
+                    self.wait_for_exit(GRACEFUL_EXIT)
+                }
+                exited => exited,
+            }
         } else {
-            self.wait_for_exit(Duration::ZERO)
+            let at_prompt = !self.has_child_processes() || self.wait_until_idle(BUSY_GRACE);
+            if at_prompt {
+                send(SHELL_EXIT);
+                self.wait_for_exit(GRACEFUL_EXIT)
+            } else {
+                self.wait_for_exit(Duration::ZERO)
+            }
         };
 
         if matches!(state, ProcessState::Running) {
@@ -1475,6 +1576,7 @@ mod tests {
             let session = spawn_pty(
                 &id,
                 &boundary(),
+                SessionProgram::Shell,
                 100,
                 30,
                 channel,
@@ -1884,6 +1986,150 @@ mod tests {
                         && matches!(inner.child.lock().unwrap().try_wait(), Ok(Some(_)))
                 });
             });
+        }
+
+        // ── Agent sessions (track T slice T2b-1) ────────────────────────────
+        //
+        // An agent is the session's own process. These stand a small program
+        // in for it: one that ignores Ctrl+C and writes every line it reads to
+        // a log, so anything End typed into it would show there.
+
+        const INPUT_LOG: &str = "LITRIA_TEST_INPUT_LOG";
+
+        /// (executable, args) of a program that ignores Ctrl+C and logs what
+        /// it reads to the file named by `INPUT_LOG`.
+        fn stubborn_reader() -> (&'static str, Vec<&'static str>) {
+            // Like the agents themselves, it reads raw keystrokes (Node, raw
+            // mode): Ctrl+C is then only a byte, and Windows' console host
+            // turns a typed CR into Enter only for raw readers.
+            #[cfg(windows)]
+            return (
+                "node.exe",
+                vec![
+                    "-e",
+                    "process.stdin.setRawMode(true); process.stdin.on('data', (d) => require('fs').appendFileSync(process.env.LITRIA_TEST_INPUT_LOG, d));",
+                ],
+            );
+            #[cfg(unix)]
+            return (
+                "sh",
+                vec!["-c", "trap '' INT; while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$LITRIA_TEST_INPUT_LOG\"; done"],
+            );
+        }
+
+        fn spawn_agent(
+            executable: &str,
+            args: &[&str],
+            log: &std::path::Path,
+            ends: Arc<std::sync::atomic::AtomicUsize>,
+            seen_exit: Arc<AtomicBool>,
+        ) -> (PtySession, Arc<Mutex<Seen>>) {
+            let (channel, seen) = capture();
+            let id = format!("{:032x}", rand::random::<u128>());
+            let program = SessionProgram::Agent(AgentProgram {
+                executable: executable.into(),
+                args: args.iter().map(Into::into).collect(),
+                env: vec![(INPUT_LOG, log.to_string_lossy().to_string())],
+                on_end: Box::new(move || {
+                    ends.fetch_add(1, Ordering::SeqCst);
+                }),
+            });
+            let session = spawn_pty(
+                &id,
+                &boundary(),
+                program,
+                100,
+                30,
+                channel,
+                Box::new(move || seen_exit.store(true, Ordering::SeqCst)),
+            )
+            .expect("the agent program starts");
+            (session, seen)
+        }
+
+        fn scratch_log(name: &str) -> std::path::PathBuf {
+            std::env::temp_dir().join(format!("litria-agent-input-{name}-{:08x}.log", rand::random::<u32>()))
+        }
+
+        fn logged(log: &std::path::Path) -> String {
+            std::fs::read_to_string(log).unwrap_or_default()
+        }
+
+        #[test]
+        fn ending_an_agent_session_never_types_into_it() {
+            with_watchdog(|| {
+                let log = scratch_log("end");
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let (program, args) = stubborn_reader();
+                let (session, _seen) =
+                    spawn_agent(program, &args, &log, Arc::clone(&ends), Arc::new(AtomicBool::new(false)));
+                // Its reader works: what is typed reaches the log.
+                type_line(&session, "ready");
+                wait_for("the agent stand-in to read input", || logged(&log).contains("ready"));
+                assert!(session.is_busy(), "an agent at rest still counts as busy");
+
+                session.end();
+                // A shell's End would have typed `exit` here; an agent gets only
+                // Ctrl+C, which the stand-in ignores, then its tree is stopped.
+                let read = logged(&log);
+                assert!(read.contains("ready"));
+                assert!(!read.contains("exit"), "nothing was typed into the agent: {read:?}");
+                assert!(matches!(session.inner.child.lock().unwrap().try_wait(), Ok(Some(_))), "it was stopped");
+                assert_eq!(ends.load(Ordering::SeqCst), 1, "the end hook ran once");
+                session.end();
+                assert_eq!(ends.load(Ordering::SeqCst), 1, "and only once");
+                let _ = std::fs::remove_file(&log);
+            });
+        }
+
+        #[test]
+        fn an_agent_that_exits_by_itself_still_runs_its_end_hook() {
+            with_watchdog(|| {
+                let log = scratch_log("self-exit");
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let exited = Arc::new(AtomicBool::new(false));
+                #[cfg(windows)]
+                let (program, args) = ("cmd.exe", vec!["/d", "/c", "exit 0"]);
+                #[cfg(unix)]
+                let (program, args) = ("sh", vec!["-c", "exit 0"]);
+                let (session, _seen) = spawn_agent(program, &args, &log, Arc::clone(&ends), Arc::clone(&exited));
+                wait_for("the program to exit", || exited.load(Ordering::SeqCst));
+                assert_eq!(ends.load(Ordering::SeqCst), 0, "not before the session ends");
+                session.end();
+                assert_eq!(ends.load(Ordering::SeqCst), 1);
+            });
+        }
+
+        #[test]
+        fn a_dropped_agent_session_still_runs_its_end_hook() {
+            with_watchdog(|| {
+                let log = scratch_log("drop");
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let (program, args) = stubborn_reader();
+                let (session, _seen) =
+                    spawn_agent(program, &args, &log, Arc::clone(&ends), Arc::new(AtomicBool::new(false)));
+                drop(session);
+                wait_for("the backstop to run the end hook", || ends.load(Ordering::SeqCst) == 1);
+                let _ = std::fs::remove_file(&log);
+            });
+        }
+
+        #[test]
+        fn an_agent_that_cannot_start_runs_its_end_hook() {
+            let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&ends);
+            let (channel, _seen) = capture();
+            let program = SessionProgram::Agent(AgentProgram {
+                executable: std::env::temp_dir().join("litria-no-such-agent-program.exe"),
+                args: Vec::new(),
+                env: Vec::new(),
+                on_end: Box::new(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }),
+            });
+            let started = spawn_pty("0123456789abcdef0123456789abcdef", &boundary(), program, 80, 24, channel, Box::new(|| {}));
+            assert!(started.is_err(), "a missing program does not start");
+            assert_eq!(ends.load(Ordering::SeqCst), 1, "its connection is ended at once");
         }
     }
 }

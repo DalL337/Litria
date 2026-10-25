@@ -12,7 +12,8 @@
 
 use crate::errors::{CommandError, CommandResult};
 use crate::terminal_policy;
-use crate::terminal_pty::{self, PtySession, TerminalEvent};
+use crate::execution_policy::ValidatedExecutionBoundary;
+use crate::terminal_pty::{self, PtySession, SessionProgram, TerminalEvent};
 use crate::terminal_types::{
     TerminalEndReport, TerminalSessionEndedPayload, TerminalSessionStartedPayload,
 };
@@ -574,6 +575,20 @@ pub(crate) fn start_pty_session(
     let project_id = validate_project_id(project_id)?;
     let validated =
         terminal_policy::validate_terminal_execution_boundary(project_id, project_root, executable)?;
+    start_program_session(page, validated, SessionProgram::Shell, cols, rows, channel)
+}
+
+/// Starts a session running `program` (a shell, or an agent `agent_launch`
+/// built) in a validated project folder. One registry, one set of caps and
+/// one lifecycle for both.
+pub(crate) fn start_program_session(
+    page: u64,
+    validated: ValidatedExecutionBoundary,
+    program: SessionProgram,
+    cols: u16,
+    rows: u16,
+    channel: Channel<TerminalEvent>,
+) -> CommandResult<TerminalSessionStartedPayload> {
     // A session can start before any view has measured it.
     let (cols, rows) = if cols == 0 || rows == 0 { (80, 24) } else { (cols, rows) };
 
@@ -588,6 +603,7 @@ pub(crate) fn start_pty_session(
             terminal_pty::spawn_pty(
                 session_id,
                 &validated,
+                program,
                 cols,
                 rows,
                 channel,

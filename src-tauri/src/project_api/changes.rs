@@ -290,6 +290,10 @@ fn standing_of(id: &str, principal: Principal, epoch: &str, store: &Mutex<PlanSt
 /// A person's decision on a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Decision {
+    // Only the debug-only review command approves until a review surface
+    // exists: the track T plan defers it (the agent's own prompt is the
+    // review, owner D-rulings 2026-10-14).
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     Approve,
     Reject,
 }
@@ -305,7 +309,7 @@ pub(crate) struct Reviewed {
 /// review surface calls (track T designs whether and where one appears;
 /// tests and a debug-only command drive it until then). Approving applies a
 /// waiting plan through the editor, at most once; rejecting ends it.
-#[cfg_attr(not(debug_assertions), allow(dead_code))] // the debug command is its caller until track T
+#[cfg_attr(not(debug_assertions), allow(dead_code))] // the debug command is its caller until a review surface exists (deferred, track T plan §1)
 pub(crate) fn review(plan_id: &str, decision: Decision, epoch: &str) -> Reviewed {
     review_with(plan_id, decision, epoch, bridge::global(), plans(), Instant::now())
 }
