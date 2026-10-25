@@ -34,6 +34,15 @@ function DrawerContentTerminal({ terminalDomain, projectId, hasFolder = true, is
   const { tabs, viewedKey } = useSyncExternalStore(subscribe, terminalDomain ? getSnapshot : getNoTabs);
   const currentProjectId = useSyncExternalStore(subscribe, terminalDomain ? getCurrentProjectId : getNoProject);
 
+  // Reports the tab on screen (the drawer is visible and shows it). Focus
+  // only: being seen clears what a tab's program was waiting to show.
+  const inViewKey = isVisible && hasFolder ? viewedKey : null;
+  useEffect(() => {
+    if (!terminalDomain || !projectId) return undefined;
+    terminalDomain.commands.setSessionInView(projectId, inViewKey);
+    return () => terminalDomain.commands.setSessionInView(projectId, null);
+  }, [terminalDomain, projectId, inViewKey]);
+
   if (!projectId || !terminalDomain) {
     return (
       <div className="top-drawer-empty">
@@ -137,6 +146,33 @@ function TerminalSessionView({ tab, isActive, drawerVisible, terminalDomain }) {
   );
 }
 
+const KIND_TEXT = {
+  permission: 'asks for permission',
+  question: 'has a question',
+  auth: 'needs you to sign in'
+};
+
+/** What the tab's program says (slice T2a-2), for the tab's dot. */
+function programState(tab) {
+  if (tab.needsYou) return 'needs-you';
+  return ['working', 'done', 'error'].includes(tab.activity) ? tab.activity : null;
+}
+
+/** The same, in words, for the tab's tooltip. A program's own text arrives
+ * already stripped of invisible formatting (programStatus.displayText). */
+function programTitle(tab) {
+  const who = tab.statusApp ?? 'The program';
+  const detail = tab.statusText ? `: ${tab.statusText}` : '';
+  if (tab.activity === 'blocked') {
+    return `Needs you: ${who} ${KIND_TEXT[tab.statusKind] ?? 'is waiting for you'}${detail}`;
+  }
+  if (tab.needsYou) return 'Needs you: the program rang the bell';
+  if (tab.activity === 'working') return `${who} is working${detail}`;
+  if (tab.activity === 'done') return `${who} finished${detail}`;
+  if (tab.activity === 'error') return `${who} stopped with an error${detail}`;
+  return null;
+}
+
 function TerminalTab({ tab, isViewed, terminalDomain, projectId }) {
   const [renaming, setRenaming] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
@@ -172,20 +208,23 @@ function TerminalTab({ tab, isViewed, terminalDomain, projectId }) {
   const title = ended
     ? (tab.error ? 'Failed to start' : `Ended${tab.exitCode == null ? '' : ` (exit ${tab.exitCode})`}`)
     : tab.status === 'starting' ? 'Starting' : 'Running';
+  const program = programState(tab);
+  const programText = programTitle(tab);
 
   return (
     <div
-      className={`terminal-tab${isViewed ? ' is-active' : ''}${ended ? ' is-ended' : ''}`}
+      className={`terminal-tab${isViewed ? ' is-active' : ''}${ended ? ' is-ended' : ''}${tab.needsYou ? ' needs-you' : ''}`}
       role="tab"
       aria-selected={isViewed}
       tabIndex={0}
-      title={`${tab.label} — ${title}`}
+      title={`${tab.label} — ${title}${programText ? `\n${programText}` : ''}`}
       onClick={select}
       onKeyDown={(event) => {
         if (event.key === 'Enter' && !renaming) select();
       }}
     >
-      <span className={`terminal-tab-dot is-${tab.status}`} aria-hidden="true" />
+      <span className={`terminal-tab-dot is-${tab.status}${program ? ` is-${program}` : ''}`} aria-hidden="true" />
+      {tab.needsYou && <span className="sr-only">Needs you.</span>}
       {renaming ? (
         <input
           ref={inputRef}

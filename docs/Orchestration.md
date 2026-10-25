@@ -223,7 +223,12 @@ marked below.
   project (starts are refused without one, so nothing starts in a closing project);
   the first shell on the terminal rail's open gesture (`ensureSession`); per-session
   input/resize/pause/resume; which tab the person is viewing (focus, reported by the
-  drawer); the busy query behind the notice before a switch.
+  drawer); the busy query behind the notice before a switch. *(Added 2026-10-24, slice
+  T2a-2)* What each tab's program says: the bell and Program Status Protocol reports
+  (OSC 7501), read once per chunk by the tap (`terminalSignals.js`, `programStatus.js`),
+  "needs you" and the session to show for it, and the protocol's feature reply (the only
+  thing the domain writes back unasked); which tab is on screen (focus, reported by the
+  drawer; seeing a tab clears its bell and finished results).
 - Does not own: terminal UI rendering (xterm.js lives in the presentation layer), drawer
   open/close state, pill notification state, the notice pill itself
   (`src/app/terminalEndGate.js`).

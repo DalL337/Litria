@@ -1,7 +1,9 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { Terminal as TerminalIcon, ScrollText } from 'lucide-react';
 import DrawerContentTerminal from '../drawers/DrawerContentTerminal';
 import DrawerContentLogs from '../drawers/DrawerContentLogs';
+
+const subscribeNothing = () => () => {};
 
 /**
  * useTopDrawers — builds the configuration array for the top drawer rail.
@@ -26,6 +28,15 @@ export function useTopDrawers({
   buildLogActions = null,
   logsTab = 'build',
 }) {
+  // A session of the open project that needs the person and is out of sight
+  // badges the rail (track T slice T2a-2).
+  const projectId = projectInstance?.instanceId ?? null;
+  const getNeedsYou = useCallback(
+    () => Boolean(terminalDomain && projectId && terminalDomain.selectors.getProject(projectId).needsYouKey),
+    [terminalDomain, projectId]
+  );
+  const terminalNeedsYou = useSyncExternalStore(terminalDomain?.subscribe ?? subscribeNothing, getNeedsYou);
+
   return useMemo(
     () => [
       {
@@ -36,10 +47,13 @@ export function useTopDrawers({
         // project starts with fresh screens. It ends nothing: the switch
         // coordinator ends the old project's sessions (track T slice T2a).
         contentKey: projectInstance?.instanceId ?? 'no-project',
+        badge: terminalNeedsYou ? 'a session needs you' : null,
         // Opening the terminal from its rail: a project with no tab gets a
-        // shell. The domain decides; the drawer only reports the gesture.
+        // shell, and a session that needs the person is the one shown. The
+        // domain decides; the drawer only reports the gesture.
         onOpen: () => {
           terminalDomain?.commands.ensureSession();
+          terminalDomain?.commands.showSessionNeedingYou();
         },
         content: (
           <DrawerContentTerminal
@@ -71,7 +85,8 @@ export function useTopDrawers({
       projectInstance?.rootPath,
       buildLogDomain,
       buildLogActions,
-      logsTab
+      logsTab,
+      terminalNeedsYou
     ]
   );
 }
