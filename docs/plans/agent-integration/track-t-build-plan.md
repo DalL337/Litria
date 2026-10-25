@@ -116,8 +116,8 @@ Checked from primary sources on 2026-10-11, and every load-bearing quote re-fetc
 | T1a | Litria's MCP connection: a stdio helper, authenticated local IPC bound to one project session, `initialize` and `tools/list` | D4, D5 | Merged 2026-10-15 (#138 → c786413; see [T1a record](#t1a-record)) |
 | T1b | `tools/call` through the boundary with real principals and grants; receipts owned by the agent session; raw-message bounds | T1a, D6 | Merged 2026-10-15 (#141 → 173d47a; see [T1b record](#t1b-record)) |
 | T2a | Conversations that outlive their tab: several terminal sessions per project, alive until ended or the project closes; the notice before a switch ends busy ones | — (alongside T1 and T3) | Merged 2026-10-15 (#137 → b70db3f; see [T2a record](#t2a-record)) |
-| T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer; Litria answers the protocol's question (moved from T2b, 2026-10-24) | T2a | Built 2026-10-24 on `feat/t2a-2-needs-you` (see [T2a-2 record](#t2a-2-record)) |
-| T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows. Two pull requests (owner, 2026-10-24): T2b-1 start, T2b-2 continue | T1b, T2a, D1–D3 | Not started |
+| T2a-2 | "Needs you" on a tab: the bell and the Program Status Protocol (OSC 7501), and a hidden session waiting for an answer shown outside the drawer; Litria answers the protocol's question (moved from T2b, 2026-10-24) | T2a | Merged 2026-10-24 (#145 → 4ebad17; see [T2a-2 record](#t2a-2-record)) |
+| T2b | Starting the user's own agent from Litria; continuing its conversations when the project reopens; keyless qualification on Windows. Two pull requests (owner, 2026-10-24): T2b-1 start, T2b-2 continue | T1b, T2a, D1–D3 | T2b-1 built 2026-10-25 on `feat/t2b-1-start-agent` (see [T2b-1 record](#t2b-1-record)); T2b-2 not started |
 | T3a | Never lose a version: a save never overwrites a newer version on disk; open files reload, or offer the choice when they have unsaved changes | — (alongside T1 and T2a) | Merged 2026-10-15 (#142 → 6628317; see [T3a record](#t3a-record)) |
 | T3b | Created, renamed and deleted files reach the file tree and the graph | T3a | Merged 2026-10-16 (#143 → 795d578; see [T3b record](#t3b-record)) |
 | T4 | Real tasks on the owner's API key; first release | T2b, T3a, T3b | Not started |
@@ -441,6 +441,44 @@ The tasks follow D1. For route A:
 ### Acceptance
 
 Standard checks pass. The keyless pass is recorded with the versions tested. Any check that could not run without a model call is listed and carried to T4, not marked passed.
+
+### T2b-1 record
+
+> **Built 2026-10-24/25 on branch `feat/t2b-1-start-agent`.** Journal `.research/2026-10-24-t2b-1-start-agent.md`.
+>
+> **Owner rulings (2026-10-24):** Codex is found on the PATH only (both official Windows installs put it there; the copy inside the VS Code extension is that extension's internal piece and is not used). Claude installs the Codex CLI for the keyless pass (`@openai/codex@0.164.0`, exact pin, past the 24-hour release-age gate). The design, reviewed before any code: a menu beside + (+ still starts a shell in one click); the Codex entry is called "Codex"; the session's token travels in the agent's environment and the configuration only refers to it.
+>
+> **Settled with evidence before the design** (keyless: scratch settings folders, no sign-in, no model call):
+> - **Claude Code 2.1.303**, started in a real pseudoconsole: a server from `--mcp-config` starts at once, signed out. It first sends `server/discover`, takes "method not found", and falls back to `initialize` 2025-11-25 within 0.3 s, so the 2.1.292 check carried from T1a passes. A `${VAR}` reference in the configuration's `env` is expanded (the server received the 16-character value, not the text), so the token never has to be written into the configuration. Claude passes its whole environment to the server anyway.
+> - **Codex 0.164.0**: per-run `-c mcp_servers.litria.*` overrides work; the server receives only the variables `env_vars` names; `initialize` 2025-06-18.
+> - **A hazard in T2a's End:** it types `exit` into a session that looks idle. Into an agent that text would reach its prompt. Agent sessions now get a second Ctrl+C instead (which quits Claude Code and Codex), then the process tree is stopped; nothing is ever typed.
+> - **npm shims on Windows:** `claude.cmd` runs `node_modules\@anthropic-ai\claude-code\bin\claude.exe`; `codex.cmd` runs Node with `bin\codex.js`. Going through `cmd.exe` re-parses arguments (seen: an argument split at a space), so Litria reads the shim and runs its real program.
+>
+> **Decisions made while building:**
+> - **The program and every argument are built in Rust** (`agent_launch.rs`); the webview names the agent only, from a closed list. Detection reads the PATH a Litria terminal sees (portable-pty's: on Windows the registry's), so an agent installed after Litria started is found; it runs nothing.
+> - **An agent tab always counts as busy**, so ending it or closing its project asks first, and its conversation is never ended unasked.
+> - **Labels** count per kind: Terminal 1, Claude Agent 1, Codex 1 (plan §3 naming).
+> - **The install guide** opens one of two fixed addresses (Claude Code's setup page, the Codex repository) and Litria never installs an agent.
+> - **Release builds:** the dead-code allowances that named track T are gone from `contracts`, `mcp_connection` and `project_api`; the owner bridge (`project_api_bridge_*`, `install_bridge`) and its frontend hook run in every build; the developer call, review and session commands stay debug-only. One item keeps a per-item allowance with its reason: `Decision::Approve`, which only the debug review command constructs until a review surface exists (deferred, §1). `cargo check --release`: 0 warnings.
+> - **Claude Code's session variables re-checked** (carry item): two names are new since G1, `CLAUDE_CODE_ENABLE_TASKS` and `MCP_CONNECTION_NONBLOCKING`. Both are documented user settings, so by G1's rule they pass; the strip list is unchanged.
+>
+> **What changed:** `src-tauri/src/agent_launch.rs` (new); `terminal_pty.rs` (what a session runs, the agent End, the end hook on every path); `terminal_session_manager.rs` (`start_program_session`, shared by shells and agents); `commands.rs` (`terminal_spawn_agent`, `agent_detect`, `agent_open_install_guide`, the bridge commands in every build); `lib.rs`; `project_api/` (bridge in every build); `terminalStorage.js`, `terminalDomain.js` (agent sessions, kinds, detection, install guide); `DrawerContentTerminal.jsx` (the start menu); `useProjectApiBridge.js` (every build); `drawers.css`.
+>
+> **Evidence** (Windows 10 19045):
+> - **Keyless pass** (a `tauri dev` of the branch; the app started with scratch `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, each holding one test skill; no key or token variable in the environment or the registry; driven over CDP):
+>   1. Each agent started from the menu and sat idle; nothing was sent.
+>   2. Claude: its helper (`litria.exe --mcp-helper`) ran as the agent's child, and Claude's own `/mcp` panel showed "✓ litria · 8 tools", "Dynamically configured". Codex: with Litria's `env_vars` form, a logging relay in front of the real helper showed `initialize`, Litria's answer and `tools/list` returning all eight tools (`codex debug prompt-input`, local).
+>   3. Claude's own screen listed Litria's tools (`/mcp` → View tools). Codex shows no tools before sign-in: **carried to T4**.
+>   4. Claude's `/skills` showed the test skill ("user").
+>   5. Signed out, Claude said "Not logged in · Run /login" and Codex showed its sign-in choices.
+>   6. With the drawer closed both agents kept running; the rail badge was lit by Claude's own `blocked`/`auth` report (T2a-2 with a real agent: "Needs you: claude-code needs you to sign in: Not logged in · Please run /login").
+>   7. End asked first, then the agent's tree was gone (Codex's within 0.5 s); closing the project with two agents ended all four processes in 1.2 s; closing the window, 1.4 s; killing Litria, 1.1 s (the Job Object).
+>   8. A Claude Code started outside Litria survived all of the above.
+> - **Versions qualified:** Claude Code 2.1.303 (npm, native `claude.exe`), Codex 0.164.0 (npm). Litria does not pin the person's install.
+> - Each of 14 guarantees (7 in Rust, 7 in JavaScript) was broken once, and the tests meant to catch it failed.
+> - Guards 7/7; `npm run test:domains` 1717/1717 (12 new: 8 for the domain, 4 for the drawer's menu); `npm run build`; `cargo build` and `cargo check --release` 0 warnings; `cargo test` 843 + 7 (14 new: 10 for `agent_launch`, 4 real-terminal agent sessions: never typed into, and the end hook after the agent exits, after a drop and after a failed start).
+>
+> **Carried to T4:** Codex showing Litria's tools on its own screen (needs a sign-in); a signed-in agent's real tool calls through the Project API; Codex's status reports and bell in a Litria tab.
 
 ## T3. Files changed outside Litria
 

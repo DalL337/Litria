@@ -1,7 +1,22 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-24 — **Vite 7.3.5 → 7.3.7 (branch `chore/vite-7-3-7`)**:
+> **Last reviewed**: 2026-10-25 — **starting the person's own agent (track T slice T2b-1, branch `feat/t2b-1-start-agent`)**:
+> - **Why.** Security policy Rule 1: a new execution surface (Litria starts the person's installed `claude` or `codex`) and three new Tauri commands (`terminal_spawn_agent`, `agent_detect`, `agent_open_install_guide`); the Project API's owner bridge now runs in release builds.
+> - **Class** (Rule 2): system-owned tools, detected and hinted, never installed; the visible terminal tab is the consent and the audit trail.
+> - **What holds.**
+>   - The webview names the agent only (`claude` or `codex`, a serde enum; the frontend refuses anything else first). Rust finds the program on the PATH a Litria terminal sees and builds every argument. On Windows an npm `.cmd` shim is read, never run through `cmd.exe` (which would parse the arguments again): its target must be a plain path inside the shim's own folder (no `..`, `%`, drive or root), must exist, and must be an `.exe` or a Node script; anything else is refused.
+>   - Litria's MCP server is added for that session only (`claude --mcp-config`, `codex -c mcp_servers.litria.*`); no configuration file of the person's is written, and their own servers, settings and skills load as usual (no `--strict-mcp-config`).
+>   - The session's token is in the agent's environment only: the Claude configuration refers to it as `${LITRIA_MCP_TOKEN}` (expansion verified with 2.1.303), Codex names it in `env_vars`. It is never in a file, a command line or a log (checked: Codex's output, Claude's `/mcp` detail, unit tests).
+>   - An agent is connected only to the project open now, and only when its tab belongs to that project (the workspace root must equal the tab's root after canonicalising).
+>   - Litria never types into an agent: End sends Ctrl+C twice and then stops the process tree; a shell's `exit` is never sent to it (a real-terminal test fails if it is). Pills never type into an agent tab.
+>   - The session's MCP connection ends with the terminal session on every path (End, the agent exiting, a failed start, a dropped session, project close, quit). Live on Windows: End, Exit to Launcher, closing the window and killing Litria each left no agent or helper running, within 1.4 s; a Claude Code started outside Litria survived all of them.
+>   - `agent_open_install_guide` opens one of two fixed addresses; the webview cannot pass one.
+>   - Adversarial check (journal `.research/2026-10-24-t2b-1-start-agent.md`): eight guarantees, no bypass found. Considered: arbitrary programs or arguments from the webview, a tab of another project, the token's routes, survivors of each ending, typed text, shim targets leaving their folder, the opener's address.
+> - **Residual.** The agent's own child processes inherit the token (owner-accepted 2026-10-24: it opens only this user's local pipe, only while the session lives, and grants nothing the agent lacks). Same-user processes can read process environments and plant an earlier `claude` on the PATH, as with the person's own shell. A signed-in agent's own behaviour (its tools, its sign-in, its billing) is the agent's, not Litria's.
+> - **Scans.** No dependency change. `npm audit`: 1 high, `happy-dom` (unchanged, see below). `cargo audit`: not re-run (no Cargo change).
+>
+> **Reviewed**: 2026-10-24 — **Vite 7.3.5 → 7.3.7 (branch `chore/vite-7-3-7`)**:
 > - **Why.** Security policy Rule 1 (a dependency upgrade), for the advisories `npm audit` reported in the entry below. Assessment journal `.research/2026-10-24-npm-audit.md`.
 > - **What was exposed.** Vite's dev server (`npm run tauri dev`, `localhost:1420`) mounts `launch-editor-middleware` at `/__open-in-editor` with no origin check. On Windows the bundled `launch-editor` (≤ 2.14.1) always starts the editor through `cmd.exe` and did not escape `%`, and its existence check could be bypassed with a path ending in `\..:1:1` (GHSA-587h-7wmj-h5pm, high; GHSA-698v-4r3x-3vcv). Together: a web page visited while the dev server runs could have a command run on the developer's Windows machine. The shipped app, CI and generated projects never run Litria's dev server.
 > - **Not applicable here** (read against `vite.config.js`): GHSA-rq7h-c2jc-7f22 needs the dev server on the network and a non-Windows host (Litria binds to localhost unless `TAURI_DEV_HOST` is set); GHSA-9jrq-w75r-8gcw needs middleware mode or a custom app type (Litria uses the default); GHSA-r825-w8mm-5pxw needs Vim, Emacs or a Notepad++ plugin as the editor.
