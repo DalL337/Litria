@@ -330,3 +330,77 @@ test('a project that is closing offers no new terminal', async () => {
   assert.equal(ui.tabs().length, 1, 'its tab still shows until the project ends it');
   await ui.unmount();
 });
+
+// "Needs you" (track T slice T2a-2): the drawer reports which tab is on
+// screen; a session out of sight that needs the person badges the rail.
+
+const emitTo = (ui, index, chunk) => act(async () => {
+  ui.backend.channels[index].emit({ event: 'Output', data: { chunk } });
+});
+const terminalRail = (ui) => ui.query('.top-drawer-tab');
+// A boolean, never the element: a failed assertion on a happy-dom element
+// hangs while node:assert formats it.
+const hasBadge = (ui) => Boolean(ui.query('.top-drawer-tab .top-drawer-tab-badge'));
+
+test('a hidden session that rings badges the rail; opening from the rail shows it', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('New terminal'));
+  await click(ui.tabs()[1]);
+  await click(ui.byLabel('Close panel'));
+  assert.equal(hasBadge(ui), false);
+
+  await emitTo(ui, 0, 'done\x07');
+  assert.equal(hasBadge(ui), true, 'the rail shows that something needs the person');
+  assert.equal(terminalRail(ui).getAttribute('title'), 'Terminal: a session needs you');
+  assert.match(ui.tabs()[0].className, /needs-you/);
+
+  await click(terminalRail(ui));
+  assert.equal(ui.isOpen(), true);
+  assert.equal(ui.tabs()[0].getAttribute('aria-selected'), 'true', 'taken to the session that rang');
+  assert.equal(hasBadge(ui), false, 'seen');
+  assert.doesNotMatch(ui.tabs()[0].className, /needs-you/);
+  assert.equal(ui.spawns(), 2, 'opening started nothing');
+  await ui.unmount();
+});
+
+test('a bell from the tab on screen asks nothing; the same bell with the drawer closed does', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await emitTo(ui, 0, '\x07');
+  assert.doesNotMatch(ui.tabs()[0].className, /needs-you/, 'the person is looking at it');
+  await click(ui.byLabel('Close panel'));
+  assert.equal(hasBadge(ui), false);
+  await emitTo(ui, 0, '\x07');
+  assert.equal(hasBadge(ui), true, 'out of sight, it needs them');
+  await ui.unmount();
+});
+
+test("a blocked program's tab says why, in its dot and its tooltip", async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('New terminal'));
+  const msg = Buffer.from('Allow edit to src/app.js?').toString('base64');
+  await emitTo(ui, 0, `\x1b]7501;state=blocked:app=claude-code:kind=permission:msg=${msg}\x07`);
+  const [first] = ui.tabs();
+  assert.match(first.querySelector('.terminal-tab-dot').className, /\bis-running\b.*\bis-needs-you\b/);
+  assert.equal(
+    first.getAttribute('title'),
+    'Terminal 1 — Running\nNeeds you: claude-code asks for permission: Allow edit to src/app.js?'
+  );
+  assert.match(first.textContent, /Needs you\./, 'screen readers hear it too');
+  await emitTo(ui, 0, '\x1b]7501;state=working:app=claude-code\x07');
+  assert.match(ui.tabs()[0].querySelector('.terminal-tab-dot').className, /\bis-working\b/);
+  assert.equal(ui.tabs()[0].getAttribute('title'), 'Terminal 1 — Running\nclaude-code is working');
+  await ui.unmount();
+});
+
+test("Litria answers a program's status question through that session only", async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('New terminal'));
+  await emitTo(ui, 1, '\x1b]7501;?\x07\x1b[c');
+  const answers = ui.backend.calls.filter(([op, , , input]) => op === 'input' && input.startsWith('\x1b]7501;?'));
+  assert.deepEqual(answers.map(([, projectId, sessionId]) => [projectId, sessionId]), [[PROJECT.instanceId, 's2']]);
+  await ui.unmount();
+});

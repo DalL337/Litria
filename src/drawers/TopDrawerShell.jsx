@@ -38,10 +38,13 @@ function TopDrawerShell({ height = 300 }) {
                 if (!isActive) drawer.onOpen?.();
                 toggleDrawer(drawer.id);
               }}
-              title={drawer.label}
+              title={drawer.badge ? `${drawer.label}: ${drawer.badge}` : drawer.label}
               aria-pressed={isActive}
             >
               {Icon && <Icon size={20} />}
+              {/* Something in the drawer needs the person while it is out of
+                  sight (a terminal session waiting for them). */}
+              {drawer.badge && <span className="top-drawer-tab-badge" aria-hidden="true" />}
             </button>
           );
         })}

@@ -10,6 +10,13 @@ import {
   terminalTakeReloadReport,
   terminalTeardownAll
 } from './terminalStorage.js';
+import { createTerminalSignalScanner } from './terminalSignals.js';
+import {
+  PROGRAM_STATUS_REPLY,
+  createProgramStatusRecords,
+  displayText,
+  parseProgramStatus
+} from './programStatus.js';
 
 const DEFAULT_SIZE = { cols: 80, rows: 24 };
 /** A session that printed within this long counts as busy. Rust sees child
@@ -38,6 +45,14 @@ const EMPTY_PROJECT = Object.freeze({ tabs: Object.freeze([]), viewedKey: null }
  * clears the current project before it ends the old project's sessions, so
  * nothing can start in a project that is closing, and sets it once the next
  * one is open; the lifecycle hook keeps it in step otherwise.
+ *
+ * A tab also shows what its program says it is doing (slice T2a-2). The tap
+ * reads the bell and Program Status Protocol reports (OSC 7501) from every
+ * chunk once; a tab "needs you" when its program is blocked on the person or
+ * rang the bell while the person was not looking at it. Viewing the tab
+ * (reported by the drawer, focus only) clears the bell and the finished
+ * results (`done`, `error`). Litria answers the protocol's query itself, so a
+ * program that asks (Claude Code does) reports its status.
  */
 export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now = () => Date.now() } = {}) {
   const io = {
@@ -61,7 +76,10 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     ensuring: new Map(),
     labelCount: new Map(),
     lastSize: { ...DEFAULT_SIZE },
-    keyCount: 0
+    keyCount: 0,
+    /** The tab the person is looking at: the drawer is visible and shows it. */
+    inView: null,
+    attentionCount: 0
   };
   let listeners = [];
   let snapshot = null;
@@ -71,24 +89,44 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     for (const listener of listeners) listener();
   };
 
+  const needsYou = (tab) => tab.bell || tab.records.summary()?.state === 'blocked';
+  /** What a tab shows of its program's records: a report that leaves this
+   * alone (a `working` report with new progress) changes nothing on screen. */
+  const shownStatus = (tab) => {
+    const record = tab.records.summary();
+    return record ? [record.state, record.kind, record.app, record.msg].join('\u0000') : '';
+  };
+
   const buildSnapshot = () => {
     const byProject = {};
     for (const [projectId, keys] of state.order) {
-      const tabs = keys
-        .map((key) => state.tabs.get(key))
-        .filter(Boolean)
-        .map((tab) => Object.freeze({
+      const live = keys.map((key) => state.tabs.get(key)).filter(Boolean);
+      const tabs = live.map((tab) => {
+        const record = tab.records.summary();
+        return Object.freeze({
           key: tab.key,
           sessionId: tab.sessionId,
           label: tab.label,
           status: tab.status,
           exitCode: tab.exitCode,
           error: tab.error,
-          stream: tab.stream
-        }));
+          stream: tab.stream,
+          needsYou: needsYou(tab),
+          activity: record?.state ?? null,
+          statusKind: record?.kind ?? null,
+          statusText: displayText(record?.msg),
+          statusApp: displayText(record?.app, 32)
+        });
+      });
+      // The session to take the person to: the latest to need them, of those
+      // they are not looking at.
+      const waiting = live
+        .filter((tab) => tab.key !== state.inView && needsYou(tab))
+        .sort((a, b) => b.attentionSeq - a.attentionSeq);
       byProject[projectId] = Object.freeze({
         tabs: Object.freeze(tabs),
-        viewedKey: state.viewed.get(projectId) ?? tabs[0]?.key ?? null
+        viewedKey: state.viewed.get(projectId) ?? tabs[0]?.key ?? null,
+        needsYouKey: waiting[0]?.key ?? null
       });
     }
     return Object.freeze({ byProject: Object.freeze(byProject) });
@@ -107,6 +145,7 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
       const tab = state.tabs.get(key);
       if (!tab) continue;
       state.tabs.delete(key);
+      if (state.inView === key) state.inView = null;
       removed.push(tab);
       const order = (state.order.get(tab.projectId) ?? []).filter((k) => k !== key);
       if (order.length) state.order.set(tab.projectId, order);
@@ -126,17 +165,71 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     io.input(tab.projectId, tab.sessionId, input);
   };
 
+  const answerQuery = (tab) => {
+    if (tab.sessionId && tab.status === 'running') {
+      io.input(tab.projectId, tab.sessionId, PROGRAM_STATUS_REPLY);
+    } else {
+      // Asked before the start resolved (a program started as the session's
+      // own process): answered the moment the session id arrives, still ahead
+      // of the screen's answer to the DA1 query that follows the question.
+      tab.replyOwed = true;
+    }
+  };
+
+  /** What the tap does with the signals in a session's output. A handler that
+   * changes what the tab shows marks it `signalled`; the tap notifies once per
+   * chunk. */
+  const signalHandlers = (tab) => ({
+    onBell: () => {
+      if (tab.status === 'ended' || tab.bell || state.inView === tab.key) return;
+      tab.bell = true;
+      tab.attentionSeq = ++state.attentionCount;
+      tab.signalled = true;
+    },
+    onStatus: (body) => {
+      const report = parseProgramStatus(body);
+      if (!report) return;
+      const before = shownStatus(tab);
+      const wasBlocked = tab.records.summary()?.state === 'blocked';
+      tab.records.apply(report);
+      // Finished while the person was looking: they have seen it.
+      if (state.inView === tab.key) tab.records.acknowledge();
+      if (!wasBlocked && tab.records.summary()?.state === 'blocked') {
+        tab.attentionSeq = ++state.attentionCount;
+      }
+      if (shownStatus(tab) !== before) tab.signalled = true;
+    },
+    onQuery: () => answerQuery(tab),
+    onPrompt: () => {
+      if (tab.records.endActivity()) tab.signalled = true;
+    },
+    onReset: () => {
+      if (tab.records.reset()) tab.signalled = true;
+    }
+  });
+
   /** The tap: every event of a session, whether or not a view shows it. */
   const onStreamEvent = (tab, event) => {
     if (event?.event === 'Output') {
       tab.sawOutput = true;
       tab.lastOutputAt = now();
       writeInitialInput(tab);
+      if (!state.tabs.has(tab.key)) return;
+      tab.scanner.push(event.data?.chunk);
+      if (tab.signalled) {
+        tab.signalled = false;
+        notify();
+      }
     } else if (event?.event === 'Exited') {
       if (!state.tabs.has(tab.key) || tab.status === 'ended') return;
       tab.status = 'ended';
       tab.exitCode = event.data?.exitCode ?? null;
       tab.pendingInput = null;
+      tab.replyOwed = false;
+      // The program's activity ends with it; a bell from a program that is
+      // gone asks nothing. `done` and `error` stay until seen.
+      tab.bell = false;
+      tab.records.endActivity();
       notify();
     }
   };
@@ -158,8 +251,15 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
       stream: null,
       pendingInput: initialInput,
       sawOutput: false,
-      lastOutputAt: 0
+      lastOutputAt: 0,
+      bell: false,
+      records: createProgramStatusRecords(),
+      replyOwed: false,
+      signalled: false,
+      attentionSeq: 0,
+      scanner: null
     };
+    tab.scanner = createTerminalSignalScanner(signalHandlers(tab));
     state.tabs.set(key, tab);
     state.order.set(project.id, [...(state.order.get(project.id) ?? []), key]);
     state.viewed.set(project.id, key);
@@ -192,6 +292,12 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     tab.stream = response.stream;
     // An Exited the tap already saw (a shell that died at once) wins.
     if (tab.status === 'starting') tab.status = 'running';
+    // Before the notify: the view that mounts on it replays the output and
+    // answers the DA1 query that followed the question.
+    if (tab.replyOwed) {
+      tab.replyOwed = false;
+      if (tab.status === 'running') io.input(tab.projectId, tab.sessionId, PROGRAM_STATUS_REPLY);
+    }
     notify();
     if (tab.pendingInput) {
       if (tab.sawOutput) writeInitialInput(tab);
@@ -285,6 +391,37 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
         if (!tab || tab.projectId !== projectId || state.viewed.get(projectId) === key) return;
         state.viewed.set(projectId, key);
         notify();
+      },
+      /** The drawer reports the tab on screen: it is visible and shows `key`,
+       * or (null) shows none of the project's tabs. Focus only. Seeing a tab
+       * clears its bell and its finished results. */
+      setSessionInView(projectId, key) {
+        const tab = key ? tabFor(key) : null;
+        if (key && (!tab || tab.projectId !== projectId)) return;
+        if (!key) {
+          const current = state.inView ? tabFor(state.inView) : null;
+          if (current && current.projectId !== projectId) return;
+        }
+        const next = tab ? key : null;
+        if (state.inView === next) return;
+        state.inView = next;
+        if (tab) {
+          tab.bell = false;
+          tab.records.acknowledge();
+        }
+        notify();
+      },
+      /** The person opened the terminal from its rail while a session needs
+       * them: show that one. */
+      showSessionNeedingYou() {
+        const projectId = state.current?.id;
+        if (!projectId) return false;
+        if (!snapshot) snapshot = buildSnapshot();
+        const key = snapshot.byProject[projectId]?.needsYouKey;
+        if (!key || state.viewed.get(projectId) === key) return Boolean(key);
+        state.viewed.set(projectId, key);
+        notify();
+        return true;
       },
       /** Ends every session of a project. Only the tabs that exist now are
        * dropped, so a late reply never touches tabs created after the call. */
