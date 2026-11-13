@@ -1512,6 +1512,12 @@ All tests and standard checks pass, plus the live pass. No transport, listener o
 > **Not covered live:** expiry, which is covered by tests with an injected
 > clock.
 
+> **Erratum (2026-11-13, peer review of the arc):** applying did not judge an
+> edit to an open document again, so an edit to a document the person withheld
+> after the proposal was still applied. Every change is now judged again when
+> its plan applies. See [Peer review of the arc](#peer-review-of-the-arc-2026-10-25),
+> finding CX.
+
 ## W3. Agent files on disk
 
 ### Goal
@@ -1783,6 +1789,12 @@ disk after the agent read it.
 >   - Two files at once: two pieces at different positions.
 >   - A name taken late: `conflict`, and the other file was kept.
 >   - No console errors.
+
+> **Erratum (2026-11-13, peer review of the arc):** "a withheld path is never
+> written" did not hold for a new file named through a Windows short name of a
+> withheld folder (`GIT~1/hooks/pre-commit`). A name that does not exist yet is
+> now judged by the folder it would be made in. See
+> [Peer review of the arc](#peer-review-of-the-arc-2026-10-25), finding IR-01.
 
 ### W3c record
 
@@ -2115,6 +2127,29 @@ Codex's "checked, no finding" list and residuals are in the session journal. The
 - the accepted disclosure residuals.
 
 CI evidence (PR #98, code head 44af4d3): guard (JS domain tests) 1388/1388, cargo test Linux 517 passed and macOS 516 passed, 0 failed on either. Windows ran locally: 517 passed, 0 warnings.
+
+## Peer review of the arc (2026-10-25)
+
+At the owner's request the whole arc was reviewed before the first slice that reaches real agents merges (track T slice T2b-1, PR #147): every Project API pull request from #84 to #147, at `cd9a9c8`. Codex began the review and its provider's content filter stopped it after it had planted three reproductions. A second agent, isolated and given only the review prompt, finished the review and wrote the report. Both worked in a separate worktree and changed nothing in the product. Every finding was run again here on 2026-10-25 before anything was changed. The two findings in code already on `main` were repaired on 2026-11-13, on branch `fix/project-api-review-2`.
+
+| Finding | Status |
+|---|---|
+| **IR-01 (high; W3b, PR #133).** A new file could be created inside a withheld folder through another name the operating system opens that folder by. On Windows `GIT~1` is the 8.3 short name of `.git`, and no rule lists that spelling. A path that resolved to nothing was judged, and keyed, exactly as spelled, so `GIT~1/hooks/pre-commit` was `ready`, then `created`, and a git hook lay inside `.git`. Reads were not affected: an existing name is judged by what it resolves to. | **Reproduced** on `main` (ee4c9a9; Windows 10 19045, NTFS with short names on) by `a_new_file_under_the_short_name_of_a_withheld_folder_is_denied`, which asks the volume for the short name and applies the plan through the real create: the file was created. Also for a folder the person withholds (`PRIVAT~1`), and for a plan made before `.git` existed and applied after. **Verified fixed on Windows** by those tests and by both reviewers' own reproductions, unchanged. Linux has no such names; macOS has case and Unicode normalization, covered by `a_new_file_under_another_normalization_of_a_withheld_folder_is_denied`, which only CI can run. |
+| **CX (medium; W2b, PR #131).** A plan was judged when it was proposed and, for an edit to an open document, never again. The person could withhold that document within the plan's ten minutes and the edit was still applied. New files and edits to closed files were already judged again. | **Reproduced** on `main` by `an_edit_to_a_document_withheld_after_the_proposal_is_not_applied` (the plan ended `applied`) and by Codex's own test. **Verified fixed** by both; the code is the same on every platform. |
+| **IR-02 (low; T2b-1, PR #147, not merged).** The reader of npm's `.cmd` launcher scripts refused a parent step written with `\` and accepted one written with `/`. | Reproduced and fixed on that branch; see the track T plan's T2b-1 record. |
+| **IR-03 (medium; T2a, PR #137).** On Windows a terminal session's Job Object is assigned after its process starts, so a process started in between is not ended with the session (gap G2, recorded with T2a). | Suspected; not reproduced by either reviewer. Handled with T2b-1, which is where it starts to matter; see the track T plan's T2b-1 record. |
+
+What changed for IR-01 (`project_api/reader.rs`, `unresolved_identity`): for a path that resolves to nothing, the deepest part that exists is resolved to its own name, and the path is judged again under that name, as a file and as a directory. The document key is built from that name, so `SRC/new.ts` and `src/new.ts` are one new document where the volume ignores case. A part that cannot be inspected is denied, as the link check already ensured; a path whose every part exists and still does not resolve is now denied too (it used to be keyed as spelled). One answer differs by platform and did before: a name under a regular file (`README.md/x`) is `denied` on Linux and macOS, where the system reports "not a directory", and is keyed, then found missing, on Windows. The contract brief §6 carries the rule and its residual.
+
+What changed for CX (`project_api/changes.rs`, `carry_out`): every change of a plan is judged again when the plan applies, edits to open documents included. One that the policy now refuses is `denied`, the plan ends `conflict`, and nothing lands. Applying needs the open project's root for this; without it the plan fails and no owner is asked. Seven store-level tests used a made-up workspace, and now bind a real one.
+
+Each guarantee was broken once more after the fix (five mutations: the folder's own name not judged, judged as a file only, not used for the key; edits not judged again; new files not judged again) and the tests meant to catch it failed.
+
+**Residual, found while repairing, not changed here.** A short name can reveal that a withheld name exists: `ENV~1` answers `denied` while `.env` exists, and `notFound` (or `ready`, for a new file) when it does not. This is older than the fix and holds on every surface, because the answer follows what the name resolves to. Closing it means refusing names shaped like short names as `invalidPath`, which would also put real files with such names out of the API's reach. That is the owner's decision.
+
+Checks (Windows 10 19045, run locally): guards 7/7; `npm run test:domains` 1705/1705; `npm run build`; `cargo build` and `cargo check --release` with 0 warnings; `cargo test` 837 passed in the library and 7 in the helper's process tests, 0 failed. Linux and macOS: CI on the pull request.
+
+The reviewers' "checked, no finding" lists are in the report, kept with the session journals.
 
 ## Side findings (outside this plan)
 

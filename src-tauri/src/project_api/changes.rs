@@ -488,28 +488,35 @@ fn carry_out(changes: &[PlannedChange], epoch: &str, bridge: &Bridge, journal: &
         .collect();
     let unknown = |outcomes: Vec<Option<ChangeOutcome>>| (PlanState::NeedsReview, outcomes.into_iter().flatten().collect());
 
-    // 1. Every new file, judged again as at the proposal — the policy, then
-    // the name: a folder swapped for a link since could otherwise lead the
-    // create into a withheld folder (W3b adversarial check, reproduced). And
-    // every document to open, read again from disk: still the revision the
-    // edits were planned on (W3c). One that is not as planned means nothing
-    // lands.
+    // 1. Every change, judged again as at the proposal. A plan waits up to ten
+    // minutes, and what it was allowed to touch can change meanwhile.
+    // - Every edit, by the policy: the person may have withheld its document
+    //   since (review 2026-10-25: such an edit was still applied).
+    // - Every new file, by the policy, then the name: a folder swapped for a
+    //   link since could otherwise lead the create into a withheld folder
+    //   (W3b adversarial check, reproduced).
+    // - Every document to open, read again from disk: still the revision the
+    //   edits were planned on (W3c).
+    // One that is not as planned means nothing lands. Without the project's
+    // root nothing can be judged, so nothing is applied.
     let mut to_open: Vec<FileToOpen> = Vec::new();
-    if !creates.is_empty() || !opens.is_empty() {
+    {
         let Some(root) = bound_root(epoch) else {
             return (PlanState::Failed, Vec::new());
         };
-        let mut blocked: Vec<(usize, ChangeOutcome)> = creates
+        let mut blocked: Vec<(usize, ChangeOutcome)> = edits
             .iter()
-            .filter_map(|(index, file)| {
-                let path = file.path.clone();
-                match identity(&root, &file.path) {
-                    Identity::Key(key) if !name_is_taken(&root, &key) => None,
-                    Identity::Key(_) => Some((*index, ChangeOutcome::Exists { path })),
-                    Identity::Denied | Identity::InvalidPath => Some((*index, ChangeOutcome::Denied { path })),
-                }
-            })
+            .filter(|(_, edit)| !matches!(identity(&root, &edit.path), Identity::Key(_)))
+            .map(|(index, edit)| (*index, ChangeOutcome::Denied { path: edit.path.clone() }))
             .collect();
+        blocked.extend(creates.iter().filter_map(|(index, file)| {
+            let path = file.path.clone();
+            match identity(&root, &file.path) {
+                Identity::Key(key) if !name_is_taken(&root, &key) => None,
+                Identity::Key(_) => Some((*index, ChangeOutcome::Exists { path })),
+                Identity::Denied | Identity::InvalidPath => Some((*index, ChangeOutcome::Denied { path })),
+            }
+        }));
         for (index, open) in &opens {
             let path = open.path.clone();
             match read_for_edit(&root, &open.path) {
