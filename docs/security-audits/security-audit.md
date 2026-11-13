@@ -1,7 +1,14 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-10-25 — **starting the person's own agent (track T slice T2b-1, branch `feat/t2b-1-start-agent`)**:
+> **Last reviewed**: 2026-11-04 — **happy-dom 20.14.5 → 21.0.4 (branch `chore/happy-dom-21`)**:
+> - **Why.** Security policy Rule 1 (a dependency upgrade), for the `happy-dom` advisories `npm audit` reported and the deferral in the entry below. Assessment journal `.research/2026-11-04-happy-dom-21-bump.md`.
+> - **What was exposed.** Nothing reachable. `happy-dom` is a devDependency; `src/` and `scripts/` never import it. Its only use is 19 test files, each constructing `new Window({ url: 'http://localhost/' })` with no settings, over Litria's own code. GHSA-834v-8h66-3h79 (high) needs JavaScript evaluation turned on plus attacker-supplied HTML. GHSA-c8p4-j97h-3vg8 (high, SSRF through `<iframe>` and `<link rel="stylesheet">`) needs untrusted HTML. GHSA-5fpq-26gf-qwcr (medium, cookie `Domain=` matching) matters where cookies are handled server-side.
+> - **The fix.** `happy-dom` `20.14.5` → `21.0.4`, still pinned exact; the lockfile moves only `happy-dom`. 21.0.4 was published 2026-10-20, is past the age gate set on 2026-10-24, and is the first version outside all three advisory ranges. It has the same dependencies and engine range as 20.14.5, no install scripts, and npm attestations. Read from the installed package: JavaScript evaluation, CSS file loading and iframe loading all default to off. v21's breaking change (CSS and iframe loading off by default) needed no test changes.
+> - **Checks.** `npm ci` from the new lockfile; guards 7/7; `npm run test:domains` 1705/1705 before and after the bump; `npm run build`. Windows 10, Node 24.14.0, npm 11.21.1. Not exercised locally: macOS and Linux.
+> - **Scans.** `npm audit`: 4 moderate, down from 5 (1 high, 4 moderate); `npm audit --omit=dev`: 0. The four are one dev-only chain: `minimatch` GHSA-g3hv-75wg-m249 and `glob` GHSA-3g3m-2fjr-6pw4, through `test-exclude` into `c8`. Not reachable here: `test-exclude` passes no `AbortSignal`, its patterns come from the `c8` block in `package.json`, and `npm run coverage` is not in any workflow. No upstream fix yet: the latest `c8` (12.0.0) and `test-exclude` (8.0.0) still require the affected ranges, and npm's only offer is a major downgrade to `c8` 9.1.0, so the chain stays, tracked on board card `npm-audit-2026-10-24`. `cargo audit`: not re-run (no Cargo change).
+>
+> **Reviewed**: 2026-10-25 — **starting the person's own agent (track T slice T2b-1, branch `feat/t2b-1-start-agent`)**:
 > - **Why.** Security policy Rule 1: a new execution surface (Litria starts the person's installed `claude` or `codex`) and three new Tauri commands (`terminal_spawn_agent`, `agent_detect`, `agent_open_install_guide`); the Project API's owner bridge now runs in release builds.
 > - **Class** (Rule 2): system-owned tools, detected and hinted, never installed; the visible terminal tab is the consent and the audit trail.
 > - **What holds.**

@@ -675,7 +675,7 @@ mod tests {
 
 /// Link entries: delete, move and remove act on the link the user selected,
 /// never on what it points to (2026-09-30; reproduced on Windows junctions
-/// and Linux symlinks before the fix — see Agents/docs/adversarial-check-policy.md).
+/// and Linux symlinks before the fix).
 #[cfg(test)]
 mod link_entry_tests {
     use super::*;

@@ -34,7 +34,7 @@ src-tauri/resources/.tmp/
 # Local project dashboard (kanban + journal and GitHub status) — never published
 dashboard/
 
-# Linked worktrees (AGENTS.md §7.1 — branches get their own tree, not the
+# Linked worktrees (branches get their own tree, not the
 # shared one). Each holds a `.git` FILE, so git would otherwise record the
 # folder as a broken gitlink on a `git add -A` — three phantom submodules
 # with no .gitmodules behind them.
