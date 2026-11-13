@@ -1810,6 +1810,21 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// A file whose own name has the shape of a Windows short name cannot be
+    /// addressed (owner ruling 2026-11-13). It is not searched, and it is
+    /// counted with the files search could not read, so a clean result is
+    /// never claimed over it.
+    #[test]
+    fn a_file_named_like_a_short_name_is_counted_and_not_searched() {
+        let root = temp_root("short-name-file");
+        put(&root, "a.ts", "hit\n");
+        put(&root, "REPORT~1.TXT", "hit\n");
+        let result = run(&root, &query("hit"), &mut Scripted::default());
+        assert_eq!(hits(&result), [hit("a.ts", 1, 1, Disk)]);
+        assert_eq!(result.skipped, SkippedCounts { unreadable: 1, ..SkippedCounts::default() });
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// F4: the editor holds a buffer under a name that resolves through a
     /// link whose target is gone (it was a withheld file when the buffer was
     /// opened). The name cannot be resolved, so it cannot be judged by what it
