@@ -298,12 +298,15 @@ fn npm_shim_target(text: &str) -> Option<PathBuf> {
         part.strip_prefix("%dp0%\\").or_else(|| part.strip_prefix("%~dp0\\"))
     })?;
     // A plain relative path into the shim's folder: no variables, no
-    // parent steps, no drive or root.
-    if raw.is_empty() || raw.contains('%') || raw.contains(':') || raw.starts_with('\\') {
+    // parent steps, no drive or root. Windows takes `/` as a separator too,
+    // so a parent step is refused whichever one it is written with
+    // (independent review 2026-10-25, IR-02: `node_modules/../../x.exe`
+    // was one "part" and passed).
+    if raw.is_empty() || raw.contains('%') || raw.contains(':') || raw.starts_with(['\\', '/']) {
         return None;
     }
     let mut relative = PathBuf::new();
-    for part in raw.split('\\') {
+    for part in raw.split(['\\', '/']) {
         if part.is_empty() || part == "." || part == ".." {
             return None;
         }
@@ -406,9 +409,50 @@ mod tests {
             "\"C:\\tools\\x.exe\" %*",
             "\"%dp0%\\x.exe\"",
             "",
+            // The same steps written with `/`, which Windows also takes as a
+            // separator (review 2026-10-25, IR-02).
+            "\"%dp0%\\../evil.exe\" %*",
+            "\"%dp0%\\node_modules/../../x.exe\" %*",
+            "\"%dp0%\\node_modules\\pkg/..\\..\\..\\x.exe\" %*",
+            "\"%dp0%\\node_modules/./x.exe\" %*",
+            "\"%dp0%\\node_modules//x.exe\" %*",
+            "\"%dp0%\\/x.exe\" %*",
         ] {
             assert_eq!(npm_shim_target(line), None, "{line:?}");
         }
+    }
+
+    /// A target written with `/` and no parent step is the same plain path.
+    #[test]
+    fn a_shim_target_may_use_either_separator() {
+        assert_eq!(
+            npm_shim_target("\"%dp0%\\node_modules/pkg\\bin/tool.exe\" %*"),
+            Some(PathBuf::from("node_modules").join("pkg").join("bin").join("tool.exe"))
+        );
+    }
+
+    /// The whole path: a shim whose target steps out of its folder is refused
+    /// even though that program exists.
+    #[cfg(windows)]
+    #[test]
+    fn a_shim_whose_target_leaves_its_folder_is_refused_though_the_program_exists() {
+        let dir = scratch("escape");
+        let bin = dir.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(dir.join("outside.exe"), "never run").unwrap();
+        let search = SearchEnv { path: OsString::new(), pathext: None };
+        for target in ["../outside.exe", "..\\outside.exe", "sub/../../outside.exe"] {
+            fs::write(bin.join("claude.cmd"), format!("\"%dp0%\\{target}\" %*\r\n")).unwrap();
+            let refused = launch_for(&bin.join("claude.cmd"), &search).unwrap_err();
+            assert!(refused.contains("cannot read"), "{target}: {refused}");
+        }
+        // The control: the same program inside the folder runs.
+        fs::write(bin.join("inside.exe"), "never run").unwrap();
+        fs::write(bin.join("claude.cmd"), "\"%dp0%\\inside.exe\" %*\r\n").unwrap();
+        assert_eq!(
+            launch_for(&bin.join("claude.cmd"), &search),
+            Ok(Launch { executable: bin.join("inside.exe"), prefix: Vec::new() })
+        );
     }
 
     #[test]
