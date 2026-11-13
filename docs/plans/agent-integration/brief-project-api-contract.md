@@ -169,7 +169,8 @@ Rules:
   - a `:` anywhere, which blocks NTFS alternate data streams (`path_guard` accepts `a.txt:stream` as a normal component);
   - control characters;
   - a segment with a trailing dot or space;
-  - a Windows reserved device name. Today only JavaScript checks these (`src/utils/path.js`).
+  - a Windows reserved device name. Today only JavaScript checks these (`src/utils/path.js`);
+  - a segment shaped like a Windows 8.3 short name *(since 2026-11-13; see the second correction of that date below)*.
 
   These are per-item outcomes so that the request schema and the boundary keep identical verdicts (ADR-033 decision 3).
 - **Not a confidentiality guarantee.** Source files can contain secrets no rule anticipates. Runtime-native tools bypass this policy entirely, and ADR-031 decision 5 requires the connection label to say so.
@@ -199,6 +200,12 @@ Rules:
 > **Corrected (2026-11-13, peer review of the arc, branch `fix/project-api-review-2`).** One more refinement to how names are judged. It was reproduced on `main` (ee4c9a9) and verified fixed on Windows (build plan, "Peer review of the arc").
 > - **A name that does not exist yet is judged by the folder it would be made in.** The operating system opens what exists under names no rule lists: a Windows 8.3 short name (`GIT~1` is `.git`), another case, another Unicode normalization. A path that resolved to nothing used to be judged, and keyed, exactly as spelled, so a new file named `GIT~1/hooks/pre-commit` was created inside `.git`. Now the deepest part of the path that exists is resolved to its own name, and the path is judged again under that name, as a file and as a directory. The document key is built from that name too, so two spellings of one new file are one document. A part that cannot be inspected or resolved is denied.
 > - **Residual: a short name can reveal that a withheld name exists.** `ENV~1` answers `denied` while `.env` exists, and `notFound` (or `ready`, for a new file) when it does not. This is older than the correction and holds on every surface, because the answer follows what the name resolves to. Closing it means adding names shaped like short names to the path syntax this section refuses, which would also put real files with such names out of reach. Not decided.
+
+> **Corrected (2026-11-13, owner ruling, branch `fix/api-short-name-paths`).** The residual above is closed for short names. It was reproduced on `main` first (`ENV~1` answered `denied` beside an existing `.env`, `ENV~9` answered `ready`) and verified fixed on Windows.
+> - **A segment shaped like a Windows short name is `invalidPath`, whatever is on disk.** The shape is `BASE` or `BASE.EXT`: a base of at most eight characters that ends in `~` and digits, and an extension of at most three. That is what NTFS and FAT volumes generate, the hashed form included (`GIT~1`, `REPORT~1.TXT`, `GI8F4E~1`). The answer no longer depends on whether anything has the name, so it cannot show that a withheld file exists.
+> - **The price, accepted with the ruling.** A file whose own name has that shape cannot be read, searched or edited through the API, and search counts it among the names it cannot address. The agent's own tools still reach it.
+> - **The judgement behind the rule stays.** A name that does not exist yet is still judged by the folder it would be made in, and that is still tested with real short names, so a path reaching it by another route is refused there too.
+> - **Residual.** An alias in another shape still answers by what it resolves to. On macOS a folder opens under either Unicode normalization of its name, so for a folder the person withholds under a name with accented letters, the other spelling answers `denied` only while the folder exists (reasoned from the aliasing that CI verified; not run as a test of its own). A file server that invents short names in another shape is not covered. Probed on Windows (NTFS, 2026-11-13): look-alike letters and the other normalization do not open an existing entry; only another case does, and the rules ignore case.
 
 ## 7. The read family: `project-api` v1
 

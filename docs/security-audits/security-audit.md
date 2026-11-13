@@ -1,7 +1,15 @@
 # Litria Security Audit
 
 > **Type**: Living document — reviewed periodically and after significant changes
-> **Last reviewed**: 2026-11-13 — **two repairs from the peer review of the Project API (branch `fix/project-api-review-2`)**:
+> **Last reviewed**: 2026-11-13 — **short names refused by the Project API's path syntax (branch `fix/api-short-name-paths`)**:
+> - **Why.** The residual of the entry below, which the owner ruled to close the same day. Path validation at a trust boundary is an enforcement point, so the adversarial check policy applies.
+> - **What was exposed.** With an agent connected, on Windows: asking for a short name showed whether a withheld file exists. Beside an existing `.env`, a new file `ENV~1` answered `denied` and `ENV~9` answered `ready`; a read of `ENV~1` answered `denied`. Existence only, never contents, and an agent's own tools can list a folder regardless; the leak was against Litria's own promise that a withheld path answers the same whether or not it exists.
+> - **The fix.** A path segment shaped like a Windows 8.3 short name (a base of at most eight characters ending in `~` and digits, an extension of at most three) is `invalidPath` on every surface, before anything is resolved. Accepted cost: a file whose own name has that shape is out of the API's reach.
+> - **Status** (adversarial check policy Rule 5). Reproduced on `main` on Windows 10 19045 (NTFS, short names on) by tests that failed first; verified fixed on Windows by the same tests. The rule is text handling and the same on every platform; Linux and macOS: CI. Five planted mistakes, one of which survived the first run and got its test.
+> - **Residual.** Aliases in another shape: on macOS another Unicode normalization of a withheld folder's name still answers `denied` only while the folder exists (reasoned, not run); a file server that invents short names in another shape. Probed on NTFS: look-alike letters do not open an existing entry.
+> - **Scans.** No dependency change. `npm audit` and `cargo audit`: not re-run.
+>
+> **Reviewed**: 2026-11-13 — **two repairs from the peer review of the Project API (branch `fix/project-api-review-2`)**:
 > - **Why.** The owner had the whole Project API arc reviewed on 2026-10-25, before the first slice that connects real agents merges (PR #147). Two of its findings are in code already on `main`. Both are enforcement points, so the adversarial check policy applies. Record: the Project API build plan, "Peer review of the arc".
 > - **What was exposed.** Nothing in a shipped build: until PR #147 the Project API is reachable only through a debug-only developer command. With an agent connected, on Windows:
 >   - **A write into a withheld folder (high).** A new file named through the 8.3 short name of a withheld folder was created inside it: `GIT~1/hooks/pre-commit` put a git hook into `.git`. The mechanism reaches any withheld folder the volume gives a short name (`.litria`, `.ssh`, `.aws`, one the person withholds); `.git` and a folder the person withholds are the two that were run. Reads were not affected.
