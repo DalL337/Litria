@@ -160,7 +160,9 @@ pub(crate) enum Identity {
     /// The key to look the document up by: the canonical project-relative
     /// path when the file exists — so a case variant on a case-insensitive
     /// volume, or an in-project link, finds the buffer of the file it names —
-    /// otherwise the requested path itself (a buffer whose file is gone).
+    /// otherwise (a buffer whose file is gone, a file not made yet) the
+    /// canonical name of the deepest folder that exists on its way, then the
+    /// rest as requested (`unresolved_identity`).
     Key(String),
 }
 
@@ -198,8 +200,55 @@ pub(crate) fn identity(root: &Path, path: &str) -> Identity {
         // and its buffer may hold the text of a withheld file it used to
         // name (P3 adversarial finding F4): fail closed.
         Err(ResolveError::Io(_)) if passes_through_link(root, path) => Identity::Denied,
-        Err(ResolveError::Io(_)) => Identity::Key(path.to_owned()),
+        Err(ResolveError::Io(_)) => unresolved_identity(root, path),
     }
+}
+
+/// The identity of a name that resolves to nothing: the real name of the
+/// deepest folder that exists on its way, then the rest as given.
+///
+/// Its spelling alone cannot judge it. The OS opens what exists under names
+/// the policy never sees: a Windows 8.3 short name (`GIT~1` is `.git`),
+/// another case, another Unicode normalization. A file made under such a name
+/// lands in the folder the OS resolves it to, so that folder's own name is the
+/// one the policy judges, and the one the key is built from (independent
+/// review 2026-10-25, IR-01: a new `GIT~1/hooks/pre-commit` was created
+/// inside `.git`).
+///
+/// Fails closed: a part that cannot be inspected or resolved, or that resolves
+/// outside the project, is denied — and so is a name whose every part exists
+/// and still does not resolve, because nothing says what it names.
+fn unresolved_identity(root: &Path, path: &str) -> Identity {
+    let segments: Vec<&str> = path.split('/').collect();
+    let mut current = root.to_path_buf();
+    let mut existing = 0;
+    for segment in &segments {
+        current.push(segment);
+        match fs::symlink_metadata(&current) {
+            Ok(_) => existing += 1,
+            // Nothing below a missing part, or below a file, exists either.
+            Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => break,
+            Err(_) => return Identity::Denied,
+        }
+    }
+    if existing == 0 {
+        // Nothing of it exists: it would be made under the root, as spelled.
+        return Identity::Key(path.to_owned());
+    }
+    if existing == segments.len() {
+        return Identity::Denied;
+    }
+    let canonical = resolve_existing_relative_path_typed(root, &segments[..existing].join("/"))
+        .ok()
+        .and_then(|target| canonical_relative(root, &target));
+    let Some(canonical) = canonical else {
+        return Identity::Denied;
+    };
+    let respelled = format!("{canonical}/{}", segments[existing..].join("/"));
+    if classify(&respelled) == Class::Denied || classify_directory(&respelled) == Class::Denied {
+        return Identity::Denied;
+    }
+    Identity::Key(respelled)
 }
 
 /// Whether any existing component of `path` (a valid API path) is a link or
@@ -974,6 +1023,68 @@ mod tests {
         fs::write(root.join(".env"), "SECRET=1\n").unwrap();
         std::os::unix::fs::symlink(root.join(".env"), root.join(".env.sample")).unwrap();
         assert!(matches!(read_disk(&root, ".env.sample"), DiskRead::Denied));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // --- Names that resolve to nothing (review 2026-10-25, IR-01) -----------
+
+    /// A file not made yet is keyed under the own name of the deepest folder
+    /// that exists on its way; a name nothing exists of stays as spelled.
+    #[test]
+    fn a_name_not_made_yet_is_keyed_under_its_folders_own_name() {
+        let root = temp_root("unmade");
+        fs::create_dir_all(root.join("src/deep")).unwrap();
+        fs::write(root.join("README.md"), "x\n").unwrap();
+        for (path, key) in [
+            ("src/new.ts", "src/new.ts"),
+            ("src/deep/er/new.ts", "src/deep/er/new.ts"),
+            ("nothing/here.ts", "nothing/here.ts"),
+            ("new.ts", "new.ts"),
+            // A file used as a folder: nothing can be made there, and nothing
+            // is hidden by saying so.
+            ("README.md/x", "README.md/x"),
+        ] {
+            assert_eq!(identity(&root, path), Identity::Key(key.to_owned()), "{path}");
+        }
+        // On a volume that ignores case, another spelling of the folder is
+        // the folder.
+        if root.join("SRC").exists() {
+            assert_eq!(identity(&root, "SRC/new.ts"), Identity::Key("src/new.ts".to_owned()));
+            assert_eq!(identity(&root, "SRC/DEEP/er/new.ts"), Identity::Key("src/deep/er/new.ts".to_owned()));
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The rules still answer first, and again on the folder's own name: a
+    /// withheld name is denied whether or not anything exists there.
+    #[test]
+    fn a_name_not_made_yet_is_denied_like_any_other() {
+        let _user = crate::project_api::policy::tests::Withholding::patterns("private/, src/secret-*.txt");
+        let root = temp_root("unmade-denied");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("private")).unwrap();
+        for path in [".git/hooks/pre-commit", "src/.env", "private/new.md", "src/private", "src/secret-1.txt", "src/a.pem"] {
+            assert_eq!(identity(&root, path), Identity::Denied, "{path}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A folder that cannot be looked into cannot be judged: denied.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_under_a_folder_that_cannot_be_inspected_is_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: no arguments, no side effects.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: root can inspect every folder");
+            return;
+        }
+        let root = temp_root("unmade-locked");
+        fs::create_dir_all(root.join("locked/inner")).unwrap();
+        fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+        let judged = identity(&root, "locked/inner/new.ts");
+        fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(judged, Identity::Denied);
         let _ = fs::remove_dir_all(&root);
     }
 }
