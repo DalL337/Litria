@@ -81,7 +81,8 @@ impl Drop for PsuedoCon {
 impl PsuedoCon {
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
-        // LITRIA PATCH (the sole change in this vendored copy): upstream
+        // LITRIA PATCH (the first of two in this vendored copy; the other
+        // is the Job Object a process can be created in, `set_job`): upstream
         // hardcodes INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE, which
         // fits wezterm — a terminal that answers cursor queries in-process
         // and speaks win32-input-mode. Litria's terminal is xterm.js in a
@@ -133,8 +134,14 @@ impl PsuedoCon {
         si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
 
-        let mut attrs = ProcThreadAttributeList::with_capacity(1)?;
+        // LITRIA PATCH: a Job Object to create the process in, when the
+        // builder names one. Declared before the list, which points at it.
+        let job: Option<HANDLE> = cmd.job().map(|job| job as HANDLE);
+        let mut attrs = ProcThreadAttributeList::with_capacity(if job.is_some() { 2 } else { 1 })?;
         attrs.set_pty(self.con)?;
+        if let Some(job) = &job {
+            attrs.set_job(job)?;
+        }
         si.lpAttributeList = attrs.as_mut_ptr();
 
         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };

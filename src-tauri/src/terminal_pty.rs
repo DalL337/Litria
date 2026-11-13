@@ -398,6 +398,14 @@ pub(crate) fn spawn_pty(
 
 type AgentLaunch = (std::path::PathBuf, Vec<std::ffi::OsString>, Vec<(&'static str, String)>);
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam: runs once on the spawning thread, the instant after the
+    /// session's process has started. A test holds the thread here to let the
+    /// process act before anything else is done to it (gap G2).
+    static AFTER_SPAWN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_pty_inner(
     session_id: &str,
@@ -483,18 +491,22 @@ fn spawn_pty_inner(
         cmd.env(name, value);
     }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| {
+    let spawn_failed = |e: String| {
         CommandError::internal(
             "terminal.spawn_failed",
             format!("Failed to spawn terminal process: {e}"),
         )
-    })?;
+    };
+    #[cfg(target_os = "windows")]
+    let (child, job) = spawn_in_job(pair.slave.as_ref(), cmd, session_id).map_err(spawn_failed)?;
+    #[cfg(not(target_os = "windows"))]
+    let child = pair.slave.spawn_command(cmd).map_err(|e| spawn_failed(e.to_string()))?;
     drop(pair.slave);
     #[cfg(unix)]
     let shell_pid = child.process_id();
 
-    #[cfg(target_os = "windows")]
-    let job = setup_job_object(child.as_ref(), session_id);
+    #[cfg(test)]
+    after_spawn_seam();
 
     let (input_tx, input_rx) = mpsc::sync_channel(INPUT_QUEUE);
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -755,24 +767,79 @@ fn spawn_exit_watcher(
         })
 }
 
+/// Runs the test seam, once: see `AFTER_SPAWN`.
+#[cfg(test)]
+fn after_spawn_seam() {
+    AFTER_SPAWN.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+/// A Job Object that ends every process in it when it is closed.
 #[cfg(target_os = "windows")]
-fn setup_job_object(
+fn kill_on_close_job() -> Result<win32job::Job, String> {
+    let job = win32job::Job::create().map_err(|e| format!("{e:?}"))?;
+    let mut info = job.query_extended_limit_info().map_err(|e| format!("{e:?}"))?;
+    info.limit_kill_on_job_close();
+    job.set_extended_limit_info(&mut info).map_err(|e| format!("{e:?}"))?;
+    Ok(job)
+}
+
+/// Windows: start the session's process inside a new Job Object. The job is
+/// what End uses to stop everything the session started, and it owns the
+/// process from its first instruction, so nothing the process starts can be
+/// missed (gap G2, closed 2026-11-13: an agent starts its MCP servers at
+/// once, where a shell starts nothing before it reads input).
+///
+/// If the job cannot be made, or the process cannot be created in it, the
+/// process is started without one and a job is attached afterwards, as
+/// before: whatever it starts in between escapes that job.
+#[cfg(target_os = "windows")]
+fn spawn_in_job(
+    slave: &(dyn portable_pty::SlavePty + Send),
+    cmd: CommandBuilder,
+    session_id: &str,
+) -> Result<(Box<dyn portable_pty::Child + Send + Sync>, Option<win32job::Job>), String> {
+    match kill_on_close_job() {
+        Ok(job) => {
+            let mut inside = cmd.clone();
+            inside.set_job(job.handle());
+            match slave.spawn_command(inside) {
+                Ok(child) => return Ok((child, Some(job))),
+                // Most often the program itself cannot be started, and the
+                // second attempt below says so.
+                Err(error) => eprintln!(
+                    "[terminal_pty] session {}: not started inside its job object ({error}); trying without",
+                    short_id(session_id)
+                ),
+            }
+        }
+        Err(error) => eprintln!(
+            "[terminal_pty] session {}: no job object to start in ({error})",
+            short_id(session_id)
+        ),
+    }
+    let child = slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    after_spawn_seam();
+    let job = attach_job_object(child.as_ref(), session_id);
+    Ok((child, job))
+}
+
+/// The fallback of `spawn_in_job`: a job attached through the process's own
+/// handle, after it is already running.
+#[cfg(target_os = "windows")]
+fn attach_job_object(
     child: &(dyn portable_pty::Child + Send + Sync),
     session_id: &str,
 ) -> Option<win32job::Job> {
-    // The job is what End uses to stop everything the shell started. It is
-    // assigned through the child's own handle, after the shell is already
-    // running: anything the shell starts in that window escapes it (a shell
-    // starts nothing before it reads input; T2b's agents may need the job
-    // assigned before the process runs).
     let assigned = (|| -> Result<win32job::Job, String> {
         let handle = child
             .as_raw_handle()
             .ok_or_else(|| "the process has no handle".to_string())?;
-        let job = win32job::Job::create().map_err(|e| format!("{e:?}"))?;
-        let mut info = job.query_extended_limit_info().map_err(|e| format!("{e:?}"))?;
-        info.limit_kill_on_job_close();
-        job.set_extended_limit_info(&mut info).map_err(|e| format!("{e:?}"))?;
+        let job = kill_on_close_job()?;
         job.assign_process(handle as isize).map_err(|e| format!("{e:?}"))?;
         Ok(job)
     })();
@@ -2130,6 +2197,50 @@ mod tests {
             let started = spawn_pty("0123456789abcdef0123456789abcdef", &boundary(), program, 80, 24, channel, Box::new(|| {}));
             assert!(started.is_err(), "a missing program does not start");
             assert_eq!(ends.load(Ordering::SeqCst), 1, "its connection is ended at once");
+        }
+
+        /// Gap G2 (recorded with T2a; review 2026-10-25, IR-03). An agent
+        /// starts processes of its own as soon as it runs (its MCP servers),
+        /// and they must end with its session too. The stand-in starts a
+        /// child at once, hidden and with no console, so only the session's
+        /// Job Object can reach it; the seam holds the spawning thread, at
+        /// the point where the job used to be attached, until that child
+        /// exists.
+        #[cfg(windows)]
+        #[test]
+        fn what_an_agent_starts_at_once_ends_with_its_session() {
+            const STARTS_A_CHILD: &str = "const child = require('child_process').spawn('ping', ['-n', '300', '127.0.0.1'], { detached: true, stdio: 'ignore', windowsHide: true }); require('fs').writeFileSync(process.env.LITRIA_TEST_INPUT_LOG, String(child.pid)); setInterval(() => {}, 1000);";
+            with_watchdog(|| {
+                let log = scratch_log("first-child");
+                let reported = log.clone();
+                AFTER_SPAWN.with(|hook| {
+                    *hook.borrow_mut() = Some(Box::new(move || {
+                        let deadline = Instant::now() + WAIT;
+                        while logged(&reported).trim().is_empty() && Instant::now() < deadline {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                    }));
+                });
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let (session, _seen) =
+                    spawn_agent("node.exe", &["-e", STARTS_A_CHILD], &log, ends, Arc::new(AtomicBool::new(false)));
+                let pid: u32 = logged(&log).trim().parse().expect("the stand-in reported its child before the seam let go");
+                let child = Watch::new(pid);
+                assert!(child.alive(), "the stand-in's child is running");
+
+                session.end();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while child.alive() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                let outlived = child.alive();
+                if outlived {
+                    // Do not leave it behind for five minutes.
+                    let _ = std::process::Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+                }
+                let _ = std::fs::remove_file(&log);
+                assert!(!outlived, "what the agent started at once outlived its session");
+            });
         }
     }
 }

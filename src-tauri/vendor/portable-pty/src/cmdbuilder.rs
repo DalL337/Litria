@@ -207,6 +207,10 @@ pub struct CommandBuilder {
     #[cfg(unix)]
     pub(crate) umask: Option<libc::mode_t>,
     controlling_tty: bool,
+    // LITRIA PATCH: a Job Object to create the process in (see `set_job`).
+    #[cfg(windows)]
+    #[cfg_attr(feature = "serde_support", serde(skip))]
+    job: Option<isize>,
 }
 
 impl CommandBuilder {
@@ -220,6 +224,8 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            #[cfg(windows)]
+            job: None,
         }
     }
 
@@ -232,6 +238,8 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            #[cfg(windows)]
+            job: None,
         }
     }
 
@@ -249,6 +257,20 @@ impl CommandBuilder {
         self.controlling_tty
     }
 
+    /// LITRIA PATCH: create the process as a member of this Job Object (a raw
+    /// job handle, which must stay open until the spawn returns). The job then
+    /// owns the process from its first instruction, so nothing it starts can
+    /// be missed by a job attached afterwards.
+    #[cfg(windows)]
+    pub fn set_job(&mut self, job: isize) {
+        self.job = Some(job);
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn job(&self) -> Option<isize> {
+        self.job
+    }
+
     /// Create a new builder instance that will run some idea of a default
     /// program.  Such a builder will panic if `arg` is called on it.
     pub fn new_default_prog() -> Self {
@@ -259,6 +281,8 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            #[cfg(windows)]
+            job: None,
         }
     }
 

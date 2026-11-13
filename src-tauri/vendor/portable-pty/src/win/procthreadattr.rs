@@ -4,8 +4,11 @@ use std::io::Error as IoError;
 use std::{mem, ptr};
 use winapi::shared::minwindef::DWORD;
 use winapi::um::processthreadsapi::*;
+use winapi::um::winnt::HANDLE;
 
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
+// LITRIA PATCH: ProcThreadAttributeJobList (13) as an input attribute.
+const PROC_THREAD_ATTRIBUTE_JOB_LIST: usize = 0x0002000D;
 
 pub struct ProcThreadAttributeList {
     data: Vec<u8>,
@@ -59,6 +62,31 @@ impl ProcThreadAttributeList {
         ensure!(
             res != 0,
             "UpdateProcThreadAttribute failed: {}",
+            IoError::last_os_error()
+        );
+        Ok(())
+    }
+}
+
+impl ProcThreadAttributeList {
+    /// LITRIA PATCH: create the process as a member of `job`. The attribute
+    /// keeps a pointer to the handle and reads it when the process is
+    /// created, so `job` must outlive that call.
+    pub fn set_job(&mut self, job: &HANDLE) -> Result<(), Error> {
+        let res = unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                job as *const HANDLE as *mut _,
+                mem::size_of::<HANDLE>(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        ensure!(
+            res != 0,
+            "UpdateProcThreadAttribute (job list) failed: {}",
             IoError::last_os_error()
         );
         Ok(())

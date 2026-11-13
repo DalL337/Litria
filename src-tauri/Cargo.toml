@@ -76,10 +76,16 @@ windows = { version = "0.61", features = ["Win32_System_Threading", "Win32_Found
 webview2-com = "0.38"
 windows-core = "0.61"
 
-# Vendored portable-pty with ONE patch (vendor/portable-pty/src/win/psuedocon.rs):
-# drop the hardcoded INHERIT_CURSOR + WIN32_INPUT_MODE ConPTY flags, which fit
-# wezterm's own terminal but break an xterm.js consumer (startup cursor-query
-# handshake desync + per-keystroke win32 input synthesis). Diff is marked with
-# "LITRIA PATCH". Re-vendor when bumping the portable-pty version.
+# Vendored portable-pty with TWO patches, each marked "LITRIA PATCH" in the
+# source. Re-apply both when re-vendoring for a portable-pty version bump.
+# 1. vendor/portable-pty/src/win/psuedocon.rs: drop the hardcoded
+#    INHERIT_CURSOR + WIN32_INPUT_MODE ConPTY flags, which fit wezterm's own
+#    terminal but break an xterm.js consumer (startup cursor-query handshake
+#    desync + per-keystroke win32 input synthesis).
+# 2. (2026-11-13) src/cmdbuilder.rs `set_job`, src/win/procthreadattr.rs
+#    `set_job`, src/win/psuedocon.rs `spawn_command`: a process can be created
+#    inside a Job Object (PROC_THREAD_ATTRIBUTE_JOB_LIST), so a terminal
+#    session's job owns its process from the first instruction
+#    (terminal_pty::spawn_in_job).
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
