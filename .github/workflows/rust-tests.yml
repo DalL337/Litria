@@ -107,7 +107,7 @@ jobs:
           # Same images as release.yml, so a green PR predicts a green release.
           - os: ubuntu-22.04
             label: linux-x86_64
-          - os: macos-14
+          - os: macos-15
             label: macos-aarch64
 
     steps:

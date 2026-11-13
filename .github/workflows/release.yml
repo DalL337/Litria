@@ -45,7 +45,7 @@ jobs:
           # so building on an older base widens the range of distros it runs on.
           - os: ubuntu-22.04
             label: linux-x86_64
-          - os: macos-14
+          - os: macos-15
             label: macos-aarch64
           # Intel Mac is CROSS-COMPILED from the Apple Silicon runner rather
           # than built on a macos-13 box. GitHub is retiring the Intel runner
@@ -53,7 +53,7 @@ jobs:
           # without ever being allocated one (0 steps run). Apple's toolchain
           # targets both architectures and bundle-node.mjs already honours
           # TAURI_TARGET_TRIPLE, so the cross build needs no scarce hardware.
-          - os: macos-14
+          - os: macos-15
             label: macos-x86_64
             rust_target: x86_64-apple-darwin
           - os: windows-latest
