@@ -395,7 +395,7 @@ fn all_applied(paths: &[String]) -> Option<Value> {
 }
 
 fn store_with_plan(epoch: &str, now: Instant) -> (Mutex<PlanStore>, String) {
-    // Its epochs name no open workspace: the bare store, without the journal.
+    // The bare store, without the journal.
     let mut store = PlanStore::without_journal();
     let plan = store
         .propose(Principal::Test, epoch, [planned("src/a.ts", "b1-x"), planned("src/b.ts", "b1-y")].concat(), now)
@@ -403,12 +403,23 @@ fn store_with_plan(epoch: &str, now: Instant) -> (Mutex<PlanStore>, String) {
     (Mutex::new(store), plan.plan_id)
 }
 
+/// A really bound workspace and its epoch. Applying judges every change
+/// against the open project again, so a plan that is to reach the editor
+/// needs one; a made-up epoch applies nothing
+/// (`a_plan_whose_project_is_not_open_applies_nothing`).
+fn bound(tag: &str) -> (Session, &'static str) {
+    let session = Session::new(tag, ready);
+    let epoch: &'static str = Box::leak(session.epoch.clone().into_boxed_str());
+    (session, epoch)
+}
+
 #[test]
 fn approving_applies_the_plan_once_and_records_each_revision() {
+    let (_session, epoch) = bound("approve");
     let now = Instant::now();
-    let (store, id) = store_with_plan("ws-1", now);
-    let (bridge, calls) = applying_editor("ws-1", Duration::from_secs(5), all_applied);
-    let reviewed = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    let (store, id) = store_with_plan(epoch, now);
+    let (bridge, calls) = applying_editor(epoch, Duration::from_secs(5), all_applied);
+    let reviewed = review_with(&id, Decision::Approve, epoch, bridge, &store, now);
     assert_eq!(reviewed.state, PlanState::Applied);
     assert_eq!(
         reviewed.changes,
@@ -418,28 +429,29 @@ fn approving_applies_the_plan_once_and_records_each_revision() {
         ]
     );
     // Approving again changes nothing and asks the editor nothing.
-    let again = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    let again = review_with(&id, Decision::Approve, epoch, bridge, &store, now);
     assert_eq!(again, reviewed);
     assert_eq!(calls.load(Ordering::SeqCst), 1, "applied at most once");
     // The requester sees the outcome.
-    let (state, changes) = store.lock().unwrap().status(&id, Principal::Test, "ws-1", now);
+    let (state, changes) = store.lock().unwrap().status(&id, Principal::Test, epoch, now);
     assert_eq!((state, changes.len()), (PlanState::Applied, 2));
 }
 
 #[test]
 fn two_approvals_at_once_apply_once() {
+    let (_session, epoch) = bound("approve-twice");
     fn slow(paths: &[String]) -> Option<Value> {
         std::thread::sleep(Duration::from_millis(150));
         all_applied(paths)
     }
     let now = Instant::now();
-    let (store, id) = store_with_plan("ws-1", now);
+    let (store, id) = store_with_plan(epoch, now);
     let store: &'static Mutex<PlanStore> = Box::leak(Box::new(store));
-    let (bridge, calls) = applying_editor("ws-1", Duration::from_secs(5), slow);
+    let (bridge, calls) = applying_editor(epoch, Duration::from_secs(5), slow);
     let reviewers: Vec<_> = (0..4)
         .map(|_| {
             let id = id.clone();
-            std::thread::spawn(move || review_with(&id, Decision::Approve, "ws-1", bridge, store, now).state)
+            std::thread::spawn(move || review_with(&id, Decision::Approve, epoch, bridge, store, now).state)
         })
         .collect();
     let states: Vec<PlanState> = reviewers.into_iter().map(|reviewer| reviewer.join().unwrap()).collect();
@@ -472,6 +484,7 @@ fn an_expired_plan_cannot_be_approved() {
 
 #[test]
 fn a_document_that_changed_meanwhile_is_a_conflict_and_nothing_applies() {
+    let (_session, epoch) = bound("approve-conflict");
     fn changed(paths: &[String]) -> Option<Value> {
         Some(json!({ "kind": "result", "result": { "applied": false, "changes": [
             { "outcome": "ready", "path": paths[0] },
@@ -479,9 +492,9 @@ fn a_document_that_changed_meanwhile_is_a_conflict_and_nothing_applies() {
         ] } }))
     }
     let now = Instant::now();
-    let (store, id) = store_with_plan("ws-1", now);
-    let (bridge, _) = applying_editor("ws-1", Duration::from_secs(5), changed);
-    let reviewed = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    let (store, id) = store_with_plan(epoch, now);
+    let (bridge, _) = applying_editor(epoch, Duration::from_secs(5), changed);
+    let reviewed = review_with(&id, Decision::Approve, epoch, bridge, &store, now);
     assert_eq!(reviewed.state, PlanState::Conflict);
     assert_eq!(
         reviewed.changes,
@@ -494,6 +507,7 @@ fn a_document_that_changed_meanwhile_is_a_conflict_and_nothing_applies() {
 
 #[test]
 fn an_outcome_litria_cannot_know_is_needs_review_never_failed() {
+    let (_session, epoch) = bound("approve-unknown");
     fn silent(_: &[String]) -> Option<Value> {
         None
     }
@@ -510,12 +524,12 @@ fn an_outcome_litria_cannot_know_is_needs_review_never_failed() {
     ];
     for (reply, what) in cases {
         let now = Instant::now();
-        let (store, id) = store_with_plan("ws-1", now);
-        let (bridge, calls) = applying_editor("ws-1", Duration::from_millis(150), reply);
-        let first = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now).state;
+        let (store, id) = store_with_plan(epoch, now);
+        let (bridge, calls) = applying_editor(epoch, Duration::from_millis(150), reply);
+        let first = review_with(&id, Decision::Approve, epoch, bridge, &store, now).state;
         assert_eq!(first, PlanState::NeedsReview, "{what}");
         // Never retried.
-        let again = review_with(&id, Decision::Approve, "ws-1", bridge, &store, now).state;
+        let again = review_with(&id, Decision::Approve, epoch, bridge, &store, now).state;
         assert_eq!(again, PlanState::NeedsReview, "{what}");
         assert_eq!(calls.load(Ordering::SeqCst), 1, "{what}");
     }
@@ -523,18 +537,19 @@ fn an_outcome_litria_cannot_know_is_needs_review_never_failed() {
 
 #[test]
 fn a_request_that_never_reached_the_editor_failed_with_nothing_applied() {
+    let (_session, epoch) = bound("approve-undelivered");
     fn refused(_: &[String]) -> Option<Value> {
         Some(json!({ "kind": "error", "code": "workspaceChanged", "message": "moved on" }))
     }
     // Not attached for this workspace: never delivered.
     let now = Instant::now();
-    let (store, id) = store_with_plan("ws-1", now);
+    let (store, id) = store_with_plan(epoch, now);
     let detached: &'static Bridge = Box::leak(Box::new(Bridge::new(Duration::from_secs(5))));
-    assert_eq!(review_with(&id, Decision::Approve, "ws-1", detached, &store, now).state, PlanState::Failed);
+    assert_eq!(review_with(&id, Decision::Approve, epoch, detached, &store, now).state, PlanState::Failed);
     // Delivered, but refused before the editor acted (the workspace moved on).
-    let (store, id) = store_with_plan("ws-1", now);
-    let (bridge, _) = applying_editor("ws-1", Duration::from_secs(5), refused);
-    assert_eq!(review_with(&id, Decision::Approve, "ws-1", bridge, &store, now).state, PlanState::Failed);
+    let (store, id) = store_with_plan(epoch, now);
+    let (bridge, _) = applying_editor(epoch, Duration::from_secs(5), refused);
+    assert_eq!(review_with(&id, Decision::Approve, epoch, bridge, &store, now).state, PlanState::Failed);
 }
 
 #[test]
@@ -549,15 +564,16 @@ fn a_reviewer_of_another_workspace_finds_nothing() {
 
 #[test]
 fn a_reviewed_plan_no_longer_counts_as_pending() {
+    let (_session, epoch) = bound("approve-pending");
     let now = Instant::now();
-    let (store, id) = store_with_plan("ws-1", now);
-    let (bridge, _) = applying_editor("ws-1", Duration::from_secs(5), all_applied);
-    review_with(&id, Decision::Approve, "ws-1", bridge, &store, now);
+    let (store, id) = store_with_plan(epoch, now);
+    let (bridge, _) = applying_editor(epoch, Duration::from_secs(5), all_applied);
+    review_with(&id, Decision::Approve, epoch, bridge, &store, now);
     // The same changes again are a new proposal, not the applied plan.
     let again = store
         .lock()
         .unwrap()
-        .propose(Principal::Test, "ws-1", [planned("src/a.ts", "b1-x"), planned("src/b.ts", "b1-y")].concat(), now)
+        .propose(Principal::Test, epoch, [planned("src/a.ts", "b1-x"), planned("src/b.ts", "b1-y")].concat(), now)
         .unwrap();
     assert_ne!(again.plan_id, id);
 }
@@ -619,29 +635,30 @@ fn with_litria_review_on_the_agents_apply_waits_for_a_person() {
 /// wins, the editor applies once.
 #[test]
 fn an_agents_apply_racing_a_persons_approval_applies_once() {
+    let (_session, epoch) = bound("approve-race");
     fn slow(paths: &[String]) -> Option<Value> {
         std::thread::sleep(Duration::from_millis(150));
         all_applied(paths)
     }
     let now = Instant::now();
-    let (store, id) = store_with_plan("ws-1", now);
+    let (store, id) = store_with_plan(epoch, now);
     let store: &'static Mutex<PlanStore> = Box::leak(Box::new(store));
-    let (editor, calls) = applying_editor("ws-1", Duration::from_secs(5), slow);
+    let (editor, calls) = applying_editor(epoch, Duration::from_secs(5), slow);
     let agent = {
         let id = id.clone();
         std::thread::spawn(move || {
-            let claimed = lock(store).claim(&id, "ws-1", now, Claimant::Agent(Principal::Test));
-            claimed.map(|changes| execute(&id, changes, "ws-1", editor, store).state)
+            let claimed = lock(store).claim(&id, epoch, now, Claimant::Agent(Principal::Test));
+            claimed.map(|changes| execute(&id, changes, epoch, editor, store).state)
         })
     };
     let person = {
         let id = id.clone();
-        std::thread::spawn(move || review_with(&id, Decision::Approve, "ws-1", editor, store, now).state)
+        std::thread::spawn(move || review_with(&id, Decision::Approve, epoch, editor, store, now).state)
     };
     let agent = agent.join().unwrap();
     let person = person.join().unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one claim won: {agent:?} / {person:?}");
-    assert_eq!(lock(store).status(&id, Principal::Test, "ws-1", now).0, PlanState::Applied);
+    assert_eq!(lock(store).status(&id, Principal::Test, epoch, now).0, PlanState::Applied);
 }
 
 // --- W3b: new files ---------------------------------------------------------------
@@ -1334,4 +1351,200 @@ fn a_lost_answer_is_recorded_as_needing_review() {
     let record = operations::load(&session.epoch, &id, Principal::Test).unwrap().unwrap();
     assert_eq!(record.state, PlanState::NeedsReview);
     assert_eq!((record.changes[0].phase, record.changes[0].outcome.clone()), (Phase::Started, None));
+}
+
+// --- Review repairs (2026-11-13): a name is judged by where it would land, and
+// --- a plan is judged again when it applies ----------------------------------
+
+use crate::project_api::policy::tests::Withholding;
+
+/// The 8.3 short name Windows keeps for `name` in `dir`, asked of the volume
+/// itself (never guessed); `None` where the volume keeps none.
+#[cfg(windows)]
+fn short_name(dir: &Path, name: &str) -> Option<String> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    let long: Vec<u16> = dir.join(name).as_os_str().encode_wide().chain([0]).collect();
+    let mut buffer = vec![0u16; 1024];
+    // SAFETY: `long` is NUL-terminated and outlives the call; the slice passes
+    // its own length.
+    let length = unsafe { GetShortPathNameW(PCWSTR(long.as_ptr()), Some(&mut buffer)) } as usize;
+    if length == 0 || length >= buffer.len() {
+        return None;
+    }
+    let short = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length]));
+    let short = short.file_name()?.to_str()?.to_string();
+    (!short.eq_ignore_ascii_case(name)).then_some(short)
+}
+
+/// Windows opens `.git` under its 8.3 short name too, and no rule names that
+/// spelling. A new file under it was created inside `.git` (independent
+/// review 2026-10-25, IR-01); it is judged by the folder it would land in.
+#[cfg(windows)]
+#[test]
+fn a_new_file_under_the_short_name_of_a_withheld_folder_is_denied() {
+    let session = Session::new("short-name", ready);
+    fs::create_dir_all(session.root.join(".git/hooks")).unwrap();
+    let Some(git) = short_name(&session.root, ".git") else {
+        eprintln!("skipping: this volume keeps no 8.3 short names");
+        return;
+    };
+    eprintln!("ran: the volume names .git {git}");
+    let store = Mutex::new(PlanStore::default());
+    let path = format!("{git}/hooks/pre-commit");
+    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "#!/bin/sh\n")] }, &store).unwrap();
+    // The harm is the file, not the answer: a plan that was made is applied
+    // through the real create.
+    if let Some(plan) = &result.plan {
+        let (bridge, _) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+        session.apply(&plan.plan_id, bridge, &store);
+    }
+    assert!(!session.root.join(".git/hooks/pre-commit").exists(), "a file was created inside .git");
+    assert_eq!(result.changes, [ChangeCheck::Denied { path }]);
+    assert!(result.plan.is_none());
+}
+
+/// The same for a folder the person withholds by a pattern of their own.
+#[cfg(windows)]
+#[test]
+fn a_new_file_under_the_short_name_of_a_folder_the_person_withholds_is_denied() {
+    let session = Session::new("short-name-own", ready);
+    fs::create_dir_all(session.root.join("private-notes")).unwrap();
+    let Some(short) = short_name(&session.root, "private-notes") else {
+        eprintln!("skipping: this volume keeps no 8.3 short names");
+        return;
+    };
+    eprintln!("ran: the volume names private-notes {short}");
+    let _withheld = Withholding::patterns("private-notes/");
+    let store = Mutex::new(PlanStore::default());
+    let path = format!("{short}/new.md");
+    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "N\n")] }, &store).unwrap();
+    if let Some(plan) = &result.plan {
+        let (bridge, _) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+        session.apply(&plan.plan_id, bridge, &store);
+    }
+    assert!(!session.root.join("private-notes/new.md").exists(), "a file was created inside the withheld folder");
+    assert_eq!(result.changes, [ChangeCheck::Denied { path }]);
+
+    // A name withheld only as a folder is withheld before it exists, under
+    // the short name too (no rule matches `<short>/drafts` as spelled).
+    let _withheld = Withholding::patterns("private-notes/drafts/");
+    let path = format!("{short}/drafts");
+    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "")] }, &store).unwrap();
+    assert_eq!(result.changes, [ChangeCheck::Denied { path }]);
+}
+
+/// And when the plan applies: a name that was only a new folder at the
+/// proposal is the short name of `.git` once `.git` exists.
+#[cfg(windows)]
+#[test]
+fn a_short_name_that_becomes_a_withheld_folder_after_the_proposal_is_never_written_through() {
+    let session = Session::new("short-name-late", ready);
+    // Learn the name the volume gives `.git`, then take the folder away.
+    fs::create_dir_all(session.root.join(".git")).unwrap();
+    let Some(git) = short_name(&session.root, ".git") else {
+        eprintln!("skipping: this volume keeps no 8.3 short names");
+        return;
+    };
+    fs::remove_dir(session.root.join(".git")).unwrap();
+    let store = Mutex::new(PlanStore::default());
+    let path = format!("{git}/hooks/pre-commit");
+    let id = session.plan(vec![create(&path, "#!/bin/sh\n")], &store);
+    fs::create_dir_all(session.root.join(".git/hooks")).unwrap();
+    assert_eq!(short_name(&session.root, ".git"), Some(git), "the volume gave .git the same short name again");
+    let (bridge, calls) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+    let result = session.apply(&id, bridge, &store);
+    assert!(!session.root.join(".git/hooks/pre-commit").exists(), "a file was created inside .git: {result:?}");
+    assert_eq!(result.state, PlanState::Conflict);
+    assert_eq!(result.changes, [ChangeOutcome::Denied { path }]);
+    assert!(calls.lock().unwrap().is_empty(), "the manager was never asked");
+}
+
+/// Another spelling of a folder that exists is that folder: the new file is
+/// planned under the folder's own name, so two spellings of one new file are
+/// one document.
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn a_new_file_is_planned_under_its_folders_own_name() {
+    let session = Session::new("create-respelled", ready);
+    let store = Mutex::new(PlanStore::default());
+    let result = session.prepare(ChangesPrepareRequest { changes: vec![create("SRC/new.ts", "N\n")] }, &store).unwrap();
+    assert_eq!(result.changes, [ChangeCheck::Ready { path: "SRC/new.ts".into() }], "answered as it was asked");
+    let plan = result.plan.expect("ready");
+    {
+        let stored = store.lock().unwrap();
+        let stored = stored.get(&plan.plan_id, Principal::Test, &session.epoch).unwrap();
+        assert_eq!(stored.changes[0], PlannedChange::Create(PlannedFile { path: "src/new.ts".into(), text: "N\n".into() }));
+    }
+    let twice = ChangesPrepareRequest { changes: vec![create("src/other.ts", ""), create("SRC/other.ts", "")] };
+    assert_eq!(session.prepare(twice, &store).unwrap_err().code, ErrorCode::InvalidParams);
+}
+
+/// macOS opens a folder under either Unicode normalization of its name; a
+/// pattern is one spelling. A new file under the other spelling is judged by
+/// the folder's own name.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_new_file_under_another_normalization_of_a_withheld_folder_is_denied() {
+    let session = Session::new("create-normalization", ready);
+    let composed = "caf\u{e9}"; // e-acute as one code point
+    let decomposed = "cafe\u{301}"; // e, then a combining acute accent
+    fs::create_dir_all(session.root.join(composed)).unwrap();
+    // Not a reason to skip: a pass must mean the alias was really tried.
+    assert!(
+        session.root.join(decomposed).exists(),
+        "this volume tells the two normalizations apart, so the test proves nothing here"
+    );
+    let _withheld = Withholding::patterns(&format!("{composed}/"));
+    let store = Mutex::new(PlanStore::default());
+    let path = format!("{decomposed}/new.txt");
+    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "N\n")] }, &store).unwrap();
+    if let Some(plan) = &result.plan {
+        let (bridge, _) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+        session.apply(&plan.plan_id, bridge, &store);
+    }
+    assert!(!session.root.join(composed).join("new.txt").exists(), "a file was created inside the withheld folder");
+    assert_eq!(result.changes, [ChangeCheck::Denied { path }]);
+}
+
+/// The person can withhold a document after an edit to it was proposed. The
+/// plan is judged again when it applies (review 2026-10-25: the edit was
+/// still applied): nothing lands, and neither owner is asked.
+#[test]
+fn an_edit_to_a_document_withheld_after_the_proposal_is_not_applied() {
+    let session = Session::new("withheld-late", ready);
+    let store = Mutex::new(PlanStore::default());
+    let id = session.plan(vec![change("src/a.ts"), change("src/b.ts"), create("src/new.ts", "N\n")], &store);
+    let _withheld = Withholding::patterns("src/b.ts");
+    let (bridge, calls) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+    let result = session.apply(&id, bridge, &store);
+    assert_eq!(result.state, PlanState::Conflict);
+    assert_eq!(
+        result.changes,
+        [
+            ChangeOutcome::Ready { path: "src/a.ts".into() },
+            ChangeOutcome::Denied { path: "src/b.ts".into() },
+            ChangeOutcome::Ready { path: "src/new.ts".into() },
+        ]
+    );
+    assert!(result.effects.is_empty());
+    assert!(calls.lock().unwrap().is_empty(), "neither the editor nor the manager was asked");
+    assert!(!session.root.join("src/new.ts").exists());
+}
+
+/// Without the project's root nothing can be judged again, so nothing is
+/// applied and the editor is never asked.
+#[test]
+fn a_plan_whose_project_is_not_open_applies_nothing() {
+    let _serial = db::serial_guard();
+    db::close_workspace_db().unwrap();
+    let now = Instant::now();
+    let (store, id) = store_with_plan("ws-not-open", now);
+    let (bridge, calls) = applying_editor("ws-not-open", Duration::from_secs(5), all_applied);
+    let reviewed = review_with(&id, Decision::Approve, "ws-not-open", bridge, &store, now);
+    assert_eq!(reviewed.state, PlanState::Failed);
+    assert!(reviewed.changes.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "the editor was never asked");
 }
