@@ -49,6 +49,9 @@ The debug-only `crash_test_panic`, `project_api_dev_call`, `project_api_dev_revi
 | `terminal_teardown_all` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | Async. Every session of every project (the switch coordinator's call). |
 | `terminal_busy_sessions` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | The project's sessions running a program; unknown counts as busy. Behind the notice before a switch. |
 | `terminal_take_reload_report` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | How many sessions the last page reload ended, reported once. |
+| `terminal_spawn_agent` | `src-tauri/src/commands.rs` → `agent_launch.rs` | `src/terminal/terminalStorage.js` | *(Track T slice T2b-1, 2026-10-24.)* Async. Starts the person's own Claude Code or Codex (`agent`: `claude` or `codex`, nothing else) as a session of the project open now, with Litria's MCP server for that session only. Rust finds the program and builds every argument; the webview names the agent only. Refuses a root that is not the open project's (`agent.project_not_open`), an agent not on the PATH (`agent.not_installed`) and a launcher script it cannot read (`agent.unreadable_launcher`). The session's MCP connection ends with it, whichever way it ends. |
+| `agent_detect` | `src-tauri/src/commands.rs` → `agent_launch.rs` | `src/terminal/terminalStorage.js` | *(T2b-1.)* `{ claude, codex }`: whether each is on the PATH a Litria terminal sees (on Windows the registry's). Runs nothing. |
+| `agent_open_install_guide` | `src-tauri/src/commands.rs` | `src/terminal/terminalStorage.js` | *(T2b-1.)* Opens the agent's maker's installation page. Takes the agent only; the address is fixed in Rust. |
 
 *(2026-10-14, track T slice T2a: `terminal_session_start`, the metadata-only start, was removed: nothing called it. The global `terminal:*` events went too: nothing listened.)*
 
@@ -161,11 +164,11 @@ The debug-only `crash_test_panic`, `project_api_dev_call`, `project_api_dev_revi
 | `project_api_interrupted_operations` | `src-tauri/src/commands.rs` | `src/app/useInterruptedOperationsNotice.js` | **Release builds too.** For the epoch the caller opened, it does three things. It settles every agent operation an earlier run left applying, recording the state that run's record proves; a change started but never confirmed becomes `needsReview`, never replayed. It prunes receipts past 30 days. It returns each interrupted operation once (new files that may be on disk, and the count of unsaved edits lost) for the reopen pill. A read-only project is left as it is. Project API build plan W4b. |
 | `project_api_dev_call` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller** |
 | `project_api_dev_review` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. A person's decision on an agent's plan through the review seam (Project API build plan W2b), until track T gives the review a surface; approving applies the plan to the editor (unsaved), never to disk. |
-| `project_api_dev_agent_session_start` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. Starts an agent session for the project open now, with an agent's grant (track T plan D4), and answers the MCP endpoint and the session's token, once. The first session binds the local endpoint (current user only). Touches no file and starts no process; slice T2b starts sessions when it starts an agent. Track T, T1a. |
+| `project_api_dev_agent_session_start` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. Starts an agent session for the project open now, with an agent's grant (track T plan D4), and answers the MCP endpoint and the session's token, once. The first session binds the local endpoint (current user only). Touches no file and starts no process. Track T, T1a; since T2b-1 `terminal_spawn_agent` starts the real ones. |
 | `project_api_dev_agent_session_end` | `src-tauri/src/commands.rs` | — | `#[cfg(debug_assertions)]`; **no frontend caller**. Ends a session: its token stops working and its connections close at once. Track T, T1a. |
-| `project_api_bridge_attach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
-| `project_api_bridge_detach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
-| `project_api_bridge_reply` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | `#[cfg(debug_assertions)]` |
+| `project_api_bridge_attach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | Every build since track T slice T2b-1 (2026-10-24): agents' calls read editor state through the bridge. Debug-only before. |
+| `project_api_bridge_detach` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | Every build since T2b-1. |
+| `project_api_bridge_reply` | `src-tauri/src/commands.rs` | `src/app/useProjectApiBridge.js` | Every build since T2b-1. |
 
 ### Build logs and clipboard
 

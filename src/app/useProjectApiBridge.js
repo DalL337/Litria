@@ -8,9 +8,9 @@
 // (`sessionReadyFor`). Owner ports read the latest state through refs, at
 // request time.
 //
-// Debug builds only, like the Rust commands it calls: until the Project API's
-// external transport exists (build plan track T), its only consumer is the
-// debug-only `project_api_dev_call`. In a release build this hook does nothing.
+// Every build since track T slice T2b-1: agents Litria starts call the
+// Project API over the MCP connection, and their calls read editor state
+// through this bridge.
 
 import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -28,8 +28,6 @@ import {
   selectionSnapshot,
   serializeAttachments
 } from './projectApiBridge.js';
-
-const ENABLED = import.meta.env?.DEV === true;
 
 const normalizeSessionPath = (path) => sessionPathOf({ filename: typeof path === 'string' ? path : '' });
 
@@ -90,7 +88,6 @@ export function useProjectApiBridge({
   const bridgeRef = useRef(null);
 
   useEffect(() => {
-    if (!ENABLED) return undefined;
     const bridge = createProjectApiBridge({
       ports: {
         sessionDocuments: () => getSessionDocumentsByPath(ownersRef.current.session),

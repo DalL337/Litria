@@ -1,4 +1,6 @@
 import {
+  agentDetect,
+  agentOpenInstallGuide,
   terminalBusySessions,
   terminalEndProject,
   terminalInput,
@@ -7,6 +9,7 @@ import {
   terminalResume,
   terminalSessionEnd,
   terminalSpawn,
+  terminalSpawnAgent,
   terminalTakeReloadReport,
   terminalTeardownAll
 } from './terminalStorage.js';
@@ -27,6 +30,12 @@ const RECENT_OUTPUT_MS = 2000;
  * output (its prompt); this is the fallback if no output comes. */
 const INITIAL_INPUT_FALLBACK_MS = 3000;
 const EMPTY_PROJECT = Object.freeze({ tabs: Object.freeze([]), viewedKey: null });
+/** What a session runs, and the name its tabs count under (track T plan §3:
+ * "Claude Agent", never "Claude Code" as a feature name; Codex by its own
+ * name). An agent is the person's own installed program (slice T2b-1). */
+const KIND_LABELS = Object.freeze({ shell: 'Terminal', claude: 'Claude Agent', codex: 'Codex' });
+export const AGENT_KINDS = Object.freeze(['claude', 'codex']);
+const UNKNOWN_AGENTS = Object.freeze({ claude: null, codex: null });
 
 /**
  * TerminalDomain — owns terminal sessions (track T slice T2a).
@@ -57,6 +66,9 @@ const EMPTY_PROJECT = Object.freeze({ tabs: Object.freeze([]), viewedKey: null }
 export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now = () => Date.now() } = {}) {
   const io = {
     spawn: adapters.spawn ?? terminalSpawn,
+    spawnAgent: adapters.spawnAgent ?? terminalSpawnAgent,
+    detectAgents: adapters.detectAgents ?? agentDetect,
+    installGuide: adapters.installGuide ?? agentOpenInstallGuide,
     end: adapters.end ?? terminalSessionEnd,
     endProject: adapters.endProject ?? terminalEndProject,
     teardownAll: adapters.teardownAll ?? terminalTeardownAll,
@@ -79,7 +91,10 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     keyCount: 0,
     /** The tab the person is looking at: the drawer is visible and shows it. */
     inView: null,
-    attentionCount: 0
+    attentionCount: 0,
+    /** Which agents are installed (null: not looked yet). */
+    agents: UNKNOWN_AGENTS,
+    detecting: null
   };
   let listeners = [];
   let snapshot = null;
@@ -106,6 +121,7 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
         return Object.freeze({
           key: tab.key,
           sessionId: tab.sessionId,
+          kind: tab.kind,
           label: tab.label,
           status: tab.status,
           exitCode: tab.exitCode,
@@ -132,10 +148,16 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     return Object.freeze({ byProject: Object.freeze(byProject) });
   };
 
-  const nextLabel = (projectId) => {
-    const count = (state.labelCount.get(projectId) ?? 0) + 1;
-    state.labelCount.set(projectId, count);
-    return `Terminal ${count}`;
+  /** Labels count per project and per kind: Terminal 1, Claude Agent 1. */
+  const labelKey = (projectId, kind) => `${kind}:${projectId}`;
+  const nextLabel = (projectId, kind = 'shell') => {
+    const key = labelKey(projectId, kind);
+    const count = (state.labelCount.get(key) ?? 0) + 1;
+    state.labelCount.set(key, count);
+    return `${KIND_LABELS[kind]} ${count}`;
+  };
+  const forgetLabels = (projectId) => {
+    for (const kind of Object.keys(KIND_LABELS)) state.labelCount.delete(labelKey(projectId, kind));
   };
 
   /** Removes tabs from the view state; returns the removed tab records. */
@@ -234,22 +256,29 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     }
   };
 
-  const startSession = async ({ label = null, initialInput = null, executable = null } = {}) => {
+  const startSession = async ({ label = null, initialInput = null, executable = null, agent = null } = {}) => {
     const project = state.current;
     if (!project) {
       return { ok: false, error: { code: 'terminal.no_project', message: 'No project is open.' } };
     }
+    if (agent !== null && !AGENT_KINDS.includes(agent)) {
+      return { ok: false, error: { code: 'agent.unknown', message: 'Litria cannot start that agent.' } };
+    }
+    const kind = agent ?? 'shell';
     const key = `t${++state.keyCount}`;
     const tab = {
       key,
       sessionId: null,
       projectId: project.id,
-      label: label || nextLabel(project.id),
+      kind,
+      label: label || nextLabel(project.id, kind),
       status: 'starting',
       exitCode: null,
       error: null,
       stream: null,
-      pendingInput: initialInput,
+      // Nothing is ever typed into an agent for Litria (a pill's command
+      // runs in a shell tab of its own).
+      pendingInput: agent ? null : initialInput,
       sawOutput: false,
       lastOutputAt: 0,
       bell: false,
@@ -265,14 +294,24 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
     state.viewed.set(project.id, key);
     notify();
 
-    const response = await io.spawn({
-      projectId: project.id,
-      projectRoot: project.root,
-      cols: state.lastSize.cols,
-      rows: state.lastSize.rows,
-      executable,
-      onEvent: (event) => onStreamEvent(tab, event)
-    });
+    const onEvent = (event) => onStreamEvent(tab, event);
+    const response = agent
+      ? await io.spawnAgent({
+        projectId: project.id,
+        projectRoot: project.root,
+        agent,
+        cols: state.lastSize.cols,
+        rows: state.lastSize.rows,
+        onEvent
+      })
+      : await io.spawn({
+        projectId: project.id,
+        projectRoot: project.root,
+        cols: state.lastSize.cols,
+        rows: state.lastSize.rows,
+        executable,
+        onEvent
+      });
 
     if (!state.tabs.has(key)) {
       // The tab went away while the shell was starting (the person ended it,
@@ -428,7 +467,7 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
       async endProject(projectId) {
         if (!projectId) return false;
         const keys = [...(state.order.get(projectId) ?? [])];
-        state.labelCount.delete(projectId);
+        forgetLabels(projectId);
         if (dropTabs(keys).length) notify();
         const response = await io.endProject(projectId);
         return response.ok;
@@ -471,6 +510,28 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
         const busy = await busySessions(tab.projectId);
         return busy.some((entry) => entry.key === key);
       },
+      /** Looks for the person's agents (one look in flight at a time). The
+       * start menu asks when it opens, so an install made since shows. */
+      detectAgents() {
+        if (state.detecting) return state.detecting;
+        state.detecting = io.detectAgents().then((response) => {
+          state.detecting = null;
+          const found = response.ok && response.data ? response.data : {};
+          const next = Object.freeze({ claude: found.claude === true, codex: found.codex === true });
+          if (next.claude !== state.agents.claude || next.codex !== state.agents.codex) {
+            state.agents = next;
+            notify();
+          }
+          return next;
+        });
+        return state.detecting;
+      },
+      /** Opens an agent's official installation page. Litria never installs
+       * one. */
+      openInstallGuide(agent) {
+        if (!AGENT_KINDS.includes(agent)) return Promise.resolve(false);
+        return io.installGuide(agent).then((r) => r.ok);
+      },
       /** How many sessions the last page reload ended, reported once. */
       async takeReloadReport() {
         const response = await io.takeReloadReport();
@@ -490,6 +551,10 @@ export function createTerminalDomain({ adapters = {}, setTimer = setTimeout, now
       },
       getCurrentProjectId() {
         return state.current?.id ?? null;
+      },
+      /** `{ claude, codex }`: true installed, false not, null not looked yet. */
+      getAgents() {
+        return state.agents;
       }
     },
     subscribe(listener) {

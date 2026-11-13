@@ -36,8 +36,9 @@ use crate::contracts::catalog::{Dispatcher, Limits};
 use crate::contracts::context::Grant;
 #[cfg(debug_assertions)]
 use crate::contracts::context::{CallContext, Principal};
+use crate::contracts::error::ContractError;
 #[cfg(debug_assertions)]
-use crate::contracts::error::{ContractError, ErrorCode};
+use crate::contracts::error::ErrorCode;
 use crate::contracts::project_api::changes_apply::ChangesApplyOp;
 use crate::contracts::project_api::changes_prepare::ChangesPrepareOp;
 use crate::contracts::project_api::diagnostics_list::DiagnosticsListOp;
@@ -46,7 +47,6 @@ use crate::contracts::project_api::files_search::FilesSearchOp;
 use crate::contracts::project_api::graph_query::GraphQueryOp;
 use crate::contracts::project_api::operations_get::OperationsGetOp;
 use crate::contracts::project_api::project_context::ProjectContextOp;
-#[cfg(debug_assertions)]
 use crate::contracts::project_api_bridge::{BridgeRequestEvent, REQUEST_EVENT};
 
 /// Encoded size of any operation's result (brief §10).
@@ -136,30 +136,25 @@ pub(crate) fn dev_review(plan_id: &str, approve: bool) -> Result<Value, Contract
     Ok(serde_json::json!({ "planId": plan_id, "state": reviewed.state, "changes": reviewed.changes }))
 }
 
-// --- The owner bridge's command side (debug builds, see commands.rs) --------
+// --- The owner bridge's command side (see commands.rs) ----------------------
 
 /// Attach the frontend bridge for `epoch`; refused unless it is the
 /// workspace open now.
-#[cfg(debug_assertions)]
 pub(crate) fn bridge_attach(epoch: &str) -> Result<String, ContractError> {
     bridge::global().attach(epoch, workspace::current_epoch().as_deref())
 }
 
-#[cfg(debug_assertions)]
 pub(crate) fn bridge_detach(generation: &str) -> bool {
     bridge::global().detach(generation)
 }
 
-#[cfg(debug_assertions)]
 pub(crate) fn bridge_reply(request_id: &str, generation: &str, reply: String) {
     bridge::global().deliver_reply(request_id, generation, reply);
 }
 
 /// Emits bridge requests to the main window only.
-#[cfg(debug_assertions)]
 struct MainWindow(tauri::AppHandle);
 
-#[cfg(debug_assertions)]
 impl bridge::Emit for MainWindow {
     fn emit(&self, event: &BridgeRequestEvent) -> bool {
         use tauri::Emitter;
@@ -168,7 +163,6 @@ impl bridge::Emit for MainWindow {
 }
 
 /// Called once at startup.
-#[cfg(debug_assertions)]
 pub(crate) fn install_bridge(app: tauri::AppHandle) {
     bridge::global().install_emitter(std::sync::Arc::new(MainWindow(app)));
 }

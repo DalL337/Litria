@@ -26,6 +26,9 @@ const EXIT_CODE_WAIT: Duration = Duration::from_secs(2);
 /// After End's Ctrl+C, how long a running program gets to stop before its
 /// tree is stopped instead.
 const BUSY_GRACE: Duration = Duration::from_millis(1000);
+/// An agent session: how long after End's first Ctrl+C (which stops a turn in
+/// progress) before the second, which quits it.
+const AGENT_SECOND_CTRL_C: Duration = Duration::from_millis(500);
 /// Input messages waiting for the writer thread. Keystrokes are tiny; a full
 /// queue means the program stopped reading its input.
 const INPUT_QUEUE: usize = 1024;
@@ -233,6 +236,24 @@ impl FlowControl {
     }
 }
 
+/// What a session runs (track T slice T2b-1).
+pub(crate) enum SessionProgram {
+    /// The person's shell: the boundary's validated executable.
+    Shell,
+    /// One of the person's agents, as the session's own process.
+    Agent(AgentProgram),
+}
+
+/// An agent session's program, built by `agent_launch` (never by the webview).
+pub(crate) struct AgentProgram {
+    pub(crate) executable: std::path::PathBuf,
+    pub(crate) args: Vec<std::ffi::OsString>,
+    /// Added to the inherited environment.
+    pub(crate) env: Vec<(&'static str, String)>,
+    /// Runs once the session has ended, whichever way it ended.
+    pub(crate) on_end: Box<dyn FnOnce() + Send>,
+}
+
 /// One PTY-backed terminal session.
 ///
 /// Every method takes `&self`. The session manager hands out `Arc` clones, so
@@ -267,6 +288,9 @@ struct PtyInner {
     exit_code: Mutex<Option<i32>>,
     #[cfg(target_os = "windows")]
     job: Mutex<Option<win32job::Job>>,
+    /// The session runs an agent, not a shell: End never types into it.
+    agent: bool,
+    on_end: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[derive(Default)]
@@ -348,11 +372,52 @@ fn de_verbatim(path: &std::path::Path) -> std::path::PathBuf {
 pub(crate) fn spawn_pty(
     session_id: &str,
     validated: &crate::execution_policy::ValidatedExecutionBoundary,
+    program: SessionProgram,
     cols: u16,
     rows: u16,
     channel: Channel<TerminalEvent>,
     on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) -> CommandResult<PtySession> {
+    // From here until the session exists, a failure must still run the
+    // agent's end hook (it ends the session's MCP connection).
+    let (agent_launch, on_end) = match program {
+        SessionProgram::Shell => (None, None),
+        SessionProgram::Agent(AgentProgram { executable, args, env, on_end }) => {
+            (Some((executable, args, env)), Some(on_end))
+        }
+    };
+    let mut on_end = on_end;
+    let result = spawn_pty_inner(session_id, validated, agent_launch, &mut on_end, cols, rows, channel, on_exit);
+    if result.is_err() {
+        if let Some(on_end) = on_end.take() {
+            on_end();
+        }
+    }
+    result
+}
+
+type AgentLaunch = (std::path::PathBuf, Vec<std::ffi::OsString>, Vec<(&'static str, String)>);
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: runs once on the spawning thread, the instant after the
+    /// session's process has started. A test holds the thread here to let the
+    /// process act before anything else is done to it (gap G2).
+    static AFTER_SPAWN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_pty_inner(
+    session_id: &str,
+    validated: &crate::execution_policy::ValidatedExecutionBoundary,
+    agent_launch: Option<AgentLaunch>,
+    on_end: &mut Option<Box<dyn FnOnce() + Send>>,
+    cols: u16,
+    rows: u16,
+    channel: Channel<TerminalEvent>,
+    on_exit: Box<dyn FnOnce() + Send + 'static>,
+) -> CommandResult<PtySession> {
+    let is_agent = agent_launch.is_some();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -383,12 +448,24 @@ pub(crate) fn spawn_pty(
         )
     })?;
 
-    let mut cmd = CommandBuilder::new(&validated.executable);
-    // Suppress the startup banner for PowerShell
-    let exe_lower = validated.executable.to_lowercase();
-    if exe_lower.contains("powershell") || exe_lower.contains("pwsh") {
-        cmd.arg("-NoLogo");
-    }
+    let (mut cmd, agent_env) = match agent_launch {
+        // The agent is the session's own process, with the arguments
+        // `agent_launch` built; nothing is typed into a shell for it.
+        Some((executable, args, env)) => {
+            let mut cmd = CommandBuilder::new(executable);
+            cmd.args(args);
+            (cmd, env)
+        }
+        None => {
+            let mut cmd = CommandBuilder::new(&validated.executable);
+            // Suppress the startup banner for PowerShell
+            let exe_lower = validated.executable.to_lowercase();
+            if exe_lower.contains("powershell") || exe_lower.contains("pwsh") {
+                cmd.arg("-NoLogo");
+            }
+            (cmd, Vec::new())
+        }
+    };
     // path_guard canonicalizes the root, which on Windows yields a verbatim
     // \\?\C:\... path — PowerShell started there renders its prompt as
     // "Microsoft.PowerShell.Core\FileSystem::\\?\C:\...". Hand the shell a
@@ -409,19 +486,27 @@ pub(crate) fn spawn_pty(
     for (name, value) in terminal_policy::FORCED_ENV {
         cmd.env(name, value);
     }
+    // An agent's connection to Litria (its MCP server reads these).
+    for (name, value) in agent_env {
+        cmd.env(name, value);
+    }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| {
+    let spawn_failed = |e: String| {
         CommandError::internal(
             "terminal.spawn_failed",
             format!("Failed to spawn terminal process: {e}"),
         )
-    })?;
+    };
+    #[cfg(target_os = "windows")]
+    let (child, job) = spawn_in_job(pair.slave.as_ref(), cmd, session_id).map_err(spawn_failed)?;
+    #[cfg(not(target_os = "windows"))]
+    let child = pair.slave.spawn_command(cmd).map_err(|e| spawn_failed(e.to_string()))?;
     drop(pair.slave);
     #[cfg(unix)]
     let shell_pid = child.process_id();
 
-    #[cfg(target_os = "windows")]
-    let job = setup_job_object(child.as_ref(), session_id);
+    #[cfg(test)]
+    after_spawn_seam();
 
     let (input_tx, input_rx) = mpsc::sync_channel(INPUT_QUEUE);
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -451,6 +536,10 @@ pub(crate) fn spawn_pty(
             exit_code: Mutex::new(None),
             #[cfg(target_os = "windows")]
             job: Mutex::new(job),
+            agent: is_agent,
+            // The session owns the end hook from here: any later failure
+            // drops the session, and ending it runs the hook.
+            on_end: Mutex::new(on_end.take()),
         }),
     };
 
@@ -678,24 +767,79 @@ fn spawn_exit_watcher(
         })
 }
 
+/// Runs the test seam, once: see `AFTER_SPAWN`.
+#[cfg(test)]
+fn after_spawn_seam() {
+    AFTER_SPAWN.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+/// A Job Object that ends every process in it when it is closed.
 #[cfg(target_os = "windows")]
-fn setup_job_object(
+fn kill_on_close_job() -> Result<win32job::Job, String> {
+    let job = win32job::Job::create().map_err(|e| format!("{e:?}"))?;
+    let mut info = job.query_extended_limit_info().map_err(|e| format!("{e:?}"))?;
+    info.limit_kill_on_job_close();
+    job.set_extended_limit_info(&mut info).map_err(|e| format!("{e:?}"))?;
+    Ok(job)
+}
+
+/// Windows: start the session's process inside a new Job Object. The job is
+/// what End uses to stop everything the session started, and it owns the
+/// process from its first instruction, so nothing the process starts can be
+/// missed (gap G2, closed 2026-11-13: an agent starts its MCP servers at
+/// once, where a shell starts nothing before it reads input).
+///
+/// If the job cannot be made, or the process cannot be created in it, the
+/// process is started without one and a job is attached afterwards, as
+/// before: whatever it starts in between escapes that job.
+#[cfg(target_os = "windows")]
+fn spawn_in_job(
+    slave: &(dyn portable_pty::SlavePty + Send),
+    cmd: CommandBuilder,
+    session_id: &str,
+) -> Result<(Box<dyn portable_pty::Child + Send + Sync>, Option<win32job::Job>), String> {
+    match kill_on_close_job() {
+        Ok(job) => {
+            let mut inside = cmd.clone();
+            inside.set_job(job.handle());
+            match slave.spawn_command(inside) {
+                Ok(child) => return Ok((child, Some(job))),
+                // Most often the program itself cannot be started, and the
+                // second attempt below says so.
+                Err(error) => eprintln!(
+                    "[terminal_pty] session {}: not started inside its job object ({error}); trying without",
+                    short_id(session_id)
+                ),
+            }
+        }
+        Err(error) => eprintln!(
+            "[terminal_pty] session {}: no job object to start in ({error})",
+            short_id(session_id)
+        ),
+    }
+    let child = slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    after_spawn_seam();
+    let job = attach_job_object(child.as_ref(), session_id);
+    Ok((child, job))
+}
+
+/// The fallback of `spawn_in_job`: a job attached through the process's own
+/// handle, after it is already running.
+#[cfg(target_os = "windows")]
+fn attach_job_object(
     child: &(dyn portable_pty::Child + Send + Sync),
     session_id: &str,
 ) -> Option<win32job::Job> {
-    // The job is what End uses to stop everything the shell started. It is
-    // assigned through the child's own handle, after the shell is already
-    // running: anything the shell starts in that window escapes it (a shell
-    // starts nothing before it reads input; T2b's agents may need the job
-    // assigned before the process runs).
     let assigned = (|| -> Result<win32job::Job, String> {
         let handle = child
             .as_raw_handle()
             .ok_or_else(|| "the process has no handle".to_string())?;
-        let job = win32job::Job::create().map_err(|e| format!("{e:?}"))?;
-        let mut info = job.query_extended_limit_info().map_err(|e| format!("{e:?}"))?;
-        info.limit_kill_on_job_close();
-        job.set_extended_limit_info(&mut info).map_err(|e| format!("{e:?}"))?;
+        let job = kill_on_close_job()?;
         job.assign_process(handle as isize).map_err(|e| format!("{e:?}"))?;
         Ok(job)
     })();
@@ -762,7 +906,9 @@ impl TerminalSession for PtySession {
         if self.inner.ended.load(Ordering::SeqCst) {
             return false;
         }
-        self.inner.has_child_processes()
+        // An agent's conversation counts as busy even at its prompt: ending
+        // it asks first (T2b-1).
+        self.inner.agent || self.inner.has_child_processes()
     }
 
     /// Ends the session and everything it started; see `PtyInner::end`.
@@ -785,6 +931,12 @@ impl PtyInner {
             self.end_by_request()
         };
         *self.exit_code.lock().unwrap_or_else(PoisonError::into_inner) = code;
+        // An agent session's MCP connection ends with it, whichever way it
+        // ended (track T slice T2b-1). Taken first, run after the lock.
+        let on_end = self.on_end.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(on_end) = on_end {
+            on_end();
+        }
         code
     }
 
@@ -794,7 +946,8 @@ impl PtyInner {
     /// 2. Ctrl+C. Only when nothing but the shell is left running is `exit`
     ///    typed: text typed into a running program (an editor, an agent)
     ///    would reach it as input. A clean exit is what lets the console host
-    ///    shut down promptly.
+    ///    shut down promptly. An agent session (T2b-1) is never typed into:
+    ///    it gets a second Ctrl+C instead, which quits Claude Code and Codex.
     /// 3. Whatever is still running is stopped with everything it started:
     ///    the job on Windows, the session's process groups on Unix.
     /// 4. The input pipe is released, then the pseudoconsole closed (the job
@@ -816,12 +969,27 @@ impl PtyInner {
         };
 
         send(CTRL_C);
-        let at_prompt = !self.has_child_processes() || self.wait_until_idle(BUSY_GRACE);
-        let mut state = if at_prompt {
-            send(SHELL_EXIT);
-            self.wait_for_exit(GRACEFUL_EXIT)
+        let mut state = if self.agent {
+            // An agent is the session's own process: nothing is ever typed
+            // into it, since text would reach its prompt (and could reach
+            // the model). Ctrl+C stops a turn in progress; a second, at its
+            // prompt, quits it (Claude Code and Codex both), so it can save
+            // its conversation. Then its tree is stopped like any other.
+            match self.wait_for_exit(AGENT_SECOND_CTRL_C) {
+                ProcessState::Running => {
+                    send(CTRL_C);
+                    self.wait_for_exit(GRACEFUL_EXIT)
+                }
+                exited => exited,
+            }
         } else {
-            self.wait_for_exit(Duration::ZERO)
+            let at_prompt = !self.has_child_processes() || self.wait_until_idle(BUSY_GRACE);
+            if at_prompt {
+                send(SHELL_EXIT);
+                self.wait_for_exit(GRACEFUL_EXIT)
+            } else {
+                self.wait_for_exit(Duration::ZERO)
+            }
         };
 
         if matches!(state, ProcessState::Running) {
@@ -1475,6 +1643,7 @@ mod tests {
             let session = spawn_pty(
                 &id,
                 &boundary(),
+                SessionProgram::Shell,
                 100,
                 30,
                 channel,
@@ -1883,6 +2052,194 @@ mod tests {
                     inner.ended.load(Ordering::SeqCst)
                         && matches!(inner.child.lock().unwrap().try_wait(), Ok(Some(_)))
                 });
+            });
+        }
+
+        // ── Agent sessions (track T slice T2b-1) ────────────────────────────
+        //
+        // An agent is the session's own process. These stand a small program
+        // in for it: one that ignores Ctrl+C and writes every line it reads to
+        // a log, so anything End typed into it would show there.
+
+        const INPUT_LOG: &str = "LITRIA_TEST_INPUT_LOG";
+
+        /// (executable, args) of a program that ignores Ctrl+C and logs what
+        /// it reads to the file named by `INPUT_LOG`.
+        fn stubborn_reader() -> (&'static str, Vec<&'static str>) {
+            // Like the agents themselves, it reads raw keystrokes (Node, raw
+            // mode): Ctrl+C is then only a byte, and Windows' console host
+            // turns a typed CR into Enter only for raw readers.
+            #[cfg(windows)]
+            return (
+                "node.exe",
+                vec![
+                    "-e",
+                    "process.stdin.setRawMode(true); process.stdin.on('data', (d) => require('fs').appendFileSync(process.env.LITRIA_TEST_INPUT_LOG, d));",
+                ],
+            );
+            #[cfg(unix)]
+            return (
+                "sh",
+                vec!["-c", "trap '' INT; while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$LITRIA_TEST_INPUT_LOG\"; done"],
+            );
+        }
+
+        fn spawn_agent(
+            executable: &str,
+            args: &[&str],
+            log: &std::path::Path,
+            ends: Arc<std::sync::atomic::AtomicUsize>,
+            seen_exit: Arc<AtomicBool>,
+        ) -> (PtySession, Arc<Mutex<Seen>>) {
+            let (channel, seen) = capture();
+            let id = format!("{:032x}", rand::random::<u128>());
+            let program = SessionProgram::Agent(AgentProgram {
+                executable: executable.into(),
+                args: args.iter().map(Into::into).collect(),
+                env: vec![(INPUT_LOG, log.to_string_lossy().to_string())],
+                on_end: Box::new(move || {
+                    ends.fetch_add(1, Ordering::SeqCst);
+                }),
+            });
+            let session = spawn_pty(
+                &id,
+                &boundary(),
+                program,
+                100,
+                30,
+                channel,
+                Box::new(move || seen_exit.store(true, Ordering::SeqCst)),
+            )
+            .expect("the agent program starts");
+            (session, seen)
+        }
+
+        fn scratch_log(name: &str) -> std::path::PathBuf {
+            std::env::temp_dir().join(format!("litria-agent-input-{name}-{:08x}.log", rand::random::<u32>()))
+        }
+
+        fn logged(log: &std::path::Path) -> String {
+            std::fs::read_to_string(log).unwrap_or_default()
+        }
+
+        #[test]
+        fn ending_an_agent_session_never_types_into_it() {
+            with_watchdog(|| {
+                let log = scratch_log("end");
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let (program, args) = stubborn_reader();
+                let (session, _seen) =
+                    spawn_agent(program, &args, &log, Arc::clone(&ends), Arc::new(AtomicBool::new(false)));
+                // Its reader works: what is typed reaches the log.
+                type_line(&session, "ready");
+                wait_for("the agent stand-in to read input", || logged(&log).contains("ready"));
+                assert!(session.is_busy(), "an agent at rest still counts as busy");
+
+                session.end();
+                // A shell's End would have typed `exit` here; an agent gets only
+                // Ctrl+C, which the stand-in ignores, then its tree is stopped.
+                let read = logged(&log);
+                assert!(read.contains("ready"));
+                assert!(!read.contains("exit"), "nothing was typed into the agent: {read:?}");
+                assert!(matches!(session.inner.child.lock().unwrap().try_wait(), Ok(Some(_))), "it was stopped");
+                assert_eq!(ends.load(Ordering::SeqCst), 1, "the end hook ran once");
+                session.end();
+                assert_eq!(ends.load(Ordering::SeqCst), 1, "and only once");
+                let _ = std::fs::remove_file(&log);
+            });
+        }
+
+        #[test]
+        fn an_agent_that_exits_by_itself_still_runs_its_end_hook() {
+            with_watchdog(|| {
+                let log = scratch_log("self-exit");
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let exited = Arc::new(AtomicBool::new(false));
+                #[cfg(windows)]
+                let (program, args) = ("cmd.exe", vec!["/d", "/c", "exit 0"]);
+                #[cfg(unix)]
+                let (program, args) = ("sh", vec!["-c", "exit 0"]);
+                let (session, _seen) = spawn_agent(program, &args, &log, Arc::clone(&ends), Arc::clone(&exited));
+                wait_for("the program to exit", || exited.load(Ordering::SeqCst));
+                assert_eq!(ends.load(Ordering::SeqCst), 0, "not before the session ends");
+                session.end();
+                assert_eq!(ends.load(Ordering::SeqCst), 1);
+            });
+        }
+
+        #[test]
+        fn a_dropped_agent_session_still_runs_its_end_hook() {
+            with_watchdog(|| {
+                let log = scratch_log("drop");
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let (program, args) = stubborn_reader();
+                let (session, _seen) =
+                    spawn_agent(program, &args, &log, Arc::clone(&ends), Arc::new(AtomicBool::new(false)));
+                drop(session);
+                wait_for("the backstop to run the end hook", || ends.load(Ordering::SeqCst) == 1);
+                let _ = std::fs::remove_file(&log);
+            });
+        }
+
+        #[test]
+        fn an_agent_that_cannot_start_runs_its_end_hook() {
+            let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&ends);
+            let (channel, _seen) = capture();
+            let program = SessionProgram::Agent(AgentProgram {
+                executable: std::env::temp_dir().join("litria-no-such-agent-program.exe"),
+                args: Vec::new(),
+                env: Vec::new(),
+                on_end: Box::new(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }),
+            });
+            let started = spawn_pty("0123456789abcdef0123456789abcdef", &boundary(), program, 80, 24, channel, Box::new(|| {}));
+            assert!(started.is_err(), "a missing program does not start");
+            assert_eq!(ends.load(Ordering::SeqCst), 1, "its connection is ended at once");
+        }
+
+        /// Gap G2 (recorded with T2a; review 2026-10-25, IR-03). An agent
+        /// starts processes of its own as soon as it runs (its MCP servers),
+        /// and they must end with its session too. The stand-in starts a
+        /// child at once, hidden and with no console, so only the session's
+        /// Job Object can reach it; the seam holds the spawning thread, at
+        /// the point where the job used to be attached, until that child
+        /// exists.
+        #[cfg(windows)]
+        #[test]
+        fn what_an_agent_starts_at_once_ends_with_its_session() {
+            const STARTS_A_CHILD: &str = "const child = require('child_process').spawn('ping', ['-n', '300', '127.0.0.1'], { detached: true, stdio: 'ignore', windowsHide: true }); require('fs').writeFileSync(process.env.LITRIA_TEST_INPUT_LOG, String(child.pid)); setInterval(() => {}, 1000);";
+            with_watchdog(|| {
+                let log = scratch_log("first-child");
+                let reported = log.clone();
+                AFTER_SPAWN.with(|hook| {
+                    *hook.borrow_mut() = Some(Box::new(move || {
+                        let deadline = Instant::now() + WAIT;
+                        while logged(&reported).trim().is_empty() && Instant::now() < deadline {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                    }));
+                });
+                let ends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let (session, _seen) =
+                    spawn_agent("node.exe", &["-e", STARTS_A_CHILD], &log, ends, Arc::new(AtomicBool::new(false)));
+                let pid: u32 = logged(&log).trim().parse().expect("the stand-in reported its child before the seam let go");
+                let child = Watch::new(pid);
+                assert!(child.alive(), "the stand-in's child is running");
+
+                session.end();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while child.alive() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                let outlived = child.alive();
+                if outlived {
+                    // Do not leave it behind for five minutes.
+                    let _ = std::process::Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+                }
+                let _ = std::fs::remove_file(&log);
+                assert!(!outlived, "what the agent started at once outlived its session");
             });
         }
     }

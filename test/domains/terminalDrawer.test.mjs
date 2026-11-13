@@ -46,7 +46,18 @@ function fakeBackend() {
     calls,
     channels,
     busyIds: [],
+    agents: { claude: true, codex: false },
     adapters: {
+      spawnAgent: async (request) => {
+        calls.push(['spawnAgent', request.projectId, request.agent]);
+        const channel = { onmessage: null, emit(event) { this.onmessage?.(event); } };
+        const stream = createTerminalEventStream(channel, { onEvent: request.onEvent });
+        channels.push(channel);
+        const sessionId = `s${nextId++}`;
+        return { ok: true, data: { sessionId, projectId: request.projectId }, stream };
+      },
+      detectAgents: async () => { calls.push(['detectAgents']); return { ok: true, data: { ...backend.agents } }; },
+      installGuide: async (agent) => { calls.push(['installGuide', agent]); return { ok: true }; },
       spawn: async (request) => {
         calls.push(['spawn', request.projectId]);
         const channel = { onmessage: null, emit(event) { this.onmessage?.(event); } };
@@ -402,5 +413,76 @@ test("Litria answers a program's status question through that session only", asy
   await emitTo(ui, 1, '\x1b]7501;?\x07\x1b[c');
   const answers = ui.backend.calls.filter(([op, , , input]) => op === 'input' && input.startsWith('\x1b]7501;?'));
   assert.deepEqual(answers.map(([, projectId, sessionId]) => [projectId, sessionId]), [[PROJECT.instanceId, 's2']]);
+  await ui.unmount();
+});
+
+// Starting the person's own agent (track T slice T2b-1): a menu beside +.
+
+const startMenu = (ui) => ui.query('.terminal-start-menu');
+const menuItem = (ui, label) => [...ui.host.querySelectorAll('.terminal-start-item')]
+  .find((item) => item.querySelector('.terminal-start-label')?.textContent === label);
+
+test('+ still starts a shell in one click; the menu beside it offers the agents', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('New terminal'));
+  assert.equal(ui.spawns(), 2, 'two shells, no menu');
+  assert.equal(Boolean(startMenu(ui)), false);
+
+  await click(ui.byLabel('Start a terminal or an agent'));
+  assert.equal(Boolean(startMenu(ui)), true);
+  assert.ok(ui.backend.calls.some(([op]) => op === 'detectAgents'), 'it looks when it opens');
+  assert.deepEqual(
+    [...ui.host.querySelectorAll('.terminal-start-label')].map((label) => label.textContent),
+    ['Shell', 'Claude Agent', 'Codex']
+  );
+  assert.equal(menuItem(ui, 'Claude Agent').disabled, false);
+  assert.match(menuItem(ui, 'Claude Agent').textContent, /runs Claude Code/);
+  assert.equal(menuItem(ui, 'Codex').disabled, true, 'not installed');
+  assert.match(menuItem(ui, 'Codex').textContent, /Not installed/);
+  await ui.unmount();
+});
+
+test('choosing an agent starts it as a tab of its own', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('Start a terminal or an agent'));
+  await click(menuItem(ui, 'Claude Agent'));
+  assert.equal(Boolean(startMenu(ui)), false, 'the menu closed');
+  assert.deepEqual(ui.backend.calls.filter(([op]) => op === 'spawnAgent'), [['spawnAgent', PROJECT.instanceId, 'claude']]);
+  const labels = ui.tabs().map((tab) => tab.querySelector('.terminal-tab-label').textContent);
+  assert.deepEqual(labels, ['Terminal 1', 'Claude Agent 1']);
+  assert.equal(ui.tabs()[1].getAttribute('aria-selected'), 'true');
+  assert.deepEqual(ui.lifetimeCalls(), []);
+  await ui.unmount();
+});
+
+test("an agent that is not installed offers its maker's install guide and starts nothing", async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('Start a terminal or an agent'));
+  const guide = ui.query('.terminal-start-guide');
+  assert.ok(guide, 'an install guide for Codex');
+  await click(guide);
+  assert.deepEqual(ui.backend.calls.filter(([op]) => op === 'installGuide'), [['installGuide', 'codex']]);
+  assert.equal(ui.backend.calls.filter(([op]) => op === 'spawnAgent').length, 0);
+  assert.equal(Boolean(startMenu(ui)), false);
+  await ui.unmount();
+});
+
+test('Escape closes the menu and leaves the drawer open; so does a click elsewhere', async () => {
+  const ui = await mount();
+  await click(ui.byTitle('Terminal'));
+  await click(ui.byLabel('Start a terminal or an agent'));
+  await key(startMenu(ui), 'Escape');
+  assert.equal(Boolean(startMenu(ui)), false);
+  assert.equal(ui.isOpen(), true, 'the drawer stayed open');
+
+  await click(ui.byLabel('Start a terminal or an agent'));
+  await act(async () => {
+    ui.query('.terminal-stack').dispatchEvent(new window.PointerEvent('pointerdown', { bubbles: true }));
+  });
+  assert.equal(Boolean(startMenu(ui)), false);
+  assert.equal(ui.spawns(), 1, 'closing it started nothing');
   await ui.unmount();
 });

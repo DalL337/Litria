@@ -149,6 +149,41 @@ export async function terminalSpawn({ projectId, projectRoot, cols, rows, execut
   }
 }
 
+/** Starts the person's own agent (`claude` or `codex`) as a session (track T
+ * slice T2b-1). Rust finds the program and builds its command line; this
+ * names the agent only. Same stream as a shell: it exists before `invoke`. */
+export async function terminalSpawnAgent({ projectId, projectRoot, agent, cols, rows, onEvent = null }) {
+  const core = await getTauriCore();
+  if (!core) return { ok: false, error: TAURI_UNAVAILABLE };
+  try {
+    const stream = createTerminalEventStream(new core.Channel(), { onEvent });
+    const data = await core.invoke('terminal_spawn_agent', {
+      projectId,
+      projectRoot,
+      agent,
+      cols,
+      rows,
+      onEvent: stream.channel
+    });
+    return { ok: true, data, stream };
+  } catch (error) {
+    return {
+      ok: false,
+      error: normalizeCommandError(error, 'agent.start_failed', 'Failed to start the agent.')
+    };
+  }
+}
+
+/** Opens an agent's official installation page (the address is fixed in Rust). */
+export async function agentOpenInstallGuide(agent) {
+  return invokeTerminal('agent_open_install_guide', { agent }, 'agent.guide_failed', 'Failed to open the installation page.');
+}
+
+/** Which of the person's agents are installed: `{ claude, codex }`. */
+export async function agentDetect() {
+  return invokeTerminal('agent_detect', {}, 'agent.detect_failed', 'Failed to look for agents.');
+}
+
 export async function terminalSessionEnd(projectId, sessionId) {
   return invokeTerminal(
     'terminal_session_end',

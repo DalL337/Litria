@@ -190,6 +190,43 @@ pub(crate) async fn terminal_spawn(
     .map_err(|e| CommandError::internal("terminal.thread_error", e.to_string()))?
 }
 
+/// Which of the person's agents are installed (track T slice T2b-1). Runs
+/// nothing: it looks for them on the PATH a Litria terminal sees.
+#[tauri::command]
+pub(crate) async fn agent_detect() -> crate::agent_launch::AgentAvailability {
+    tauri::async_runtime::spawn_blocking(crate::agent_launch::detect)
+        .await
+        .unwrap_or(crate::agent_launch::AgentAvailability { claude: false, codex: false })
+}
+
+/// Opens an agent's official installation page. The webview names the agent
+/// only; the address is fixed in Rust, so this cannot open anything else.
+#[tauri::command]
+pub(crate) fn agent_open_install_guide(app: tauri::AppHandle, agent: crate::agent_launch::Agent) {
+    use tauri_plugin_opener::OpenerExt;
+    let _ = app.opener().open_url(agent.install_guide(), None::<&str>);
+}
+
+/// Starts the person's own agent as a terminal session of the project open
+/// now, connected to Litria's tools for that session only (track T slice
+/// T2b-1). The program and its arguments are built in Rust.
+#[tauri::command]
+pub(crate) async fn terminal_spawn_agent(
+    project_id: String,
+    project_root: String,
+    agent: crate::agent_launch::Agent,
+    cols: u16,
+    rows: u16,
+    on_event: Channel<TerminalEvent>,
+) -> CommandResult<TerminalSessionStartedPayload> {
+    let page = terminal_session_manager::current_page();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::agent_launch::start(page, &project_id, &project_root, agent, cols, rows, on_event)
+    })
+    .await
+    .map_err(|e| CommandError::internal("terminal.thread_error", e.to_string()))?
+}
+
 // Input, resize, pause and resume stay synchronous on purpose. Tauri runs a
 // synchronous command inline, in the order commands arrive, and each of these
 // only clones a session handle and queues or flags something. Async commands
@@ -534,7 +571,6 @@ pub(crate) fn project_api_interrupted_operations(
 
 /// Attach the frontend bridge for `epoch`, which must be the workspace open
 /// now. Returns the attach generation every reply must carry.
-#[cfg(debug_assertions)]
 #[tauri::command]
 pub(crate) async fn project_api_bridge_attach(
     epoch: String,
@@ -543,7 +579,6 @@ pub(crate) async fn project_api_bridge_attach(
 }
 
 /// End an attach generation. A stale generation changes nothing.
-#[cfg(debug_assertions)]
 #[tauri::command]
 pub(crate) async fn project_api_bridge_detach(generation: String) -> bool {
     crate::project_api::bridge_detach(&generation)
@@ -551,7 +586,6 @@ pub(crate) async fn project_api_bridge_detach(generation: String) -> bool {
 
 /// Deliver the reply to a bridge request. `reply` is the reply's JSON text,
 /// so its size is checked before anything parses it. Never waits.
-#[cfg(debug_assertions)]
 #[tauri::command]
 pub(crate) async fn project_api_bridge_reply(request_id: String, generation: String, reply: String) {
     crate::project_api::bridge_reply(&request_id, &generation, reply);
