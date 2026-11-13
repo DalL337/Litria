@@ -1492,11 +1492,11 @@ fn a_new_file_under_another_normalization_of_a_withheld_folder_is_denied() {
     let composed = "caf\u{e9}"; // e-acute as one code point
     let decomposed = "cafe\u{301}"; // e, then a combining acute accent
     fs::create_dir_all(session.root.join(composed)).unwrap();
-    if !session.root.join(decomposed).exists() {
-        eprintln!("skipping: this volume tells the two normalizations apart");
-        return;
-    }
-    eprintln!("ran: the volume opens the folder under both normalizations");
+    // Not a reason to skip: a pass must mean the alias was really tried.
+    assert!(
+        session.root.join(decomposed).exists(),
+        "this volume tells the two normalizations apart, so the test proves nothing here"
+    );
     let _withheld = Withholding::patterns(&format!("{composed}/"));
     let store = Mutex::new(PlanStore::default());
     let path = format!("{decomposed}/new.txt");

@@ -226,8 +226,8 @@ fn unresolved_identity(root: &Path, path: &str) -> Identity {
         current.push(segment);
         match fs::symlink_metadata(&current) {
             Ok(_) => existing += 1,
-            // Nothing below a missing part, or below a file, exists either.
-            Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => break,
+            // Nothing below a missing part exists either.
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
             Err(_) => return Identity::Denied,
         }
     }
@@ -1040,12 +1040,19 @@ mod tests {
             ("src/deep/er/new.ts", "src/deep/er/new.ts"),
             ("nothing/here.ts", "nothing/here.ts"),
             ("new.ts", "new.ts"),
-            // A file used as a folder: nothing can be made there, and nothing
-            // is hidden by saying so.
-            ("README.md/x", "README.md/x"),
         ] {
             assert_eq!(identity(&root, path), Identity::Key(key.to_owned()), "{path}");
         }
+        // A name under a file. Nothing can be made there on any platform.
+        // Windows reports it as not found, so it is keyed like any other
+        // name not made yet. Unix reports "not a directory", which the link
+        // check cannot tell from a path it cannot read, so it is denied, as
+        // it was before names not made yet were judged by their folder.
+        let under_a_file = identity(&root, "README.md/x");
+        #[cfg(windows)]
+        assert_eq!(under_a_file, Identity::Key("README.md/x".to_owned()));
+        #[cfg(unix)]
+        assert_eq!(under_a_file, Identity::Denied);
         // On a volume that ignores case, another spelling of the folder is
         // the folder.
         if root.join("SRC").exists() {
