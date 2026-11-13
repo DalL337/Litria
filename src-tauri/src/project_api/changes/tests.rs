@@ -1358,102 +1358,89 @@ fn a_lost_answer_is_recorded_as_needing_review() {
 
 use crate::project_api::policy::tests::Withholding;
 
-/// The 8.3 short name Windows keeps for `name` in `dir`, asked of the volume
-/// itself (never guessed); `None` where the volume keeps none.
 #[cfg(windows)]
-fn short_name(dir: &Path, name: &str) -> Option<String> {
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use windows::core::PCWSTR;
-    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
-
-    let long: Vec<u16> = dir.join(name).as_os_str().encode_wide().chain([0]).collect();
-    let mut buffer = vec![0u16; 1024];
-    // SAFETY: `long` is NUL-terminated and outlives the call; the slice passes
-    // its own length.
-    let length = unsafe { GetShortPathNameW(PCWSTR(long.as_ptr()), Some(&mut buffer)) } as usize;
-    if length == 0 || length >= buffer.len() {
-        return None;
-    }
-    let short = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length]));
-    let short = short.file_name()?.to_str()?.to_string();
-    (!short.eq_ignore_ascii_case(name)).then_some(short)
-}
+use crate::project_api::reader::tests::short_name;
 
 /// Windows opens `.git` under its 8.3 short name too, and no rule names that
 /// spelling. A new file under it was created inside `.git` (independent
-/// review 2026-10-25, IR-01); it is judged by the folder it would land in.
+/// review 2026-10-25, IR-01). The API now refuses any name shaped like a short
+/// name before it resolves anything (owner ruling 2026-11-13), and what a real
+/// create would do with the answer is still checked: nothing lands.
 #[cfg(windows)]
 #[test]
-fn a_new_file_under_the_short_name_of_a_withheld_folder_is_denied() {
+fn a_new_file_under_a_short_name_is_refused_and_never_created() {
     let session = Session::new("short-name", ready);
     fs::create_dir_all(session.root.join(".git/hooks")).unwrap();
-    let Some(git) = short_name(&session.root, ".git") else {
-        eprintln!("skipping: this volume keeps no 8.3 short names");
-        return;
-    };
-    eprintln!("ran: the volume names .git {git}");
-    let store = Mutex::new(PlanStore::default());
-    let path = format!("{git}/hooks/pre-commit");
-    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "#!/bin/sh\n")] }, &store).unwrap();
-    // The harm is the file, not the answer: a plan that was made is applied
-    // through the real create.
-    if let Some(plan) = &result.plan {
-        let (bridge, _) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
-        session.apply(&plan.plan_id, bridge, &store);
-    }
-    assert!(!session.root.join(".git/hooks/pre-commit").exists(), "a file was created inside .git");
-    assert_eq!(result.changes, [ChangeCheck::Denied { path }]);
-    assert!(result.plan.is_none());
-}
-
-/// The same for a folder the person withholds by a pattern of their own.
-#[cfg(windows)]
-#[test]
-fn a_new_file_under_the_short_name_of_a_folder_the_person_withholds_is_denied() {
-    let session = Session::new("short-name-own", ready);
     fs::create_dir_all(session.root.join("private-notes")).unwrap();
-    let Some(short) = short_name(&session.root, "private-notes") else {
+    let (Some(git), Some(private)) = (short_name(&session.root, ".git"), short_name(&session.root, "private-notes"))
+    else {
         eprintln!("skipping: this volume keeps no 8.3 short names");
         return;
     };
-    eprintln!("ran: the volume names private-notes {short}");
+    eprintln!("ran: the volume names .git {git} and private-notes {private}");
     let _withheld = Withholding::patterns("private-notes/");
     let store = Mutex::new(PlanStore::default());
-    let path = format!("{short}/new.md");
-    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "N\n")] }, &store).unwrap();
-    if let Some(plan) = &result.plan {
-        let (bridge, _) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
-        session.apply(&plan.plan_id, bridge, &store);
+    for (path, landed) in [
+        (format!("{git}/hooks/pre-commit"), ".git/hooks/pre-commit"),
+        (format!("{private}/new.md"), "private-notes/new.md"),
+    ] {
+        let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "N\n")] }, &store).unwrap();
+        // The harm is the file, not the answer: a plan that was made is
+        // applied through the real create.
+        if let Some(plan) = &result.plan {
+            let (bridge, _) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
+            session.apply(&plan.plan_id, bridge, &store);
+        }
+        assert!(!session.root.join(landed).exists(), "a file was created at {landed}");
+        assert_eq!(result.changes, [ChangeCheck::InvalidPath { path }]);
+        assert!(result.plan.is_none());
     }
-    assert!(!session.root.join("private-notes/new.md").exists(), "a file was created inside the withheld folder");
-    assert_eq!(result.changes, [ChangeCheck::Denied { path }]);
-
-    // A name withheld only as a folder is withheld before it exists, under
-    // the short name too (no rule matches `<short>/drafts` as spelled).
-    let _withheld = Withholding::patterns("private-notes/drafts/");
-    let path = format!("{short}/drafts");
-    let result = session.prepare(ChangesPrepareRequest { changes: vec![create(&path, "")] }, &store).unwrap();
-    assert_eq!(result.changes, [ChangeCheck::Denied { path }]);
 }
 
-/// And when the plan applies: a name that was only a new folder at the
-/// proposal is the short name of `.git` once `.git` exists.
+/// A short name answers the same whether or not anything has it: `.env` is
+/// there, and `ENV~1` (its short name where the volume keeps one) reads no
+/// differently from `ENV~9`, which nothing has. Before the rule the first was
+/// `denied` and the second `ready`, which told an agent that `.env` exists.
+#[test]
+fn a_short_name_answers_the_same_whether_or_not_anything_has_it() {
+    let session = Session::new("short-name-oracle", ready);
+    let store = Mutex::new(PlanStore::default());
+    let request = ChangesPrepareRequest { changes: vec![create("ENV~1", ""), create("ENV~9", ""), change("ENV~1.TXT")] };
+    let result = session.prepare(request, &store).unwrap();
+    assert_eq!(
+        result.changes,
+        [
+            ChangeCheck::InvalidPath { path: "ENV~1".into() },
+            ChangeCheck::InvalidPath { path: "ENV~9".into() },
+            ChangeCheck::InvalidPath { path: "ENV~1.TXT".into() },
+        ]
+    );
+    assert!(session.asked_paths().is_empty(), "the editor is never asked about such a name");
+}
+
+/// A plan that already holds such a name is never written through either:
+/// applying judges every new file again. (No proposal can make this plan any
+/// more; it stands for one made before the rule, or by any other route.)
 #[cfg(windows)]
 #[test]
-fn a_short_name_that_becomes_a_withheld_folder_after_the_proposal_is_never_written_through() {
+fn a_plan_holding_the_short_name_of_a_withheld_folder_is_never_written_through() {
     let session = Session::new("short-name-late", ready);
-    // Learn the name the volume gives `.git`, then take the folder away.
-    fs::create_dir_all(session.root.join(".git")).unwrap();
+    fs::create_dir_all(session.root.join(".git/hooks")).unwrap();
     let Some(git) = short_name(&session.root, ".git") else {
         eprintln!("skipping: this volume keeps no 8.3 short names");
         return;
     };
-    fs::remove_dir(session.root.join(".git")).unwrap();
-    let store = Mutex::new(PlanStore::default());
     let path = format!("{git}/hooks/pre-commit");
-    let id = session.plan(vec![create(&path, "#!/bin/sh\n")], &store);
-    fs::create_dir_all(session.root.join(".git/hooks")).unwrap();
-    assert_eq!(short_name(&session.root, ".git"), Some(git), "the volume gave .git the same short name again");
+    let store = Mutex::new(PlanStore::default());
+    let id = lock(&store)
+        .propose(
+            Principal::Test,
+            &session.epoch,
+            vec![PlannedChange::Create(PlannedFile { path: path.clone(), text: "#!/bin/sh\n".into() })],
+            Instant::now(),
+        )
+        .unwrap()
+        .plan_id;
     let (bridge, calls) = frontend(&session, Duration::from_secs(5), all_applied, create_for_real);
     let result = session.apply(&id, bridge, &store);
     assert!(!session.root.join(".git/hooks/pre-commit").exists(), "a file was created inside .git: {result:?}");

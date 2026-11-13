@@ -540,7 +540,7 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::cell::Cell;
     use std::io::Write;
@@ -1092,6 +1092,84 @@ mod tests {
         let judged = identity(&root, "locked/inner/new.ts");
         fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(judged, Identity::Denied);
+        let _ = fs::remove_dir_all(&root);
+    }
+    // --- Windows short names (owner ruling 2026-11-13) -----------------------
+
+    /// The 8.3 short name Windows keeps for `name` in `dir`, asked of the
+    /// volume itself (never guessed); `None` where the volume keeps none.
+    #[cfg(windows)]
+    pub(crate) fn short_name(dir: &Path, name: &str) -> Option<String> {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let long: Vec<u16> = dir.join(name).as_os_str().encode_wide().chain([0]).collect();
+        let mut buffer = vec![0u16; 1024];
+        // SAFETY: `long` is NUL-terminated and outlives the call; the slice
+        // passes its own length.
+        let length = unsafe { GetShortPathNameW(PCWSTR(long.as_ptr()), Some(&mut buffer)) } as usize;
+        if length == 0 || length >= buffer.len() {
+            return None;
+        }
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length]));
+        let short = short.file_name()?.to_str()?.to_string();
+        (!short.eq_ignore_ascii_case(name)).then_some(short)
+    }
+
+    /// A name shaped like a short name is invalid whatever is on disk, so a
+    /// read cannot be used to learn that a withheld file exists: the same
+    /// answer where `.env` and `.git` are there and where nothing is.
+    #[test]
+    fn a_short_name_reads_the_same_whether_or_not_anything_has_it() {
+        let present = temp_root("short-name-present");
+        fs::write(present.join(".env"), "SECRET=1\n").unwrap();
+        fs::create_dir_all(present.join(".git")).unwrap();
+        fs::write(present.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let absent = temp_root("short-name-absent");
+        for path in ["ENV~1", "env~1", "ENV~9", "GIT~1/HEAD", "GIT~1/new.txt", "src/GIT~1"] {
+            for (root, what) in [(&present, "present"), (&absent, "absent")] {
+                assert_eq!(read_disk(root, path), DiskRead::InvalidPath, "read {path}, {what}");
+                assert_eq!(identity(root, path), Identity::InvalidPath, "identity {path}, {what}");
+            }
+        }
+        let _ = fs::remove_dir_all(&present);
+        let _ = fs::remove_dir_all(&absent);
+    }
+
+    /// The path syntax refuses a short name before anything is resolved, but
+    /// the judgement behind it does not rest on that: a name not made yet is
+    /// still judged by the folder Windows would make it in (review
+    /// 2026-10-25, IR-01).
+    #[cfg(windows)]
+    #[test]
+    fn a_name_under_the_short_name_of_a_folder_is_judged_as_that_folder() {
+        let root = temp_root("short-name-judged");
+        fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        fs::create_dir_all(root.join("private-notes")).unwrap();
+        fs::create_dir_all(root.join("ordinary-folder")).unwrap();
+        let (Some(git), Some(private), Some(ordinary)) =
+            (short_name(&root, ".git"), short_name(&root, "private-notes"), short_name(&root, "ordinary-folder"))
+        else {
+            eprintln!("skipping: this volume keeps no 8.3 short names");
+            return;
+        };
+        eprintln!("ran: {git}, {private}, {ordinary}");
+        assert_eq!(unresolved_identity(&root, &format!("{git}/hooks/pre-commit")), Identity::Denied);
+        // An allowed folder's short name is that folder too.
+        assert_eq!(
+            unresolved_identity(&root, &format!("{ordinary}/new.ts")),
+            Identity::Key("ordinary-folder/new.ts".to_owned())
+        );
+        {
+            let _user = crate::project_api::policy::tests::Withholding::patterns("private-notes/");
+            assert_eq!(unresolved_identity(&root, &format!("{private}/new.md")), Identity::Denied);
+        }
+        {
+            // Withheld only as a folder: withheld before it exists.
+            let _user = crate::project_api::policy::tests::Withholding::patterns("private-notes/drafts/");
+            assert_eq!(unresolved_identity(&root, &format!("{private}/drafts")), Identity::Denied);
+        }
         let _ = fs::remove_dir_all(&root);
     }
 }
